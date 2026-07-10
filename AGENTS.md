@@ -16,7 +16,7 @@ framework scaffolder inside a directory that already holds the blueprint files
 (`AGENTS.md`, `CLAUDE.md`, `.agents/`, `.claude/`, `blueprint/`); it fails
 because the directory isn't empty.
 
-New here? `README.md` explains the whole workflow.
+New here? `blueprint/README.md` explains the whole workflow.
 
 ## Read these for full context
 
@@ -72,13 +72,16 @@ or destructive actions.
 
 ## Commands
 
-For a standard Next.js project. Change or remove if you're using something else.
+> No app scaffolded yet, so there are no real run commands. Once you scaffold the
+> app and re-run `/onboard`, this section gets filled with the actual dev, build,
+> start, lint, and test commands. Do not assume any command below works until it's
+> listed here for real.
 
-- Dev server: `npm run dev` (http://localhost:3000)
-- Build: `npm run build`
-- Production server: `npm run start`
-- Lint: `npm run lint`
+- Dev server: _TODO after scaffold_
+- Build: _TODO after scaffold_
+- Start: _TODO after scaffold_
+- Lint: _TODO after scaffold_
 
-Testing is opt-in. If this project does not already have a unit test runner, run
-`/tests` or `$tests` to add one and update this section with the real test
-commands.
+Testing is opt-in. There is no `test` command yet, so the test gate is off. Run
+`/tests` or `$tests` after scaffolding to add a stack-native runner and update
+this section with the real test command.

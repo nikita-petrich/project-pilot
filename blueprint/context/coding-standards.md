@@ -1,142 +1,161 @@
 # Coding Standards
 
-> Your conventions. Edit these once to match your stack. The defaults below
-> assume Next.js + TypeScript + Tailwind + Prisma; change or trim anything that
-> doesn't fit your project.
+> Conventions for Project Pilot: a TypeScript backend automation built on the
+> Claude Agent SDK. No web UI, no React, no Next.js. The operator surface is a
+> Telegram bot; the work is a 3-stage agent pipeline (Filter -> Research ->
+> Application) driven by a job queue over PostgreSQL.
 >
-> Run `/onboard` after installing the Blueprint. It tunes this file to the real
-> project stack, along with `AGENTS.md`, `CLAUDE.md` when present,
-> `ai-interaction.md`, `.gitignore`, and README placement. Review the result
-> before `/overview`.
+> Some sections carry `> TODO` markers where a decision is still open (queue
+> library, project layout). Resolve them as the code lands and update this file.
 
 ## TypeScript
 
 - Strict mode enabled
 - No `any` types - use proper typing or `unknown`
-- Define interfaces for all props, API responses, and data models
+- Define interfaces for all agent inputs/outputs, external API responses, and
+  data models
 - Use type inference where obvious, explicit types where helpful
+- Prefer discriminated unions for the pipeline stages and record statuses over
+  loose string fields
 
-## React
+## Agent Pipeline (Claude Agent SDK)
 
-- Functional components only (no class components)
-- Use hooks for state and side effects
-- Keep components focused - one job per component
-- Extract reusable logic into custom hooks
+- Three stages run in order per lead: **Filter -> Research -> Application**. Keep
+  each stage a distinct, independently testable unit; a stage takes a typed input
+  and returns a typed result plus a status transition.
+- Default to `claude-opus-4-8` for agent calls unless a stage is explicitly
+  chosen for a cheaper tier. Don't downgrade a model for cost without a decision.
+- Every agent boundary (prompt inputs, tool arguments, structured outputs) is
+  validated with Zod. Treat model output as untrusted until parsed.
+- Keep prompts and their few-shot examples in versioned files, not inlined as
+  giant string literals scattered through logic.
+- The categorization step (autonomous vs. approval-required) is pure, testable
+  logic driven by configurable thresholds - not a model call. Keep the thresholds
+  in one config module.
 
-## Next.js
+## Sourcing & Integrations
 
-- Server components by default
-- Only use `'use client'` when needed (interactivity, hooks, browser APIs)
-- Use Server Actions for form submissions and simple mutations
-- Use API routes when you need:
-  - Webhooks (Clerk, GitHub, etc.)
-  - File uploads with progress tracking
-  - Long-running operations
-  - Specific HTTP status codes or headers
-  - Endpoints for future mobile/CLI clients
-  - Third-party integrations
-- Otherwise, fetch data directly in server components
-- Dynamic routes for item/collection pages
+- Each source (freelancermap, freelance.de, Malt IMAP, recruiter email) is an
+  adapter that normalizes to one internal `Project` shape. Adapters never leak
+  source-specific fields downstream.
+- Scraping goes through Apify; wrap it behind an interface so a source can be
+  swapped or mocked in tests.
+- External calls (Apify, Telegram, LinkedIn, email, Notion, Claude) are isolated
+  behind thin client modules. Business logic depends on the interface, not the
+  vendor SDK directly, so each is mockable.
+- Rate-limit-sensitive integrations (LinkedIn connect automation especially) must
+  centralize their throttling in one place, not sprinkle sleeps through callers.
+
+## Job Queue & Orchestration
+
+- Work runs as queued, retryable jobs - not long inline request handlers.
+  > TODO: queue library not yet chosen (pg-boss vs. BullMQ vs. Inngest). Pick one,
+  > then document the job-definition and retry conventions here.
+- Jobs are idempotent where possible; a retried job must not double-send an
+  application or duplicate a Notion entry.
+- Human-in-the-loop gates (Telegram approval) are modeled as explicit state, not
+  blocking waits. A lead sits in `awaiting approval` until an approval event
+  advances it.
 
 ## File Organization
 
-- Components: `src/components/[feature]/ComponentName.tsx`
-- Pages: `src/app/[route]/page.tsx`
-- Server Actions: `src/actions/[feature].ts`
-- Types: `src/types/[feature].ts`
-- Lib/Utils: `src/lib/[utility].ts`
+> TODO: confirm once the app is scaffolded. Proposed layout:
+
+- Agents/stages: `src/agents/[stage].ts` (filter, research, application)
+- Integration clients: `src/integrations/[service].ts` (apify, telegram, linkedin,
+  email, notion)
+- Source adapters: `src/sourcing/[source].ts`
+- Jobs/workers: `src/jobs/[job].ts`
+- Domain types: `src/types/[domain].ts`
+- Config: `src/config/`
+- DB access: `src/db/`
+- Shared utils: `src/lib/[utility].ts`
 
 ## Naming
 
-- Components: PascalCase (`ItemCard.tsx`)
-- Files: Match component name or kebab-case
+- Files: kebab-case
 - Functions: camelCase
 - Constants: SCREAMING_SNAKE_CASE
 - Types/Interfaces: PascalCase (no prefix)
-
-## Styling
-
-- Tailwind CSS for all styling
-- Tailwind v4: CSS-first config (`@theme` in `globals.css`), no `tailwind.config.js`
-- Use shadcn/ui components where applicable
-- No inline styles
-- Dark mode first, light mode as option
+- Job names and record statuses: stable, lowercase, hyphen-or-underscore
+  identifiers used consistently across DB and code
 
 ## Database
 
-- Use Prisma ORM for all database operations
-- Always use `prisma migrate dev` for schema changes (not `db push`)
-- Run `prisma migrate status` before committing to verify migrations are in sync
-- Production deployments must run `prisma migrate deploy` before the app starts
+- PostgreSQL on Neon.
+  > TODO: confirm access layer (ORM vs. query builder vs. raw). Whatever is
+  > chosen, document the migration workflow here and require migrations to be
+  > checked in and applied before deploy (never ad-hoc schema edits in prod).
+- Schema changes go through checked-in migrations; verify migration status before
+  committing.
+- Store timestamps in UTC. Persist enough of each lead's history to resume the
+  pipeline after a restart (status, score, category, channel outcomes).
 
-## Data Fetching
+## Data Validation & Error Handling
 
-- Server components fetch directly with Prisma
-- Client components use Server Actions
-- Validate all inputs with Zod
-- Scope every user-owned query by the authenticated Clerk user id (`clerkUserId`); never trust a client-supplied user id
-
-## Error Handling
-
-- Use try/catch in Server Actions
-- Return `{ success, data, error }` pattern from actions
-- Display user-friendly error messages via toast
+- Validate all external inputs (source payloads, webhook/Telegram events, model
+  output) with Zod at the boundary.
+- Wrap fallible integration calls in try/catch and surface a typed result rather
+  than throwing across module boundaries; return a `{ success, data, error }`-style
+  result where a caller must branch on failure.
+- Log failures with enough context to trace a single lead through the pipeline
+  (a correlation/lead id on every log line for that lead).
+- Never let one failed lead abort a batch; isolate and record it, continue the rest.
+- Secrets (API keys, IMAP creds, tokens) come from environment/secret storage,
+  never hardcoded and never committed.
 
 ## Testing
 
-The blueprint installs no test runner; testing is opt-in at the project level,
-because the overlay can't know your stack. Adding unit testing is an explicit
-setup task the AI can do through the normal workflow, either as a build-plan item
-or with `/tests`. The setup should choose the stack-native runner, wire the
-scripts or commands, add a small example test, and update the Commands section
-of `AGENTS.md`.
+The blueprint installs no test runner; testing is opt-in at the project level.
+Adding unit testing is an explicit setup task done through the normal workflow,
+either as a build-plan item or with `/tests`. The setup chooses the stack-native
+runner, wires the scripts, adds a small example test, and updates the Commands
+section of `AGENTS.md`.
 
 **The opt-in switch is one signal: a `test` command in the Commands section of
-`AGENTS.md`.** Declare one and **tests become a gate for logic-bearing steps**,
-not an optional extra; leave it out and the loop verifies logic with the evidence
-it already uses (run it, a screenshot, the build). Adding the runner is itself a
-deliberate step, never a silent mid-step install. This is the single definition
-of the switch; the skills and `ai-interaction.md` only point back here.
+`AGENTS.md`.** Declare one and **tests become a gate for logic-bearing steps**;
+leave it out and the loop verifies logic with the evidence it already uses (run
+it, sample output, the build). Adding the runner is itself a deliberate step,
+never a silent mid-step install.
 
 - **What to test (the scope rule):** pure logic where a wrong answer is possible -
-  parsers, formatters, validators, id/slug builders, server actions. These have
-  assertable inputs and outputs and real edge cases (empty, missing, malformed).
-- **What not to test:** UI components and integration-level surfaces (render or
-  export routes, anything driving a real browser or external service). Verify those
-  with a screenshot and the build, not brittle unit tests.
+  source adapters/normalizers, the filter and categorization logic, score
+  thresholds, cover-letter/reference selection, contact parsing, id/status
+  builders. These have assertable inputs and outputs and real edge cases (empty,
+  missing, malformed source payloads).
+- **What not to test with unit tests:** live integration surfaces - real Apify
+  scrapes, real Telegram/LinkedIn/email/Notion calls, real Claude calls. Mock the
+  client and assert on how it's called; verify end-to-end behavior by running the
+  pipeline against fixtures.
 - **The gate (when a runner is configured):** a build step that adds in-scope logic
-  must ship a passing test in the same reviewable diff. The project's test command
-  must be green before the step is approved, before any checkpoint commit, and
-  before `/complete` merges. UI and integration-only steps are exempt and ride on
-  screenshot plus build evidence.
+  must ship a passing test in the same reviewable diff. The test command must be
+  green before the step is approved, before any checkpoint commit, and before
+  `/complete` merges. Integration-only wiring steps ride on run-output plus build
+  evidence.
 - **When it's named:** the `/feature` spec's Testing section predicts the coverage,
   `/implement` writes the test with the step, and if a step surfaces logic the spec
   didn't foresee, add a focused test then.
 - An empty suite should fail, not pass, so "no tests ran" never looks like "passed".
-- Test files live next to source files (for example `feature.test.ts`).
+- Test files live next to source files (for example `filter.test.ts`).
 - Run them via the project's test command (see Commands in `AGENTS.md`), not a
   hardcoded tool name.
 
-Stack binding (swap for yours): a TypeScript app uses Vitest, `vi.mock()` for
-external dependencies (Prisma, Clerk, etc.), and `vi.useFakeTimers()` for
-time-dependent logic; a Python app would use pytest; a Go app `go test`.
+Stack binding: a TypeScript app uses Vitest, `vi.mock()` for external
+dependencies (the integration clients, the DB, Claude), and `vi.useFakeTimers()`
+for time-dependent logic (throttling, scheduling, retries).
 
-## Browser Verification
+## Verification
 
-For UI and integration behavior, prefer real browser evidence over reading the
-code and assuming it works.
+There is no browser to screenshot. Verify behavior by running the relevant piece
+and observing real output:
 
-- If Playwright is already installed, or the Commands section of `AGENTS.md`
-  declares a Playwright script, use Playwright for browser checks, screenshots,
-  console-error checks, and user-flow verification.
-- If Playwright is not installed, do not add it silently in the middle of an
-  unrelated feature. Use the available dev server, browser screenshots, build
-  output, API output, or manual verification evidence instead.
-- Add Playwright only when the user asks for it, or when the current spec is
-  explicitly about setting up browser automation.
-- Browser evidence is especially important for flows that click, type, submit,
-  navigate, download files, render complex layouts, or depend on client-side
-  state.
+- Run a stage or job against fixture leads and inspect the produced status
+  transitions, scores, and generated text.
+- For integration wiring, use each vendor's sandbox/test mode where available
+  (e.g. a test Telegram chat) rather than firing at real recipients.
+- Guard destructive/outward actions (sending applications, LinkedIn connects,
+  Notion writes) behind a dry-run mode so flows can be exercised without side
+  effects during development.
 
 ## Code Quality
 

@@ -1,0 +1,22 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Temp
+tmp/
+*.tmp
+
+# Stack-specific ignores (dependencies, build output, caches) get added by
+# /onboard once the app is scaffolded and the stack is known.
