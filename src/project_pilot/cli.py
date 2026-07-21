@@ -18,6 +18,7 @@ from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.notification.telegram import TelegramClient
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import ProfileService
+from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 
 app = typer.Typer(
@@ -89,6 +90,17 @@ async def _run_daemon(settings: Settings) -> None:
         await closer()
 
 
+async def _build_report(settings: Settings) -> str:
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            report = await ReportingService(session).build_report()
+        return format_report(report)
+    finally:
+        await engine.dispose()
+
+
 async def _send_test_notification(bot_token: str, chat_id: str) -> bool:
     async with TelegramClient(bot_token=bot_token, chat_id=chat_id) as client:
         return await client.send_message(
@@ -125,6 +137,13 @@ def daemon() -> None:
     """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) until SIGTERM."""
     settings = load_settings()
     asyncio.run(_run_daemon(settings))
+
+
+@app.command("stats")
+def stats() -> None:
+    """Print a reporting summary (verdicts, matches per day, no-match terms, tokens)."""
+    settings = load_settings()
+    typer.echo(asyncio.run(_build_report(settings)))
 
 
 @app.command("test-notify")
