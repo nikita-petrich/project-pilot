@@ -1,17 +1,20 @@
 """Data-access layer: known-hash lookup, listing upsert, run and state persistence."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from project_pilot.models import (
     Evaluation,
+    EvaluationStage,
     Listing,
     Run,
     RunStatus,
     SourceState,
+    Verdict,
 )
 
 
@@ -103,3 +106,29 @@ class Repository:
         state.watermark_at = watermark_at
         await self._session.flush()
         return state
+
+    async def get_unnotified_matches(self, *, min_score: int) -> Sequence[Listing]:
+        """Listings with a notifiable LLM match that have not been notified yet.
+
+        Covers this run's new matches and any that a prior run failed to send, so a
+        failed notification is retried on the next run.
+        """
+        stmt = (
+            select(Listing)
+            .join(Evaluation, Evaluation.listing_id == Listing.id)
+            .where(
+                Listing.notified_at.is_(None),
+                Evaluation.stage == EvaluationStage.LLM,
+                Evaluation.verdict == Verdict.MATCH,
+                Evaluation.score >= min_score,
+            )
+            .options(selectinload(Listing.evaluations))
+            .order_by(Listing.first_seen_at)
+        )
+        rows = await self._session.scalars(stmt)
+        return rows.unique().all()
+
+    async def mark_notified(self, listings: Iterable[Listing], when: datetime) -> None:
+        for listing in listings:
+            listing.notified_at = when
+        await self._session.flush()

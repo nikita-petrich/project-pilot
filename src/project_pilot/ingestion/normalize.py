@@ -25,6 +25,11 @@ def compute_url_hash(canonical_url: str) -> str:
     return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
 
 
+def resolve_url(url: str, base: str) -> str:
+    """Resolve ``url`` against ``base`` keeping its query (for pagination links)."""
+    return urljoin(base, url.strip())
+
+
 def parse_german_date(text: str) -> date | None:
     match = _DATE_RE.search(text)
     if match is None:

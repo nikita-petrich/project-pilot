@@ -13,6 +13,7 @@ from project_pilot.ingestion.normalize import (
     parse_posted,
     parse_start,
     remote_status_from_text,
+    resolve_url,
 )
 from project_pilot.models import PostedPrecision, RemoteStatus
 
@@ -20,6 +21,8 @@ from project_pilot.models import PostedPrecision, RemoteStatus
 LIST_CARD = "article.project-card"
 LIST_TITLE_LINK = "h2.project-title a"
 LIST_POSTED = ".project-posted"
+
+LIST_NEXT_PAGE = "nav.pagination a.page-next"
 
 DETAIL_TITLE = "h1.project-title"
 DETAIL_FACTS = "dl.project-facts"
@@ -125,6 +128,16 @@ def parse_list_page(html: str, base_url: str) -> list[ListingSummary]:
     if not summaries:
         raise SelectorMismatchError("list cards found but no listing links parsed")
     return summaries
+
+
+def parse_next_page_url(html: str, base_url: str) -> str | None:
+    """Return the absolute "next page" URL (query preserved) or None if absent."""
+    soup = BeautifulSoup(html, "lxml")
+    link = soup.select_one(LIST_NEXT_PAGE)
+    href = _attr(link, "href")
+    if link is None or href is None:
+        return None
+    return resolve_url(href, base_url)
 
 
 def parse_detail_page(html: str, base_url: str, *, source: str, external_url: str) -> ParsedListing:
