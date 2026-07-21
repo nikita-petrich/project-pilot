@@ -7,7 +7,7 @@
 
 ## MVP
 
-- [ ] 1. **Compliance check & source verification** - snapshot robots.txt and ToS (`docs/compliance.md`), document go/no-go; check whether the project list is in the initial HTML or needs JS rendering and what time granularity `posted_at` has (minute-precise vs. date-only); record the result as an ADR — halt on a STOP condition and ask Nik
+- [x] 1. **Compliance check & source verification** - snapshot robots.txt and ToS (`docs/compliance.md`), document go/no-go; check whether the project list is in the initial HTML or needs JS rendering and what time granularity `posted_at` has (minute-precise vs. date-only); record the result as an ADR — halt on a STOP condition and ask Nik
 - [ ] 2. **Config & profile foundation** - pydantic-settings config (SCAN_INTERVAL_MIN hard ≥ 15, startup abort on violation), `.env.example`, ProfileService loads `profile/profile.md` + `profile/constraints.yaml` (Pydantic-validated) at boot and computes `profile_hash`; `errors.py` with error classes + `assert_defined`
 - [ ] 3. **Data model & migrations** - SQLAlchemy 2.0 entities `listings`, `evaluations`, `runs`, `source_state` per SPEC §4 (typed, native PG enums, JSONB), Alembic async setup + initial migration, repository methods (get_known_hashes, upsert_listing, record_run)
 - [ ] 4. **Scraper ingestion** - politeness client on httpx.AsyncClient (user agent, robotparser gate, 2–5 s delay, timeouts), list-page parser with BeautifulSoup/lxml (selectors centralized as a constants block), detail fetch only for new hashes, watermark pagination with stop criterion, normalization (URL canonicalization, German date formats, remote heuristic) — tests exclusively against saved HTML fixtures
