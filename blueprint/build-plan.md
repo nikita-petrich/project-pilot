@@ -18,7 +18,7 @@
 - [x] 9. **Resilience & self-monitoring** - tenacity retry with exponential backoff + jitter for network errors/5xx/429 (never for 403), 403/captcha detection ⇒ `SourceBlockedError` ⇒ 6-h cooldown in `source_state` + one-time Telegram warning, warning after 3 consecutive failed runs (with a flag against warning spam)
 - [x] 10. **Reporting basis** - query service or SQL views: verdict distribution, matches/day, top no-match reasons, LLM token costs per period; output via the `stats` CLI command
 - [x] 11. **Docker & home-server deployment** - multi-stage Dockerfile (python:3.13-slim, uv, non-root), `compose.yaml` with app + postgres + volume, healthcheck (last successful run < 3 × interval), Alembic migrations on start, operations doc
-- [ ] 12. **README & legal** - setup (uv sync, .env, profile), commands, operation, threshold tuning, troubleshooting (cooldown, selector breakage); section on the robots.txt/ToS finding, rate limits, user agent, personal use only — references `docs/compliance.md`
+- [x] 12. **README & legal** - setup (uv sync, .env, profile), commands, operation, threshold tuning, troubleshooting (cooldown, selector breakage); section on the robots.txt/ToS finding, rate limits, user agent, personal use only — references `docs/compliance.md`
 
 ## Post-MVP
 
