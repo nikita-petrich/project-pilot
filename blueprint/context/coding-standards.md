@@ -1,187 +1,65 @@
 # Coding Standards
 
-> Conventions for Project Pilot: a TypeScript backend automation built on the
-> Claude Agent SDK. No web UI, no React, no Next.js. The operator surface is a
-> Telegram bot; the work is a 3-stage agent pipeline (Filter -> Research ->
-> Application) driven by a job queue over PostgreSQL.
->
-> Some sections carry `> TODO` markers where a decision is still open (queue
-> library, project layout). Resolve them as the code lands and update this file.
+> Conventions for project-pilot (Python worker, no frontend). Replaces the
+> blueprint's Next.js defaults — on conflict, this file rules.
+> Secondary project goal: idiomatic, modern Python as a CV reference —
+> readability and type strictness are product properties.
 
-## TypeScript
+## Python & Typing
 
-- Strict mode enabled
-- No `any` types - use proper typing or `unknown`
-- Define interfaces for all agent inputs/outputs, external API responses, and
-  data models
-- Use type inference where obvious, explicit types where helpful
-- Prefer discriminated unions for the pipeline stages and record statuses over
-  loose string fields
+- Python 3.13, complete type annotations everywhere; `mypy --strict` is the gate before every `/check`
+- No `Any` — `object`/generic TypeVars + narrowing; `cast()` only at system boundaries (parsed LLM output, raw data) and always directly behind a Pydantic validation
+- Null safety via `assert_defined[T](value: T | None, msg: str) -> T` in `errors.py` (PEP-695 generic): raises a domain error with a meaningful message instead of scattered `# type: ignore` or bare `assert`
+- Pydantic v2 models are the source of truth for config, constraints.yaml, and LLM verdicts; derive types from them, no parallel definitions
+- Modern syntax: `X | None` instead of `Optional[X]`, `list[str]` instead of `List[str]`, `StrEnum` for domain enums
 
-## Agent Pipeline (Claude Agent SDK)
+## Async & Architecture
 
-- Three stages run in order per lead: **Filter -> Research -> Application**. Keep
-  each stage a distinct, independently testable unit; a stage takes a typed input
-  and returns a typed result plus a status transition.
-- Default to `claude-opus-4-8` for agent calls unless a stage is explicitly
-  chosen for a cheaper tier. Don't downgrade a model for cost without a decision.
-- Every agent boundary (prompt inputs, tool arguments, structured outputs) is
-  validated with Zod. Treat model output as untrusted until parsed.
-- Keep prompts and their few-shot examples in versioned files, not inlined as
-  giant string literals scattered through logic.
-- The categorization step (autonomous vs. approval-required) is pure, testable
-  logic driven by configurable thresholds - not a model call. Keep the thresholds
-  in one config module.
+- asyncio throughout: `httpx.AsyncClient`, async SQLAlchemy sessions, `AsyncIOScheduler`; blocking libraries (`requests`, `time.sleep`) are forbidden — `asyncio.sleep` for delays
+- No framework magic: explicit composition — objects are constructed in `cli.py`/`main` and passed as constructor dependencies (in tests, simply pass fakes)
+- One module per domain per the project structure in `SPEC.md` §6: `ingestion`, `evaluation`, `notification`, `pipeline`, `reporting`, plus `config`, `db`, `models`, `repository`, `profile_loader`, `errors`
+- Layers: repository (data access only) → service (domain logic) → runner/scheduler (orchestration). Errors are not swallowed in the repository, are enriched with context in the service (`raise NewError(...) from err` — the cause chain is preserved), and are decided in the runner: skip the entry vs. abort the run
+- Domain errors as own classes in `errors.py` (`SourceBlockedError`, `SelectorMismatchError`, `LlmSchemaError`) — never branch on message string matching
 
-## Sourcing & Integrations
+## SQLAlchemy & Database
 
-- Each source (freelancermap, freelance.de, Malt IMAP, recruiter email) is an
-  adapter that normalizes to one internal `Project` shape. Adapters never leak
-  source-specific fields downstream.
-- Scraping goes through Apify; wrap it behind an interface so a source can be
-  swapped or mocked in tests.
-- External calls (Apify, Telegram, LinkedIn, email, Notion, Claude) are isolated
-  behind thin client modules. Business logic depends on the interface, not the
-  vendor SDK directly, so each is mockable.
-- Rate-limit-sensitive integrations (LinkedIn connect automation especially) must
-  centralize their throttling in one place, not sprinkle sleeps through callers.
+- SQLAlchemy 2.0 typed style: `Mapped[...]` + `mapped_column`, DeclarativeBase; JSONB and native PG enums via the postgresql dialect types
+- Alembic migrations only (async template) — never `create_all` outside of tests
+- One session per pipeline run (unit of work), via async context manager; no session use across run boundaries
+- All timestamps `timestamptz` in UTC (`datetime` always aware); display timezone Europe/Berlin only at output
 
-## Job Queue & Orchestration
+## Configuration & Secrets
 
-- Work runs as queued, retryable jobs - not long inline request handlers.
-  > TODO: queue library not yet chosen (pg-boss vs. BullMQ vs. Inngest). Pick one,
-  > then document the job-definition and retry conventions here.
-- Jobs are idempotent where possible; a retried job must not double-send an
-  application or duplicate a Notion entry.
-- Human-in-the-loop gates (Telegram approval) are modeled as explicit state, not
-  blocking waits. A lead sits in `awaiting approval` until an approval event
-  advances it.
+- One `pydantic-settings` model parses ENV at boot; validation errors ⇒ immediate process abort with a clear message (fail fast)
+- Hard invariants in validation: `SCAN_INTERVAL_MIN >= 15`, `SEARCH_URLS` not empty, Telegram credentials present
+- Secrets exclusively via ENV; `.env` in `.gitignore`, `.env.example` is updated in the same commit as any new variable
 
-## File Organization
+## Scraping Behavior (compliance anchored in code)
 
-> TODO: confirm once the app is scaffolded. Proposed layout:
+- robots.txt gate at startup (`urllib.robotparser`, incl. Crawl-delay); disallowed path ⇒ startup abort
+- User agent from config (with contact mail), random 2–5 s delay between requests, timeout on every request
+- CSS selectors centralized as a constants block at the top of `ingestion/parser.py` (one place to adapt on HTML changes); the parser raises `SelectorMismatchError` instead of silently returning empty data
+- tenacity retry (exponential backoff + jitter, max. 3) only for network errors/5xx/429 — **never** for 403/captcha
 
-- Agents/stages: `src/agents/[stage].ts` (filter, research, application)
-- Integration clients: `src/integrations/[service].ts` (apify, telegram, linkedin,
-  email, notion)
-- Source adapters: `src/sourcing/[source].ts`
-- Jobs/workers: `src/jobs/[job].ts`
-- Domain types: `src/types/[domain].ts`
-- Config: `src/config/`
-- DB access: `src/db/`
-- Shared utils: `src/lib/[utility].ts`
+## LLM Usage
 
-## Naming
+- Prompts as versioned files under `src/project_pilot/evaluation/prompts/` (`match.v1.md`, …); `prompt_version` is persisted on every evaluation
+- Outputs exclusively via OpenAI `.parse()` against the Pydantic model `MatchVerdict`; schema violation ⇒ one retry, then fallback verdict `no_match` with reason `llm_error` — the pipeline never breaks because of the LLM
+- Model name from ENV, never hardcoded; log tokens and latency per call
+- No personal data in the prompt other than the profile; the profile text counts as sensitive and is not logged
 
-- Files: kebab-case
-- Functions: camelCase
-- Constants: SCREAMING_SNAKE_CASE
-- Types/Interfaces: PascalCase (no prefix)
-- Job names and record statuses: stable, lowercase, hyphen-or-underscore
-  identifiers used consistently across DB and code
+## Tests
 
-## Database
+- pytest + pytest-asyncio; unit tests for normalization, freshness gate, rule engine (incl. c#/c++/.net word-boundary cases), dedupe/upsert
+- **No live HTTP requests in tests** — HTML/JSON/LLM responses as fixtures under `tests/fixtures/`; HTTP is mocked with `respx`
+- Integration test: full `run_once` with a fixture source, local Postgres (compose.dev.yaml or Testcontainers), and mocked Telegram/LLM
+- Core modules (`evaluation`, `ingestion/normalize`, dedupe) ≥ 90% coverage; `pytest --cov` gate in the check script
 
-- PostgreSQL on Neon.
-  > TODO: confirm access layer (ORM vs. query builder vs. raw). Whatever is
-  > chosen, document the migration workflow here and require migrations to be
-  > checked in and applied before deploy (never ad-hoc schema edits in prod).
-- Schema changes go through checked-in migrations; verify migration status before
-  committing.
-- Store timestamps in UTC. Persist enough of each lead's history to resume the
-  pipeline after a restart (status, score, category, channel outcomes).
+## Style, Naming, Workflow
 
-## Data Validation & Error Handling
-
-- Validate all external inputs (source payloads, webhook/Telegram events, model
-  output) with Zod at the boundary.
-- Wrap fallible integration calls in try/catch and surface a typed result rather
-  than throwing across module boundaries; return a `{ success, data, error }`-style
-  result where a caller must branch on failure.
-- Log failures with enough context to trace a single lead through the pipeline
-  (a correlation/lead id on every log line for that lead).
-- Never let one failed lead abort a batch; isolate and record it, continue the rest.
-- Secrets (API keys, IMAP creds, tokens) come from environment/secret storage,
-  never hardcoded and never committed.
-
-## Testing
-
-The blueprint installs no test runner; testing is opt-in at the project level.
-Adding unit testing is an explicit setup task done through the normal workflow,
-either as a build-plan item or with `/tests`. The setup chooses the stack-native
-runner, wires the scripts, adds a small example test, and updates the Commands
-section of `AGENTS.md`.
-
-**The opt-in switch is one signal: a `test` command in the Commands section of
-`AGENTS.md`.** Declare one and **tests become a gate for logic-bearing steps**;
-leave it out and the loop verifies logic with the evidence it already uses (run
-it, sample output, the build). Adding the runner is itself a deliberate step,
-never a silent mid-step install.
-
-- **What to test (the scope rule):** pure logic where a wrong answer is possible -
-  source adapters/normalizers, the filter and categorization logic, score
-  thresholds, cover-letter/reference selection, contact parsing, id/status
-  builders. These have assertable inputs and outputs and real edge cases (empty,
-  missing, malformed source payloads).
-- **What not to test with unit tests:** live integration surfaces - real Apify
-  scrapes, real Telegram/LinkedIn/email/Notion calls, real Claude calls. Mock the
-  client and assert on how it's called; verify end-to-end behavior by running the
-  pipeline against fixtures.
-- **The gate (when a runner is configured):** a build step that adds in-scope logic
-  must ship a passing test in the same reviewable diff. The test command must be
-  green before the step is approved, before any checkpoint commit, and before
-  `/complete` merges. Integration-only wiring steps ride on run-output plus build
-  evidence.
-- **When it's named:** the `/feature` spec's Testing section predicts the coverage,
-  `/implement` writes the test with the step, and if a step surfaces logic the spec
-  didn't foresee, add a focused test then.
-- An empty suite should fail, not pass, so "no tests ran" never looks like "passed".
-- Test files live next to source files (for example `filter.test.ts`).
-- Run them via the project's test command (see Commands in `AGENTS.md`), not a
-  hardcoded tool name.
-
-Stack binding: a TypeScript app uses Vitest, `vi.mock()` for external
-dependencies (the integration clients, the DB, Claude), and `vi.useFakeTimers()`
-for time-dependent logic (throttling, scheduling, retries).
-
-## Verification
-
-There is no browser to screenshot. Verify behavior by running the relevant piece
-and observing real output:
-
-- Run a stage or job against fixture leads and inspect the produced status
-  transitions, scores, and generated text.
-- For integration wiring, use each vendor's sandbox/test mode where available
-  (e.g. a test Telegram chat) rather than firing at real recipients.
-- Guard destructive/outward actions (sending applications, LinkedIn connects,
-  Notion writes) behind a dry-run mode so flows can be exercised without side
-  effects during development.
-
-## Code Quality
-
-- No commented-out code unless specified
-- No unused imports or variables
-- Keep functions under 50 lines when possible
-
-## Comments
-
-Write code that explains itself; comment only what the code cannot say.
-Over-commenting is a common AI tell, so resist it.
-
-- Comment the **why**, not the **what**. Delete any comment that restates the code.
-- No banner/header blocks, section dividers, or step-by-step narration of obvious
-  code. A file does not need a comment announcing each region.
-- A comment earns its place only when it captures something the code can't: a
-  non-obvious decision, a gotcha or workaround, why a value is what it is, or a
-  link to a spec or issue.
-- Prefer self-documenting names and small functions over explanatory comments.
-- Keep doc comments minimal: a one-line purpose on an exported type or function is
-  plenty; don't write JSDoc that just repeats the signature.
-- When in doubt, leave the comment out.
-
-## Writing
-
-- No em dashes (U+2014) in generated content: docs, comments, commit messages,
-  READMEs, specs. They read as AI-generated.
-- Use a hyphen for `term - description` separators; rephrase prose with commas,
-  parentheses, or a colon. Avoid en dashes and the ellipsis character too.
+- ruff for lint **and** format (strict rule set incl. import sorting); `uv run ruff check`, `uv run ruff format --check`, `uv run mypy`, `uv run pytest` run on every `/check`
+- Naming: modules/functions/variables snake_case, classes PascalCase, constants SCREAMING_SNAKE_CASE; files small and focused, one purpose per module
+- Docstrings (Google style) for all public functions/classes — brief, what and why, not how
+- Conventional Commits (`feat:`, `fix:`, `test:`, `docs:`, `chore:`); small, thematically closed commits per implement step
+- Logging via stdlib `logging` with module loggers and a run ID in context; no `print` in production code
+- No dead code, no commented-out blocks in commits; TODOs only with a feature reference

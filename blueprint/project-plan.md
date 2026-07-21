@@ -1,89 +1,44 @@
 # Project Plan
 
-> One of the two planning docs you provide. Answer each section in a line or two
-> (a worksheet, not an essay). Draft it yourself or let the AI help you expand and
-> sharpen it; either way, the content is yours to direct. When it's filled in, run
-> `/overview` to generate the project overview from this plus `build-plan.md`.
+> project-pilot — personal project-listing pilot for freelancermap.de.
+> Detailed rules (watermark/freshness semantics, compliance, data model) live in
+> `SPEC.md` in the repo root and are binding for all features.
 
 ## 1. Problem - What problem are we solving?
 
-Applying to freelance projects and positions (sequenz.io) is a slow, repetitive
-manual cycle: watch several platforms, judge fit, research the contact, write a
-tailored cover letter, and send across channels. Project Pilot automates the full
-loop from an incoming lead to a sent, personalized application, with a
-human-in-the-loop gate via Telegram for anything that shouldn't run fully
-automatically.
+New freelancermap listings must be reviewed within minutes, otherwise an application arrives too late. Manual checking does not scale; the platform's official "Projektagent" only mails once a day. project-pilot fetches new listings every 15 minutes, evaluates them automatically against Nik's profile, and reports only real matches immediately via Telegram — while losslessly persisting everything for later reporting. Secondary goal: build verifiable, idiomatic Python practice for Nik's AI-engineer positioning — code quality counts as a product property here.
 
 ## 2. Users - Who is this for?
 
-A single power user (Nik) as a personal tool. Not multi-user SaaS in the MVP. The
-operator watches and approves via Telegram; the system does the sourcing,
-matching, writing, and sending.
+Exactly one user: Nik (freelance full-stack & AI engineer). No multi-tenant, no registration, no public product.
 
 ## 3. Features - What does the MVP need?
 
-- Sourcing: collect leads from freelancermap.de, freelance.de, Malt (IMAP listener
-  on notification emails), and recruiter emails
-- Filter agent: coarse relevance filter (stack, remote/location, contract type, rate)
-- Research agent: match lead against profile (score + justification) and scrape
-  contact details (email, phone, contact person)
-- Categorization: autonomous vs. approval-required, on configurable criteria
-- Telegram control center: approval notifications, in-chat approval, per-application
-  threads, thread commands
-- Application agent: generate German cover letter (template system) plus a short
-  LinkedIn connect message, aligned to the same match
-- Sending: email to identified contact and LinkedIn connect request, in parallel
-  when both are available (neither is a prerequisite for the other)
-- Notion sync: write each application into the existing Sales Pipeline (client,
-  status, channel, date, contact data)
-- Interview prep (on demand): triggered only by explicit Telegram thread command;
-  returns a short company/project summary and prepared questions
+- Moderate, robots.txt-compliant scraper for configured project board search URLs (public pages only, clear user agent, delays)
+- Lossless ingestion: watermark-based pagination, dedupe via URL hash, everything is persisted
+- Freshness gate: only entries within the analysis window (default 30 min) are evaluated; older ones → `skipped_stale` with a reason
+- Two-stage evaluation: hard rules from `profile/constraints.yaml` (0 tokens), then LLM match against `profile/profile.md` via OpenAI structured output against a Pydantic model (verdict, score, reasons, matching skills, missing requirements)
+- Reason + metadata are stored for match AND no-match as an `evaluations` row (model, prompt version, profile hash, tokens, latency)
+- Telegram notification on match ≥ threshold (title, score, top reasons, start, location/remote, link)
+- Scheduler at a 15-min interval with overlap protection, seed run without notifications, cooldown on 403/captcha
+- Run logging (`runs`) and a simple reporting basis (verdict distribution, matches over time)
 
 ## 4. Data - What are we storing?
 
-- **Project/Position** - source, contract type (freelance/permanent), access path
-  (recruiter/direct/Malt), status (new -> filtered -> researched -> [awaiting
-  approval] -> applied -> interview prep requested -> closed), match score +
-  justification, category (autonomous/approval-required), title, description, link
-- **Contact** - name, role, email, phone, source of discovery
-- **Application** - cover letter text, LinkedIn connect text, sending channels,
-  sent date
-- **Telegram Thread** - linked to project, message history, triggered commands
+PostgreSQL: `listings` (all listings ever seen incl. raw data), `evaluations` (1:n per listing — verdict, score, reason JSON, model/prompt/profile metadata), `runs` (run protocol), `source_state` (watermark, cooldown, failure counter). The profile is NOT in the DB but versioned files `profile/profile.md` + `profile/constraints.yaml` in the repo; only the `profile_hash` is stored per evaluation.
 
 ## 5. Tech - What stack are we using?
 
-- Language: TypeScript
-- Agents: Claude Agent SDK, 3-stage pipeline (Filter -> Research -> Application)
-- Scraping: Apify (for platforms without an API/feed)
-- Malt: IMAP listener on notification emails
-- Control/notifications: Telegram bot, human-in-the-loop approval
-- Data storage: PostgreSQL (Neon)
-- CRM: Notion (Sales Pipeline sync) - in MVP scope
-- Orchestration/queue: OPEN - pg-boss vs. BullMQ vs. Inngest (no n8n)
+Python 3.13, asyncio throughout · uv (pyproject, lockfile) · SQLAlchemy 2.0 typed + asyncpg + Alembic (async template) on PostgreSQL · APScheduler (AsyncIOScheduler) · httpx + BeautifulSoup4/lxml (Playwright only if JS rendering is proven) · urllib.robotparser · pydantic v2 + pydantic-settings (config, YAML, and LLM output validation) · OpenAI SDK with `.parse()` and Pydantic response_format · tenacity · typer CLI · Telegram via a lean httpx client against the Bot API · pytest + pytest-asyncio + respx with fixtures (no live requests) · ruff + mypy --strict · Docker + Compose.
 
 ## 6. Monetize - How will this make money?
 
-Not a commercial product. Internal personal tool to win freelance projects and
-positions faster; the return is landed engagements, not direct revenue. Full SaaS
-multi-user is explicitly out of MVP scope.
+Internal tool, no direct monetization. ROI = faster applications to matching listings → won freelance projects; additionally reference/learning value as a public Python project for the AI-engineer positioning.
 
 ## 7. UI/UX - How should this look and feel?
 
-No traditional UI. Telegram is the entire operator surface: concise notifications
-(project, client, match score, source) with an approval action, one thread per
-application, and explicit thread commands (e.g. start interview research) that
-never fire automatically. Feel: fast, low-noise, decisive - surface only what
-needs a human, keep autonomous flows silent.
+No web UI. Telegram is the interface: a compact HTML message per match (title as link, score, 2–3 reasons, start/location/remote), warning messages on cooldown/serial failures. Optional bot commands (`/stats`, `/pause`) are post-MVP.
 
-## Open questions (to resolve during build)
+## 8. Deployment - Where and how will this ship?
 
-- Concrete score thresholds for autonomous vs. approval-required
-- Finalize queue/job technology (pg-boss / BullMQ / Inngest)
-- LinkedIn connect automation: rate limits and account-risk mitigation
-- Feedback loop: how outcomes (reply/no reply, interview yes/no) feed back into matching
-
-## Out of MVP scope (later)
-
-- Automated follow-up on no response
-- Learning-based matching from success rate
-- Full SaaS multi-user capability
+Docker container on Nik's own home server (not Render/Vercel — do not use `/release`). `docker compose` with two services: app + postgres (volume). Image: `python:3.13-slim`, uv-based multi-stage build, non-root; start via the typer CLI (`daemon`), Alembic migrations on start. ENV: DATABASE_URL, CONTACT_MAIL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, OPENAI_API_KEY, LLM_MODEL, SCAN_INTERVAL_MIN (≥15), ANALYSIS_WINDOW_MIN, MATCH_THRESHOLD, SEARCH_URLS, LOG_LEVEL. Healthcheck: process liveness + last successful run < 3 × interval. No ingress/domain needed.

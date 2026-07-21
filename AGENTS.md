@@ -7,7 +7,11 @@ there is a single source of truth.
 
 ## What this is
 
-A description of your project and the problem it solves.
+project-pilot is a personal, single-user worker that watches freelancermap.de for
+new project listings, persists every listing losslessly in PostgreSQL, evaluates
+fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
+and pushes real matches to Telegram within minutes. Backend only, no web UI. The
+binding detail specification lives in `SPEC.md` at the repo root.
 
 This project is built with the **AI Coding Blueprint**, a workflow layer, not an
 app skeleton. To start a new project, scaffold the app first in an empty folder
@@ -72,16 +76,33 @@ or destructive actions.
 
 ## Commands
 
-> No app scaffolded yet, so there are no real run commands. Once you scaffold the
-> app and re-run `/onboard`, this section gets filled with the actual dev, build,
-> start, lint, and test commands. Do not assume any command below works until it's
-> listed here for real.
+Python 3.13 worker managed with `uv`; every command runs through `uv run`. The
+quality-gate commands work today; the `project-pilot` CLI subcommands come online
+as their features land (see `blueprint/build-plan.md`).
 
-- Dev server: _TODO after scaffold_
-- Build: _TODO after scaffold_
-- Start: _TODO after scaffold_
-- Lint: _TODO after scaffold_
+Quality gate (all four must be green before every `/check`, checkpoint, and `/complete`):
 
-Testing is opt-in. There is no `test` command yet, so the test gate is off. Run
-`/tests` or `$tests` after scaffolding to add a stack-native runner and update
-this section with the real test command.
+- Lint: `uv run ruff check`
+- Format check: `uv run ruff format --check`
+- Types: `uv run mypy`
+- Test: `uv run pytest`
+
+App (typer CLI, entry point `project_pilot.cli:app`):
+
+- Initialize DB schema: `uv run project-pilot init-db`
+- Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
+- Scheduler daemon: `uv run project-pilot daemon`
+- Send a test Telegram message: `uv run project-pilot test-notify`
+- Dry-run the filter against a listing: `uv run project-pilot test-filter`
+- Reporting summary: `uv run project-pilot stats`
+
+Database migrations (Alembic, async template): `uv run alembic upgrade head`
+
+Local dev Postgres: `docker compose -f compose.dev.yaml up -d`, or an equivalent
+local PostgreSQL 16 on `localhost:5432` matching `DATABASE_URL`.
+
+Container image (Feature 11): `docker build -t project-pilot .`
+
+Testing is ON: the `Test: uv run pytest` command above is the opt-in switch, so a
+build step that adds logic-bearing code ships a passing test in the same diff and
+the suite must be green before the step is approved (see `coding-standards.md`).
