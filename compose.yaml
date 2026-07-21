@@ -1,0 +1,37 @@
+# Production compose for the home server: app + postgres + a persistent volume.
+# Secrets and behaviour come from .env (see .env.example). DATABASE_URL is set here
+# to reach the postgres service, overriding any value in .env.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: pilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pilot}
+      POSTGRES_DB: project_pilot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pilot -d project_pilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+    healthcheck:
+      test: ["CMD", "project-pilot", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  pgdata:

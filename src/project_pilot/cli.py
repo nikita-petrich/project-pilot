@@ -85,9 +85,22 @@ async def _run_daemon(settings: Settings) -> None:
     pipeline, closer = _build_pipeline(settings)
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
     try:
+        await pipeline.run_once()  # initial run so the healthcheck has a baseline
         await runner.run_forever()
     finally:
         await closer()
+
+
+async def _is_healthy(settings: Settings) -> bool:
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    try:
+        async with session_factory() as session:
+            return await ReportingService(session).is_healthy(
+                interval_minutes=settings.scan_interval_min
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _build_report(settings: Settings) -> str:
@@ -137,6 +150,15 @@ def daemon() -> None:
     """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) until SIGTERM."""
     settings = load_settings()
     asyncio.run(_run_daemon(settings))
+
+
+@app.command("healthcheck")
+def healthcheck() -> None:
+    """Exit 0 if the last successful run is recent (for container healthchecks)."""
+    settings = load_settings()
+    if not asyncio.run(_is_healthy(settings)):
+        raise typer.Exit(code=1)
+    typer.echo("healthy")
 
 
 @app.command("stats")

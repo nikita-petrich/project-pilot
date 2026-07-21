@@ -1,5 +1,7 @@
 """Tests for the reporting service."""
 
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from project_pilot.models import (
@@ -7,6 +9,7 @@ from project_pilot.models import (
     EvaluationStage,
     Listing,
     ListingStatus,
+    RunStatus,
     Verdict,
 )
 from project_pilot.reporting import ReportingService, format_report
@@ -119,3 +122,24 @@ async def test_build_and_format_report(session: AsyncSession) -> None:
     text = format_report(report)
     assert "project-pilot stats" in text
     assert "wordpress" in text
+
+
+async def test_is_healthy_with_recent_run(session: AsyncSession) -> None:
+    repo = Repository(session)
+    run = await repo.start_run()
+    await repo.finalize_run(run, status=RunStatus.SUCCESS)
+    service = ReportingService(session, now=datetime.now(UTC))
+    assert await service.is_healthy(interval_minutes=15) is True
+
+
+async def test_is_unhealthy_without_run(session: AsyncSession) -> None:
+    assert await ReportingService(session).is_healthy(interval_minutes=15) is False
+
+
+async def test_is_unhealthy_with_stale_run(session: AsyncSession) -> None:
+    repo = Repository(session)
+    run = await repo.start_run()
+    await repo.finalize_run(run, status=RunStatus.SUCCESS)
+    future = datetime.now(UTC) + timedelta(hours=5)
+    service = ReportingService(session, now=future)
+    assert await service.is_healthy(interval_minutes=15) is False

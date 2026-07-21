@@ -6,7 +6,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from project_pilot.models import Evaluation, EvaluationStage, Listing, Verdict
+from project_pilot.models import Evaluation, EvaluationStage, Listing, Run, RunStatus, Verdict
+
+HEALTH_INTERVAL_MULTIPLE = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +95,26 @@ class ReportingService:
         return TokenUsage(
             llm_calls=int(calls), tokens_in=int(tokens_in), tokens_out=int(tokens_out)
         )
+
+    async def last_successful_run_at(self) -> datetime | None:
+        stmt = (
+            select(Run.finished_at)
+            .where(
+                Run.status.in_([RunStatus.SUCCESS, RunStatus.PARTIAL]),
+                Run.finished_at.is_not(None),
+            )
+            .order_by(Run.finished_at.desc())
+            .limit(1)
+        )
+        return await self._session.scalar(stmt)
+
+    async def is_healthy(self, *, interval_minutes: int) -> bool:
+        """True if the last successful run finished within 3x the scan interval."""
+        finished_at = await self.last_successful_run_at()
+        if finished_at is None:
+            return False
+        max_age = timedelta(minutes=HEALTH_INTERVAL_MULTIPLE * interval_minutes)
+        return self._now - finished_at <= max_age
 
     async def build_report(self, *, days: int = 7) -> Report:
         return Report(
