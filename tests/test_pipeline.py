@@ -287,3 +287,64 @@ async def test_dry_run_without_telegram_does_not_notify(
         card1 = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
         assert card1 is not None
         assert card1.notified_at is None
+
+
+class _BrokenClient:
+    async def check_robots(self, urls: list[str]) -> None:
+        return None
+
+    async def get(self, url: str) -> _Resp:
+        raise RuntimeError("boom")
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_source_blocked_sets_cooldown_and_warns(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    warns = _FakeNotifier()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES, block=True), telegram=warns)
+    outcome = await pipeline.run_once(now=NOW)
+    assert outcome.is_error is True
+    assert any("Cooling down" in message for message in warns.sent)
+    async with session_factory() as db_session:
+        state = await Repository(db_session).get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.cooldown_until is not None
+        assert state.cooldown_until > NOW
+
+
+async def test_cooldown_skips_next_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    first = _pipeline(
+        session_factory, client=_FakeClient(PAGES, block=True), telegram=_FakeNotifier()
+    )
+    await first.run_once(now=NOW)
+
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=_FakeNotifier())
+    outcome = await second.run_once(now=NOW + timedelta(minutes=15))
+    assert outcome.error == "skipped: in cooldown"
+    async with session_factory() as db_session:
+        assert await Repository(db_session).count_listings() == 0
+
+
+async def test_three_consecutive_failures_warn_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    warns = _FakeNotifier()
+    for index in range(3):
+        pipeline = Pipeline(
+            settings=_settings(),
+            profile=_profile(),
+            session_factory=session_factory,
+            client_factory=_BrokenClient,
+            matcher=_FakeMatcher(),
+            telegram=warns,
+        )
+        outcome = await pipeline.run_once(now=NOW + timedelta(minutes=15 * index))
+        assert outcome.is_error is True
+
+    failure_warnings = [m for m in warns.sent if "consecutive failed runs" in m]
+    assert len(failure_warnings) == 1

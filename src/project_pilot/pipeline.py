@@ -3,7 +3,7 @@
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -29,6 +29,7 @@ from project_pilot.models import (
     Listing,
     ListingStatus,
     RunStatus,
+    SourceState,
     Verdict,
 )
 from project_pilot.notification.telegram import MatchMessage, build_digest
@@ -38,6 +39,8 @@ from project_pilot.repository import Repository
 logger = logging.getLogger(__name__)
 
 MAX_LIST_PAGES = 2
+COOLDOWN_HOURS = 6
+FAILURE_WARNING_THRESHOLD = 3
 
 
 def _utcnow() -> datetime:
@@ -111,11 +114,18 @@ class Pipeline:
         search_urls = self._settings.require_search_urls()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
+            state = await repo.get_or_create_source_state(self._source)
+            if state.cooldown_until is not None and state.cooldown_until > now:
+                logger.info("source in cooldown until %s; skipping run", state.cooldown_until)
+                return RunOutcome(status=RunStatus.SUCCESS, error="skipped: in cooldown")
+
             run = await repo.start_run()
             outcome = RunOutcome(status=RunStatus.SUCCESS)
+            blocked = False
             try:
-                await self._execute(repo, search_urls, now, outcome)
+                await self._execute(repo, search_urls, now, outcome, state.watermark_at)
             except SourceBlockedError as err:
+                blocked = True
                 outcome.status = RunStatus.ERROR
                 outcome.error = f"source blocked: {err}"
                 logger.warning("run aborted: %s", outcome.error)
@@ -125,6 +135,8 @@ class Pipeline:
                 logger.exception("run failed")
             else:
                 outcome.status = RunStatus.PARTIAL if outcome.errors else RunStatus.SUCCESS
+
+            await self._finalize_state(state, outcome, now, blocked=blocked)
             await repo.finalize_run(
                 run,
                 status=outcome.status,
@@ -137,11 +149,40 @@ class Pipeline:
             )
         return outcome
 
-    async def _execute(
-        self, repo: Repository, search_urls: list[str], now: datetime, outcome: RunOutcome
+    async def _finalize_state(
+        self, state: SourceState, outcome: RunOutcome, now: datetime, *, blocked: bool
     ) -> None:
-        state = await repo.get_source_state(self._source)
-        watermark = state.watermark_at if state is not None else None
+        if outcome.status is RunStatus.ERROR:
+            state.consecutive_failures += 1
+            if blocked:
+                state.cooldown_until = now + timedelta(hours=COOLDOWN_HOURS)
+                await self._warn(
+                    "project-pilot: source blocked (403/captcha). Cooling down until "
+                    f"{state.cooldown_until:%Y-%m-%d %H:%M} UTC."
+                )
+            if state.consecutive_failures == FAILURE_WARNING_THRESHOLD:
+                await self._warn(
+                    f"project-pilot: {FAILURE_WARNING_THRESHOLD} consecutive failed runs. "
+                    f"Last error: {outcome.error}"
+                )
+        else:
+            state.consecutive_failures = 0
+            state.cooldown_until = None
+
+    async def _warn(self, text: str) -> None:
+        if self._telegram is not None:
+            await self._telegram.send_message(f"⚠️ {text}")
+        else:
+            logger.warning("warning (no telegram): %s", text)
+
+    async def _execute(
+        self,
+        repo: Repository,
+        search_urls: list[str],
+        now: datetime,
+        outcome: RunOutcome,
+        watermark: datetime | None,
+    ) -> None:
         outcome.is_seed = await repo.count_listings() == 0
 
         client = self._client_factory()

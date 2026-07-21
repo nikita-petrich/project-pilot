@@ -1,4 +1,4 @@
-"""Politeness httpx client: user agent, robots.txt gate, delays, timeouts."""
+"""Politeness httpx client: user agent, robots.txt gate, delays, timeouts, retries."""
 
 import asyncio
 import random
@@ -7,6 +7,13 @@ from typing import Self
 from urllib.robotparser import RobotFileParser
 
 import httpx
+from tenacity import (
+    AsyncRetrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
+from tenacity.wait import wait_base
 
 from project_pilot.errors import ConfigError, SourceBlockedError
 
@@ -23,8 +30,24 @@ _CAPTCHA_MARKERS = (
 type Sleeper = Callable[[float], Awaitable[None]]
 
 
+class _RetryableResponseError(Exception):
+    """Wraps a 429/5xx response so tenacity retries it (never used for 403)."""
+
+    def __init__(self, response: httpx.Response) -> None:
+        super().__init__(f"retryable status {response.status_code}")
+        self.response = response
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code == 429 or 500 <= status_code < 600
+
+
 class PolitenessClient:
-    """A compliance-first HTTP client: identifying UA, robots gate, spaced requests."""
+    """A compliance-first HTTP client: identifying UA, robots gate, spaced requests.
+
+    Transient failures (network errors, 5xx, 429) are retried with backoff; a 403
+    or captcha is never retried and raises ``SourceBlockedError`` immediately.
+    """
 
     def __init__(
         self,
@@ -35,6 +58,8 @@ class PolitenessClient:
         max_delay: float = 5.0,
         timeout: float = 20.0,
         sleeper: Sleeper = asyncio.sleep,
+        max_attempts: int = 3,
+        retry_wait: wait_base | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self._user_agent = user_agent
@@ -43,6 +68,8 @@ class PolitenessClient:
         self._max_delay = max_delay
         self._effective_delay = min_delay
         self._sleeper = sleeper
+        self._max_attempts = max_attempts
+        self._retry_wait: wait_base = retry_wait or wait_exponential_jitter(initial=1.0, max=10.0)
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             headers={"User-Agent": user_agent},
@@ -85,12 +112,29 @@ class PolitenessClient:
         if self._delay_pending:
             await self._sleeper(self._next_delay())
         self._delay_pending = True
-        response = await self._client.get(url)
+        try:
+            response = await self._fetch(url)
+        except _RetryableResponseError as exhausted:
+            response = exhausted.response
         if response.status_code == 403:
             raise SourceBlockedError(f"HTTP 403 for {url}")
         if _looks_like_captcha(response):
             raise SourceBlockedError(f"captcha/bot wall for {url}")
         return response
+
+    async def _fetch(self, url: str) -> httpx.Response:
+        async for attempt in AsyncRetrying(
+            retry=retry_if_exception_type((httpx.TransportError, _RetryableResponseError)),
+            wait=self._retry_wait,
+            stop=stop_after_attempt(self._max_attempts),
+            reraise=True,
+        ):
+            with attempt:
+                response = await self._client.get(url)
+                if _is_retryable_status(response.status_code):
+                    raise _RetryableResponseError(response)
+                return response
+        raise AssertionError("unreachable")  # pragma: no cover
 
     def _next_delay(self) -> float:
         lower = self._effective_delay

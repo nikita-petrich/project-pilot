@@ -3,6 +3,7 @@
 import httpx
 import pytest
 import respx
+from tenacity import wait_none
 
 from project_pilot.errors import ConfigError, SourceBlockedError
 from project_pilot.ingestion.client import PolitenessClient
@@ -92,3 +93,44 @@ async def test_delay_applied_between_requests_only() -> None:
 
     assert len(delays) == 1  # no delay before the first request
     assert 2.0 <= delays[0] <= 5.0
+
+
+@respx.mock
+async def test_get_retries_on_5xx_then_succeeds() -> None:
+    route = respx.get(f"{BASE}/flaky").mock(
+        side_effect=[httpx.Response(500), httpx.Response(500), httpx.Response(200, html="ok")]
+    )
+    async with PolitenessClient(user_agent=UA, sleeper=_noop, retry_wait=wait_none()) as client:
+        response = await client.get(f"{BASE}/flaky")
+    assert response.status_code == 200
+    assert route.call_count == 3
+
+
+@respx.mock
+async def test_get_retries_on_transport_error() -> None:
+    route = respx.get(f"{BASE}/net").mock(
+        side_effect=[httpx.ConnectError("down"), httpx.Response(200, html="ok")]
+    )
+    async with PolitenessClient(user_agent=UA, sleeper=_noop, retry_wait=wait_none()) as client:
+        response = await client.get(f"{BASE}/net")
+    assert response.status_code == 200
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_get_403_is_not_retried() -> None:
+    route = respx.get(f"{BASE}/blocked").mock(return_value=httpx.Response(403))
+    async with PolitenessClient(user_agent=UA, sleeper=_noop, retry_wait=wait_none()) as client:
+        with pytest.raises(SourceBlockedError):
+            await client.get(f"{BASE}/blocked")
+    assert route.call_count == 1
+
+
+@respx.mock
+async def test_get_retries_exhausted_returns_last_response() -> None:
+    respx.get(f"{BASE}/down").mock(return_value=httpx.Response(503))
+    async with PolitenessClient(
+        user_agent=UA, sleeper=_noop, retry_wait=wait_none(), max_attempts=2
+    ) as client:
+        response = await client.get(f"{BASE}/down")
+    assert response.status_code == 503
