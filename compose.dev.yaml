@@ -1,0 +1,15 @@
+# Development/test infrastructure only. The production compose is built in Feature 11.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: pilot
+      POSTGRES_PASSWORD: pilot
+      POSTGRES_DB: project_pilot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

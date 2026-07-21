@@ -1,0 +1,1 @@
+"""Watermark pagination stop criterion."""

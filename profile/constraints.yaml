@@ -1,0 +1,9 @@
+# Hard, deterministic rules (stage 2) — applied BEFORE the LLM, cost 0 tokens.
+# TODO (Nik): adjust terms. Matching is case-insensitive with word boundaries.
+
+blacklist:            # one hit in title/description => verdict no_match
+  - example-term
+
+must_have: []         # optional: terms of which at least one must appear
+
+languages: [de, en]   # listing languages that are accepted

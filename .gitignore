@@ -18,5 +18,16 @@ Thumbs.db
 tmp/
 *.tmp
 
-# Stack-specific ignores (dependencies, build output, caches) get added by
-# /onboard once the app is scaffolded and the stack is known.
+# Python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+dist/
+build/
