@@ -1,8 +1,13 @@
 # Hard, deterministic rules (stage 2) — applied BEFORE the LLM, cost 0 tokens.
 # TODO (Nik): adjust terms. Matching is case-insensitive with word boundaries.
 
-blacklist:            # one hit in title/description => verdict no_match
-  - example-term
+blacklist: []          # empty list (not null!) => no hard-blocked terms
+  # Intentionally empty. Nik's no-gos (Java, PHP, WordPress, Django, SAP) are all
+  # CONTEXT-DEPENDENT: a "migrate away from WordPress/PHP" project, a frontend-only
+  # role with an X backend, or an integration from a modern stack are all desirable.
+  # A 0-token literal match can't tell those apart, so matching is left to the LLM
+  # (the no-gos live in profile.md). Add a term here only for a TRULY unconditional
+  # exclusion that no context could rescue.
 
 must_have: []         # optional: terms of which at least one must appear
 
