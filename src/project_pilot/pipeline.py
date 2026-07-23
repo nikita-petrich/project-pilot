@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.config import SOURCE_NAME, Settings
@@ -15,7 +16,7 @@ from project_pilot.evaluation.freshness import evaluate_freshness
 from project_pilot.evaluation.llm import LlmEvaluation, is_match_notifiable, render_listing
 from project_pilot.evaluation.rules import apply_hard_rules
 from project_pilot.ingestion.client import BASE_URL
-from project_pilot.ingestion.normalize import next_page_url
+from project_pilot.ingestion.normalize import detect_language, next_page_url
 from project_pilot.ingestion.parser import (
     ListingSummary,
     ParsedListing,
@@ -32,7 +33,7 @@ from project_pilot.models import (
     SourceState,
     Verdict,
 )
-from project_pilot.notification.telegram import MatchMessage, build_digest
+from project_pilot.notification.telegram import MatchMessage, format_match
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -352,14 +353,13 @@ class Pipeline:
         pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
         if not pending:
             return
-        messages = [_to_match_message(listing) for listing in pending]
         if self._telegram is None:
-            logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(messages))
+            logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(pending))
             return
-        sent = await self._telegram.send_message(build_digest(messages))
-        if sent:
-            await repo.mark_notified(pending, now)
-            outcome.notified = len(pending)
+        for listing in pending:  # one message per match, marked notified only on a successful send
+            if await self._telegram.send_message(format_match(_to_match_message(listing, now))):
+                await repo.mark_notified([listing], now)
+                outcome.notified += 1
         else:
             logger.warning("telegram send failed; %d match(es) will retry next run", len(pending))
 
@@ -401,30 +401,127 @@ def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
     return max(matches, key=lambda evaluation: evaluation.created_at)
 
 
-def _reasons_from(evaluation: Evaluation | None) -> list[str]:
+_CONTRACT_LABELS = {
+    "contractor": "Freiberuflich",
+    "freelance": "Freiberuflich",
+    "employee_leasing": "Arbeitnehmerüberlassung",
+    "permanent_position": "Festanstellung",
+    "temporary_employment": "Zeitarbeit",
+}
+_LANGUAGE_LABELS = {"de": "Deutsch", "en": "Englisch"}
+
+
+class _RawContract(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    contract_type: str | None = Field(default=None, alias="contractType")
+    remote_in_percent: int | None = Field(default=None, alias="remoteInPercent")
+
+
+class _RawIndustry(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name_de: str | None = Field(default=None, alias="nameDe")
+
+
+class _RawFields(BaseModel):
+    """The subset of the stored raw source record used to enrich a match message."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    company: str | None = None
+    first_name: str | None = Field(default=None, alias="firstName")
+    last_name: str | None = Field(default=None, alias="lastName")
+    workload: int | None = None
+    duration_in_months: int | None = Field(default=None, alias="durationInMonths")
+    duration_text: str | None = Field(default=None, alias="durationText")
+    expires: str | None = None
+    extension_possible: bool | None = Field(default=None, alias="extensionPossible")
+    is_endcustomer_project: bool | None = Field(default=None, alias="isEndcustomerProject")
+    industry: _RawIndustry | None = None
+    contract: _RawContract | None = Field(default=None, alias="contractType")
+
+
+def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
     if evaluation is None:
         return []
-    raw = evaluation.reason.get("reasons")
-    if isinstance(raw, list):
-        return [str(reason) for reason in raw]
-    return []
+    value = evaluation.reason.get(key)
+    return [str(item) for item in value] if isinstance(value, list) else []
 
 
-def _to_match_message(listing: Listing) -> MatchMessage:
+def _relative_de(posted_at: datetime, now: datetime) -> str | None:
+    minutes = int((now - posted_at).total_seconds() // 60)
+    if minutes < 0:
+        return None
+    if minutes < 60:
+        return f"vor {minutes} Min"
+    if minutes < 1440:
+        return f"vor {minutes // 60} Std"
+    return f"vor {minutes // 1440} Tg"
+
+
+def _expires_label(value: str | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return "bis " + datetime.fromisoformat(value).strftime("%d.%m.%Y")
+    except ValueError:
+        return None
+
+
+def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     evaluation = _latest_match_evaluation(listing)
     score = evaluation.score if evaluation is not None and evaluation.score is not None else 0
+    raw = _RawFields.model_validate(listing.raw or {})
+
     if listing.start_asap:
         start: str | None = "ab sofort"
     elif listing.start_date is not None:
-        start = listing.start_date.isoformat()
+        start = listing.start_date.strftime("%d.%m.%Y")
     else:
         start = None
+
+    remote_pct = raw.contract.remote_in_percent if raw.contract else None
+    remote_label = (
+        f"{remote_pct}% Remote / {100 - remote_pct}% vor Ort"
+        if remote_pct is not None
+        else listing.remote_status.value
+    )
+
+    contract_type = None
+    if raw.contract and raw.contract.contract_type:
+        contract_type = _CONTRACT_LABELS.get(raw.contract.contract_type, raw.contract.contract_type)
+
+    duration_label = raw.duration_text or (
+        f"{raw.duration_in_months} Mon" if raw.duration_in_months else None
+    )
+    if duration_label and raw.extension_possible:
+        duration_label += " (+ Verlängerung)"
+
+    contact_name = " ".join(part for part in (raw.first_name, raw.last_name) if part) or None
+    language = detect_language(listing.description or listing.title)
+
     return MatchMessage(
         title=listing.title,
         url=listing.external_url,
         score=score,
-        reasons=_reasons_from(evaluation),
-        start=start,
+        company=raw.company,
+        contact_name=contact_name,
+        is_endcustomer=raw.is_endcustomer_project,
         location=listing.location,
-        remote=listing.remote_status.value,
+        remote_label=remote_label,
+        contract_type=contract_type,
+        workload_label=f"{raw.workload}% Auslastung" if raw.workload else None,
+        duration_label=duration_label,
+        start=start,
+        posted_ago=_relative_de(listing.posted_at, now) if listing.posted_at else None,
+        expires_label=_expires_label(raw.expires),
+        industry=raw.industry.name_de if raw.industry else None,
+        language=_LANGUAGE_LABELS.get(language) if language else None,
+        skills=list(listing.skills or []),
+        reasons=_eval_list(evaluation, "reasons"),
+        matching_skills=_eval_list(evaluation, "matching_skills"),
+        missing_requirements=_eval_list(evaluation, "missing_requirements"),
+        risk_flags=_eval_list(evaluation, "risk_flags"),
+        description=listing.description or "",
     )

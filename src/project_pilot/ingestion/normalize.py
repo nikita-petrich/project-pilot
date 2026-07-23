@@ -60,6 +60,88 @@ def parse_end(text: str) -> date | None:
     return parse_german_date(text)
 
 
+_DE_WORDS = frozenset(
+    [
+        "der",
+        "die",
+        "das",
+        "und",
+        "oder",
+        "für",
+        "mit",
+        "von",
+        "im",
+        "ist",
+        "eine",
+        "einen",
+        "wir",
+        "sie",
+        "werden",
+        "nicht",
+        "auch",
+        "sind",
+        "bei",
+        "aus",
+        "dem",
+        "den",
+        "zur",
+        "zum",
+        "sowie",
+        "unserem",
+        "unseren",
+        "erfahrung",
+        "kenntnisse",
+    ]
+)
+_EN_WORDS = frozenset(
+    [
+        "the",
+        "and",
+        "or",
+        "for",
+        "with",
+        "of",
+        "is",
+        "are",
+        "we",
+        "you",
+        "will",
+        "not",
+        "this",
+        "that",
+        "from",
+        "your",
+        "our",
+        "their",
+        "as",
+        "at",
+        "have",
+        "experience",
+        "knowledge",
+        "role",
+        "requirements",
+        "skills",
+    ]
+)
+
+
+def detect_language(text: str) -> str | None:
+    """Best-effort de/en detection from stopword counts (None if no clear signal)."""
+    if not text:
+        return None
+    lowered = text.lower()
+    if any(char in lowered for char in "äöüß"):
+        return "de"
+    tokens = re.findall(r"[a-zäöüß]+", lowered)
+    if not tokens:
+        return None
+    german = sum(1 for token in tokens if token in _DE_WORDS)
+    english = sum(1 for token in tokens if token in _EN_WORDS)
+    if german == english:
+        return None
+    return "de" if german > english else "en"
+
+
 def remote_status_from_percent(percent: int | None) -> RemoteStatus:
     """Map freelancermap's ``remoteInPercent`` to a remote status (100=remote, 0=onsite)."""
     if percent is None:

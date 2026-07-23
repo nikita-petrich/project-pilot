@@ -7,6 +7,7 @@ import pytest
 from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
+    detect_language,
     html_to_text,
     next_page_url,
     parse_end,
@@ -127,3 +128,10 @@ def test_next_page_url_increments_pagenr() -> None:
     # array params survive and pagenr is added when absent
     added = next_page_url("https://x.de/projekte?query=a")
     assert added.endswith("pagenr=2")
+
+
+def test_detect_language() -> None:
+    assert detect_language("Wir suchen einen erfahrenen Entwickler für das Projekt") == "de"
+    assert detect_language("We are looking for a senior engineer for this role") == "en"
+    assert detect_language("Python asyncio PostgreSQL") is None  # no stopword signal
+    assert detect_language("") is None
