@@ -402,6 +402,7 @@ def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
 
 
 _CONTRACT_LABELS = {
+    "contracting": "Freiberuflich",
     "contractor": "Freiberuflich",
     "freelance": "Freiberuflich",
     "employee_leasing": "Arbeitnehmerüberlassung",
@@ -481,12 +482,16 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     else:
         start = None
 
+    # remoteInPercent == 0 is freelancermap's "not specified" default (often wrong for
+    # agency posts), so only show it when it carries a real signal; the location line
+    # still conveys remote/onsite. Genuine hybrids (1..99) show the on-site share.
     remote_pct = raw.contract.remote_in_percent if raw.contract else None
-    remote_label = (
-        f"{remote_pct}% Remote / {100 - remote_pct}% vor Ort"
-        if remote_pct is not None
-        else listing.remote_status.value
-    )
+    if remote_pct is None or remote_pct <= 0:
+        remote_label: str | None = None
+    elif remote_pct >= 100:
+        remote_label = "100% Remote"
+    else:
+        remote_label = f"{remote_pct}% Remote / {100 - remote_pct}% vor Ort"
 
     contract_type = None
     if raw.contract and raw.contract.contract_type:
