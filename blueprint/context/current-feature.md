@@ -55,17 +55,17 @@ Blob per `data-component-name`, `json.loads`, sonst `SelectorMismatchError`
   None→unknown), `start_from_parts(year, month, text)` (sofort/asap→(None,True),
   keine-angabe/leer→(None,False), sonst `date(year,month,1)`), `html_to_text(html)`,
   `next_page_url(url)` (setzt/inkrementiert `pagenr`).
-- [ ] **2. Blob-Extractor + List-Parser**: `_react_component(html, name) -> dict`
+- [x] **2. Blob-Extractor + List-Parser**: `_react_component(html, name) -> dict`
   (raise `SelectorMismatchError` bei fehlend/kein-JSON). `parse_list_page` liest
   `ProjectSearch.initialResults` → Summaries (leer→`[]`). `parse_next_page_url`
   entfernt. Neue Fixture `freelancermap_list.html` (ProjectSearch-Blob, 3 Items,
   darunter minutengenau + Rand-URL). List-Tests in `test_parser.py` anpassen.
-- [ ] **3. Detail-Parser**: `parse_detail_page` liest `ProjectShow.project` →
+- [x] **3. Detail-Parser**: `parse_detail_page` liest `ProjectShow.project` →
   `ParsedListing` (Mapping s.o.; `end_date=None`, `durationInMonths` in `raw`).
   Neue Fixtures `freelancermap_detail_asap_remote.html` (startText "ab sofort",
   100 % remote) und `freelancermap_detail_dated_onsite.html` (startYear/Month,
   0 % → onsite). Detail-Tests anpassen. `SelectorMismatchError` bei fehlendem Blob.
-- [ ] **4. Pipeline-Pagination**: `_collect_new_summaries` nutzt `next_page_url`
+- [x] **4. Pipeline-Pagination**: `_collect_new_summaries` nutzt `next_page_url`
   (Inkrement) statt Link-Following; Stop bei leerer Seite. `test_pipeline.py`
   Routing/Fixtures anpassen (Detail-URLs aus slug; leere Seite-2 beendet Loop).
 - [ ] **5. Acceptance**: Gate grün; neuen Parser gegen die real gecrawlten

@@ -17,12 +17,19 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from project_pilot.config import Settings
 from project_pilot.models import Base
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
     "postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_settings_from_dotenv(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Config tests drive env via monkeypatch; never read the developer's real .env."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
 
 
 @pytest.fixture

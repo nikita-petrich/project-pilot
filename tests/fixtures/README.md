@@ -3,29 +3,33 @@
 Saved payloads for tests. **No test makes a live request** (see
 `blueprint/context/coding-standards.md`).
 
-## freelancermap HTML (synthetic)
+## freelancermap HTML (react-on-rails JSON)
 
-- `freelancermap_list.html` - a search-results page with four project cards.
-- `freelancermap_detail_asap_remote.html` - detail for project 12345 (start "ab
-  sofort", 100% remote, minute-precise posted `<time>`).
-- `freelancermap_detail_dated_onsite.html` - detail for project 67890 (start
-  01.09.2026, end "keine Angabe", onsite, date-only posted).
+The real site renders project data server-side into embedded
+`<script class="js-react-on-rails-component" data-component-name="...">` JSON
+blobs (`ProjectSearch` on list pages, `ProjectShow` on detail pages). The parser
+reads those blobs, so these fixtures mirror that real structure.
 
-These three are **synthetic**: they were hand-built because the build sandbox
-could not reach freelancermap.de (`docs/compliance.md`, `docs/adr/0001`). They
-model the documented German structure and the edge cases the parser must handle,
-but they are not guaranteed to match the site's current markup.
+- `freelancermap_list.html` — a `ProjectSearch` blob with three `initialResults`
+  (id, slug, title, minute-precise `created`).
+- `freelancermap_detail_asap_remote.html` — a `ProjectShow` blob for project 12345
+  (start "ab sofort" → `startText`, 100 % remote → `remoteInPercent: 100`,
+  minute-precise `created`, skills, HTML description).
+- `freelancermap_detail_dated_onsite.html` — `ProjectShow` for project 67890
+  (dated start `startYear/startMonth` = 2026-09, onsite → `remoteInPercent: 0`).
 
-**Before production**, Nik replaces them with real saved pages (keep the file
-names) and, if needed, adjusts the centralized selectors in
-`src/project_pilot/ingestion/parser.py`. The parser raises `SelectorMismatchError`
-rather than silently returning empty data, so a markup mismatch is loud.
+These mirror **real pages captured live on 2026-07-23**, trimmed to the consumed
+field subset and sanitized (no real personal or company data). Slugs are shared
+between the list and detail fixtures so the pipeline integration test can route
+list → detail.
+
+The parser raises `SelectorMismatchError` (never silent) when a blob is absent or
+malformed, so a source-structure change is loud.
 
 Edge cases these fixtures intentionally cover:
 
-- URL canonicalization: relative vs absolute hrefs, tracking query params, a
-  fragment, and a trailing slash.
-- German dates: "ab sofort" (start-asap flag), "01.09.2026", "keine Angabe".
-- Remote heuristic: "100 % Remote", "Nein, vor Ort", "hybrid".
-- posted_at precision: a machine-readable `<time datetime>` (minute) vs a bare
-  German date (day).
+- URL from slug: `/projekt/{slug}` canonicalization.
+- Start: "ab sofort" (`start_asap`) vs structured `startYear/startMonth`.
+- Remote heuristic from percent: 100 → remote, 0 → onsite.
+- posted_at precision: minute (ISO `created` with timezone).
+- Lossless `raw`: the full `project` record is preserved on the listing.

@@ -23,16 +23,21 @@ DETAIL1 = "https://www.freelancermap.de/projekt/senior-python-entwickler-backend
 DETAIL2 = "https://www.freelancermap.de/projekt/data-engineer-azure-67890"
 NOW = datetime(2026, 7, 21, 7, 20, tzinfo=UTC)  # ~8 min after card1's posted 07:12 UTC
 
-LIST_HTML = """<!doctype html><html><body><ol class="project-list">
-<li><article class="project-card"><h2 class="project-title">
-<a href="/projekt/senior-python-entwickler-backend-12345">Senior Python</a>
-</h2><div class="project-meta"><span class="project-location">Remote</span></div>
-</article></li>
-<li><article class="project-card"><h2 class="project-title">
-<a href="/projekt/data-engineer-azure-67890">Data Engineer</a>
-</h2><div class="project-meta"><span class="project-location">Muenchen</span></div>
-</article></li>
-</ol></body></html>"""
+LIST_HTML = (
+    '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+    '{"currentPage":1,"initialResults":['
+    '{"id":12345,"slug":"senior-python-entwickler-backend-12345",'
+    '"title":"Senior Python","created":"2026-07-21T09:12:00+02:00"},'
+    '{"id":67890,"slug":"data-engineer-azure-67890",'
+    '"title":"Data Engineer","created":"2026-07-21T09:15:00+02:00"}'
+    "]}</script>"
+)
+# Pagination walks by incrementing pagenr; page 2 is an empty result set (end).
+LIST_HTML_PAGE2 = (
+    '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+    '{"currentPage":2,"initialResults":[]}</script>'
+)
+SEARCH_PAGE2 = SEARCH + "?pagenr=2"
 
 
 def _fixture(name: str) -> str:
@@ -41,6 +46,7 @@ def _fixture(name: str) -> str:
 
 PAGES = {
     SEARCH: LIST_HTML,
+    SEARCH_PAGE2: LIST_HTML_PAGE2,
     DETAIL1: _fixture("freelancermap_detail_asap_remote.html"),
     DETAIL2: _fixture("freelancermap_detail_dated_onsite.html"),
 }
@@ -194,7 +200,11 @@ async def test_full_run_notifies_match(
 async def test_per_entry_isolation_skips_failing_detail(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    pages = {SEARCH: LIST_HTML, DETAIL1: PAGES[DETAIL1]}  # DETAIL2 absent
+    pages = {
+        SEARCH: LIST_HTML,
+        SEARCH_PAGE2: LIST_HTML_PAGE2,
+        DETAIL1: PAGES[DETAIL1],
+    }  # DETAIL2 absent
     pipeline = _pipeline(session_factory, client=_FakeClient(pages))
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.new == 1
@@ -267,7 +277,7 @@ async def test_blacklist_rejects_before_llm(
         session_factory,
         client=_FakeClient(PAGES),
         telegram=notifier,
-        profile=_profile(blacklist=["fastapi"]),
+        profile=_profile(blacklist=["asyncio"]),
     )
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.matched == 0

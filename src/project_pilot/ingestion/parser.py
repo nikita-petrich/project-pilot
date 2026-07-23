@@ -1,46 +1,108 @@
-"""freelancermap list/detail HTML parsing (selectors centralized as constants)."""
+"""freelancermap list/detail parsing from the embedded react-on-rails JSON blobs.
 
+The site renders its project data server-side into
+``<script class="js-react-on-rails-component" data-component-name="...">`` blobs
+(``ProjectSearch`` on list pages, ``ProjectShow`` on detail pages). Parsing the
+structured JSON is more robust than CSS scraping; the blob names and the field
+subset below are the one place to adjust when the source structure changes.
+"""
+
+import json
 from dataclasses import dataclass
 from datetime import date, datetime
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from project_pilot.errors import SelectorMismatchError
 from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
-    parse_end,
+    html_to_text,
     parse_posted,
-    parse_start,
-    remote_status_from_text,
-    resolve_url,
+    remote_status_from_percent,
+    start_from_parts,
 )
 from project_pilot.models import PostedPrecision, RemoteStatus
 
-# --- freelancermap selectors: the one place to adjust when the markup changes ---
-LIST_CARD = "article.project-card"
-LIST_TITLE_LINK = "h2.project-title a"
-LIST_POSTED = ".project-posted"
+# --- react-on-rails blobs: the one place to adjust when the source structure changes ---
+# Pagination has no server-rendered <a> (the page links live only inside the blob),
+# so the pipeline walks pages by incrementing pagenr (see normalize.next_page_url).
+_REACT_COMPONENT = "script.js-react-on-rails-component"
+LIST_COMPONENT = "ProjectSearch"
+DETAIL_COMPONENT = "ProjectShow"
 
-LIST_NEXT_PAGE = "nav.pagination a.page-next"
 
-DETAIL_TITLE = "h1.project-title"
-DETAIL_FACTS = "dl.project-facts"
-DETAIL_DESCRIPTION = "section.project-description"
-DETAIL_SKILL = "ul.project-skills li"
-DETAIL_POSTED_TIME = "dd.fact-posted time"
+class _ListItem(BaseModel):
+    """One entry from ``ProjectSearch.initialResults`` on a list page."""
 
-# German fact labels (lowercased, colon-stripped) looked up in the detail facts list.
-FACT_POSTED = "eingetragen"
-FACT_START = "projektstart"
-FACT_END = "projektende"
-FACT_LOCATION = "einsatzort"
-FACT_REMOTE = "remote"
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    slug: str
+    title: str
+    created: str | None = None
+
+
+class _ProjectSearch(BaseModel):
+    """The list-page react component; only the fields we consume."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    initial_results: list[_ListItem] = Field(default_factory=list, alias="initialResults")
+
+
+class _Country(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    name_de: str | None = Field(default=None, alias="nameDe")
+
+
+class _ContractType(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    remote_in_percent: int | None = Field(default=None, alias="remoteInPercent")
+
+
+class _Skill(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    localized_name: str | None = Field(default=None, alias="localizedName")
+    name_de: str | None = Field(default=None, alias="nameDe")
+
+
+class _Skills(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    enabled: list[_Skill] = Field(default_factory=list)
+
+
+class _Project(BaseModel):
+    """The detail-page project record; only the fields we map to a listing."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    title: str
+    created: str | None = None
+    start_year: int | None = Field(default=None, alias="startYear")
+    start_month: int | None = Field(default=None, alias="startMonth")
+    start_text: str | None = Field(default=None, alias="startText")
+    city: str | None = None
+    country: _Country | None = None
+    contract_type: _ContractType | None = Field(default=None, alias="contractType")
+    skills: _Skills | None = None
+    description: str | None = None
+    display_description: str | None = Field(default=None, alias="displayDescription")
+
+
+class _ProjectShow(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    project: _Project
 
 
 @dataclass(frozen=True, slots=True)
 class ListingSummary:
-    """One project card from a list page: enough to dedupe and gate on freshness."""
+    """One project from a list page: enough to dedupe and gate on freshness."""
 
     external_url: str
     url_hash: str
@@ -69,107 +131,86 @@ class ParsedListing:
     raw: dict[str, object]
 
 
-def _text(node: Tag | None) -> str:
-    return node.get_text(" ", strip=True) if node is not None else ""
+def _react_json(html: str, name: str) -> dict[str, object]:
+    """Return the raw JSON object of an embedded react-on-rails component by name.
 
-
-def _attr(node: Tag | None, name: str) -> str | None:
+    Raises ``SelectorMismatchError`` (loud, never silent) when the script tag is
+    absent, is not valid JSON, or is not a JSON object.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    node = soup.select_one(f'{_REACT_COMPONENT}[data-component-name="{name}"]')
     if node is None:
-        return None
-    value = node.get(name)
-    if value is None:
-        return None
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
+        raise SelectorMismatchError(f"react-on-rails component {name!r} not found")
+    raw = node.string or node.get_text()
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as err:
+        raise SelectorMismatchError(f"react-on-rails component {name!r} is not valid JSON") from err
+    if not isinstance(data, dict):
+        raise SelectorMismatchError(f"react-on-rails component {name!r} is not a JSON object")
+    return data
 
 
-def _parse_facts(soup: BeautifulSoup) -> dict[str, str]:
-    facts: dict[str, str] = {}
-    definition_list = soup.select_one(DETAIL_FACTS)
-    if definition_list is None:
-        return facts
-    terms = definition_list.select("dt")
-    definitions = definition_list.select("dd")
-    for term, definition in zip(terms, definitions, strict=False):
-        label = _text(term).lower().rstrip(":").strip()
-        if label:
-            facts[label] = _text(definition)
-    return facts
+def _validate[T: BaseModel](data: dict[str, object], name: str, model: type[T]) -> T:
+    try:
+        return model.model_validate(data)
+    except ValidationError as err:
+        raise SelectorMismatchError(f"react-on-rails component {name!r} failed validation") from err
+
+
+def _location(city: str | None, country: str | None) -> str | None:
+    parts = [part for part in (city, country) if part]
+    return ", ".join(parts) or None
 
 
 def parse_list_page(html: str, base_url: str) -> list[ListingSummary]:
-    soup = BeautifulSoup(html, "lxml")
-    cards = soup.select(LIST_CARD)
-    if not cards:
-        raise SelectorMismatchError(f"no list cards matched {LIST_CARD!r}")
-
+    """Parse a list page's ``ProjectSearch`` blob into summaries (empty is valid)."""
+    search = _validate(_react_json(html, LIST_COMPONENT), LIST_COMPONENT, _ProjectSearch)
     summaries: list[ListingSummary] = []
-    for card in cards:
-        link = card.select_one(LIST_TITLE_LINK)
-        href = _attr(link, "href")
-        if link is None or href is None:
-            continue
-        url = canonicalize_url(href, base_url)
-        posted_element = card.select_one(LIST_POSTED)
-        posted_at, precision = parse_posted(
-            _attr(posted_element, "datetime"), _text(posted_element)
-        )
+    for item in search.initial_results:
+        url = canonicalize_url(f"/projekt/{item.slug}", base_url)
+        posted_at, precision = parse_posted(item.created, None)
         summaries.append(
             ListingSummary(
                 external_url=url,
                 url_hash=compute_url_hash(url),
-                title=_text(link),
+                title=item.title,
                 posted_at=posted_at,
                 posted_at_precision=precision,
             )
         )
-
-    if not summaries:
-        raise SelectorMismatchError("list cards found but no listing links parsed")
     return summaries
 
 
-def parse_next_page_url(html: str, base_url: str) -> str | None:
-    """Return the absolute "next page" URL (query preserved) or None if absent."""
-    soup = BeautifulSoup(html, "lxml")
-    link = soup.select_one(LIST_NEXT_PAGE)
-    href = _attr(link, "href")
-    if link is None or href is None:
-        return None
-    return resolve_url(href, base_url)
-
-
 def parse_detail_page(html: str, base_url: str, *, source: str, external_url: str) -> ParsedListing:
-    soup = BeautifulSoup(html, "lxml")
-    title_element = soup.select_one(DETAIL_TITLE)
-    if title_element is None:
-        raise SelectorMismatchError(f"no detail title matched {DETAIL_TITLE!r}")
+    """Parse a detail page's ``ProjectShow`` blob into a fully populated listing."""
+    data = _react_json(html, DETAIL_COMPONENT)
+    project = _validate(data, DETAIL_COMPONENT, _ProjectShow).project
 
-    facts = _parse_facts(soup)
-    skills = [text for skill in soup.select(DETAIL_SKILL) if (text := _text(skill))]
-    start_date, start_asap = parse_start(facts.get(FACT_START, ""))
-    location = facts.get(FACT_LOCATION) or None
-    remote_source = facts.get(FACT_REMOTE) or location or ""
-    posted_at, precision = parse_posted(
-        _attr(soup.select_one(DETAIL_POSTED_TIME), "datetime"),
-        facts.get(FACT_POSTED, ""),
+    start_date, start_asap = start_from_parts(
+        project.start_year, project.start_month, project.start_text
     )
+    posted_at, precision = parse_posted(project.created, None)
+    remote_percent = project.contract_type.remote_in_percent if project.contract_type else None
+    country = project.country.name_de if project.country else None
+    enabled = project.skills.enabled if project.skills else []
+    skills = [name for skill in enabled if (name := skill.localized_name or skill.name_de)]
 
+    raw_project = data["project"]
     url = canonicalize_url(external_url, base_url)
     return ParsedListing(
         source=source,
         external_url=url,
         url_hash=compute_url_hash(url),
-        title=_text(title_element),
-        description=_text(soup.select_one(DETAIL_DESCRIPTION)),
+        title=project.title,
+        description=html_to_text(project.description or project.display_description or ""),
         skills=skills,
         start_date=start_date,
         start_asap=start_asap,
-        end_date=parse_end(facts.get(FACT_END, "")),
-        location=location,
-        remote_status=remote_status_from_text(remote_source),
+        end_date=None,
+        location=_location(project.city, country),
+        remote_status=remote_status_from_percent(remote_percent),
         posted_at=posted_at,
         posted_at_precision=precision,
-        raw={"facts": facts, "skills": skills},
+        raw=raw_project if isinstance(raw_project, dict) else {},
     )

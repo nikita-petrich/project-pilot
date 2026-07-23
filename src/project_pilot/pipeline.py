@@ -15,12 +15,12 @@ from project_pilot.evaluation.freshness import evaluate_freshness
 from project_pilot.evaluation.llm import LlmEvaluation, is_match_notifiable, render_listing
 from project_pilot.evaluation.rules import apply_hard_rules
 from project_pilot.ingestion.client import BASE_URL
+from project_pilot.ingestion.normalize import next_page_url
 from project_pilot.ingestion.parser import (
     ListingSummary,
     ParsedListing,
     parse_detail_page,
     parse_list_page,
-    parse_next_page_url,
 )
 from project_pilot.ingestion.watermark import evaluate_page
 from project_pilot.models import (
@@ -218,8 +218,9 @@ class Pipeline:
                 if page_url is None:
                     break
                 response = await client.get(page_url)
-                html = response.text
-                summaries = parse_list_page(html, self._base_url)
+                summaries = parse_list_page(response.text, self._base_url)
+                if not summaries:
+                    break  # empty results page: end of pagination
                 outcome.fetched += len(summaries)
                 known = await repo.get_known_hashes([summary.url_hash for summary in summaries])
                 decision = evaluate_page(summaries, known, watermark)
@@ -227,7 +228,7 @@ class Pipeline:
                     collected.setdefault(summary.url_hash, summary)
                 if decision.should_stop:
                     break
-                page_url = parse_next_page_url(html, self._base_url)
+                page_url = next_page_url(page_url)
         return list(collected.values())
 
     async def _fetch_and_store(
