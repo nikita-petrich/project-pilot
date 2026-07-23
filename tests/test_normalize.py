@@ -7,11 +7,15 @@ import pytest
 from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
+    html_to_text,
+    next_page_url,
     parse_end,
     parse_german_date,
     parse_posted,
     parse_start,
+    remote_status_from_percent,
     remote_status_from_text,
+    start_from_parts,
 )
 from project_pilot.models import PostedPrecision, RemoteStatus
 
@@ -95,3 +99,31 @@ def test_parse_posted_day_precision() -> None:
 def test_parse_posted_unknown() -> None:
     assert parse_posted(None, None) == (None, PostedPrecision.UNKNOWN)
     assert parse_posted(None, "kein datum") == (None, PostedPrecision.UNKNOWN)
+
+
+def test_remote_status_from_percent() -> None:
+    assert remote_status_from_percent(100) == RemoteStatus.REMOTE
+    assert remote_status_from_percent(0) == RemoteStatus.ONSITE
+    assert remote_status_from_percent(50) == RemoteStatus.HYBRID
+    assert remote_status_from_percent(None) == RemoteStatus.UNKNOWN
+
+
+def test_start_from_parts() -> None:
+    assert start_from_parts(None, None, "ab sofort") == (None, True)
+    assert start_from_parts(2026, 9, None) == (date(2026, 9, 1), False)
+    assert start_from_parts(None, None, "keine Angabe") == (None, False)
+    assert start_from_parts(2026, 13, None) == (None, False)  # invalid month, no crash
+
+
+def test_html_to_text() -> None:
+    assert html_to_text('<div class="ql-editor"><p>Hallo</p> <b>Welt</b></div>') == "Hallo Welt"
+    assert html_to_text("") == ""
+
+
+def test_next_page_url_increments_pagenr() -> None:
+    assert next_page_url("https://x.de/projekte?query=a&pagenr=1") == (
+        "https://x.de/projekte?query=a&pagenr=2"
+    )
+    # array params survive and pagenr is added when absent
+    added = next_page_url("https://x.de/projekte?query=a")
+    assert added.endswith("pagenr=2")

@@ -3,8 +3,10 @@
 import hashlib
 import re
 from datetime import UTC, date, datetime
-from urllib.parse import urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
+
+from bs4 import BeautifulSoup
 
 from project_pilot.models import PostedPrecision, RemoteStatus
 
@@ -56,6 +58,59 @@ def parse_end(text: str) -> date | None:
     if not lowered or "keine angabe" in lowered or "offen" in lowered:
         return None
     return parse_german_date(text)
+
+
+def remote_status_from_percent(percent: int | None) -> RemoteStatus:
+    """Map freelancermap's ``remoteInPercent`` to a remote status (100=remote, 0=onsite)."""
+    if percent is None:
+        return RemoteStatus.UNKNOWN
+    if percent >= 100:
+        return RemoteStatus.REMOTE
+    if percent <= 0:
+        return RemoteStatus.ONSITE
+    return RemoteStatus.HYBRID
+
+
+def start_from_parts(
+    year: int | None, month: int | None, text: str | None
+) -> tuple[date | None, bool]:
+    """Resolve a structured start (year+month) or free text into (start_date, start_asap)."""
+    lowered = (text or "").strip().lower()
+    if "sofort" in lowered or "asap" in lowered:
+        return None, True
+    if year and month:
+        try:
+            return date(year, month, 1), False
+        except ValueError:
+            return None, False
+    return None, False
+
+
+def html_to_text(html: str) -> str:
+    """Flatten an HTML description fragment into whitespace-normalized plain text."""
+    if not html:
+        return ""
+    return BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+
+
+def next_page_url(url: str) -> str:
+    """Return ``url`` with ``pagenr`` incremented (added as 2 when absent)."""
+    parts = urlsplit(url)
+    pairs = parse_qsl(parts.query, keep_blank_values=True)
+    updated: list[tuple[str, str]] = []
+    found = False
+    for key, value in pairs:
+        if key == "pagenr":
+            try:
+                value = str(int(value) + 1)
+            except ValueError:
+                value = "2"
+            found = True
+        updated.append((key, value))
+    if not found:
+        updated.append(("pagenr", "2"))
+    query = urlencode(updated)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 def remote_status_from_text(text: str) -> RemoteStatus:
