@@ -68,7 +68,7 @@ Blob per `data-component-name`, `json.loads`, sonst `SelectorMismatchError`
 - [x] **4. Pipeline-Pagination**: `_collect_new_summaries` nutzt `next_page_url`
   (Inkrement) statt Link-Following; Stop bei leerer Seite. `test_pipeline.py`
   Routing/Fixtures anpassen (Detail-URLs aus slug; leere Seite-2 beendet Loop).
-- [ ] **5. Acceptance**: Gate grün; neuen Parser gegen die real gecrawlten
+- [x] **5. Acceptance**: Gate grün; neuen Parser gegen die real gecrawlten
   Samples laufen lassen und die extrahierten Felder prüfen.
 
 ### Out of scope (bewusst)
