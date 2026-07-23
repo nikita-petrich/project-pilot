@@ -16,7 +16,13 @@ from project_pilot.evaluation.freshness import evaluate_freshness
 from project_pilot.evaluation.llm import LlmEvaluation, is_match_notifiable, render_listing
 from project_pilot.evaluation.rules import apply_hard_rules
 from project_pilot.ingestion.client import BASE_URL
-from project_pilot.ingestion.normalize import detect_language, next_page_url
+from project_pilot.ingestion.normalize import (
+    detect_language,
+    extract_contact_person,
+    is_onsite_only,
+    looks_like_company,
+    next_page_url,
+)
 from project_pilot.ingestion.parser import (
     ListingSummary,
     ParsedListing,
@@ -357,7 +363,11 @@ class Pipeline:
             logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(pending))
             return
         for listing in pending:  # one message per match, marked notified only on a successful send
-            if await self._telegram.send_message(format_match(_to_match_message(listing, now))):
+            message = _to_match_message(listing, now)
+            if message.onsite_only:
+                logger.info("skipping on-site-only match: %s", listing.external_url)
+                continue
+            if await self._telegram.send_message(format_match(message)):
                 await repo.mark_notified([listing], now)
                 outcome.notified += 1
         else:
@@ -465,7 +475,7 @@ def _expires_label(value: str | None) -> str | None:
     if not value:
         return None
     try:
-        return "bis " + datetime.fromisoformat(value).strftime("%d.%m.%Y")
+        return datetime.fromisoformat(value).strftime("%d.%m.%Y")
     except ValueError:
         return None
 
@@ -489,9 +499,9 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     if remote_pct is None or remote_pct <= 0:
         remote_label: str | None = None
     elif remote_pct >= 100:
-        remote_label = "100% Remote"
+        remote_label = "100%"
     else:
-        remote_label = f"{remote_pct}% Remote / {100 - remote_pct}% vor Ort"
+        remote_label = f"{remote_pct}% ({100 - remote_pct}% vor Ort)"
 
     contract_type = None
     if raw.contract and raw.contract.contract_type:
@@ -503,7 +513,14 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     if duration_label and raw.extension_possible:
         duration_label += " (+ Verlängerung)"
 
-    contact_name = " ".join(part for part in (raw.first_name, raw.last_name) if part) or None
+    # The structured contact is the real person for direct posts, but the agency name for
+    # brokered ones; in that case pull the person out of the description text instead.
+    structured = " ".join(part for part in (raw.first_name, raw.last_name) if part) or None
+    if structured and not looks_like_company(structured) and structured != raw.company:
+        contact_name: str | None = structured
+    else:
+        contact_name = extract_contact_person(listing.description or "")
+
     language = detect_language(listing.description or listing.title)
 
     return MatchMessage(
@@ -516,7 +533,7 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
         location=listing.location,
         remote_label=remote_label,
         contract_type=contract_type,
-        workload_label=f"{raw.workload}% Auslastung" if raw.workload else None,
+        workload_label=f"{raw.workload}%" if raw.workload else None,
         duration_label=duration_label,
         start=start,
         posted_ago=_relative_de(listing.posted_at, now) if listing.posted_at else None,
@@ -529,4 +546,5 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
         missing_requirements=_eval_list(evaluation, "missing_requirements"),
         risk_flags=_eval_list(evaluation, "risk_flags"),
         description=listing.description or "",
+        onsite_only=is_onsite_only(remote_pct, listing.location, listing.description or ""),
     )

@@ -125,6 +125,45 @@ _EN_WORDS = frozenset(
 )
 
 
+_COMPANY_SUFFIX_RE = re.compile(
+    r"\b(ag|gmbh|mbh|kg|se|ltd|limited|inc|llc|b\.?v\.?|s\.?a\.?|plc|group|holding"
+    r"|consulting|solutions|services|recruit\w*|technologies|systems|hays)\b",
+    re.IGNORECASE,
+)
+_CONTACT_LABEL_RE = re.compile(
+    r"(?i:contact person|ansprechpartner(?:in)?|kontaktperson)\s*:?\s+"
+    r"([A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß]+)"
+)
+_REMOTE_HINT_RE = re.compile(
+    r"\b(remote|homeoffice|home[ -]?office|hybrid|nearshore|offshore|mobiles arbeiten"
+    r"|remote work|100\s*%\s*remote)\b",
+    re.IGNORECASE,
+)
+
+
+def looks_like_company(name: str) -> bool:
+    """True if ``name`` reads like a company (legal-form/agency suffix), not a person."""
+    return bool(_COMPANY_SUFFIX_RE.search(name))
+
+
+def extract_contact_person(text: str) -> str | None:
+    """Pull a "First Last" contact name from a "contact person:"/"Ansprechpartner:" label."""
+    if not text:
+        return None
+    match = _CONTACT_LABEL_RE.search(text)
+    if match is None:
+        return None
+    name = match.group(1).strip()
+    return None if looks_like_company(name) else name
+
+
+def is_onsite_only(remote_percent: int | None, location: str | None, description: str) -> bool:
+    """True only for clearly on-site roles: structured 0% remote and no remote hint anywhere."""
+    if _REMOTE_HINT_RE.search(f"{location or ''} {description}"):
+        return False
+    return remote_percent == 0
+
+
 def detect_language(text: str) -> str | None:
     """Best-effort de/en detection from stopword counts (None if no clear signal)."""
     if not text:

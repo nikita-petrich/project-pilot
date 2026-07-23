@@ -39,6 +39,7 @@ class MatchMessage:
     missing_requirements: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     description: str = ""
+    onsite_only: bool = False
 
 
 def _esc(text: str) -> str:
@@ -53,89 +54,62 @@ def _search_link(url_prefix: str, query: str, label: str) -> str:
     return _link(f"{url_prefix}{quote(query)}", label)
 
 
-def _join(prefix: str, values: list[str], *, limit: int) -> str | None:
+def _labeled(emoji: str, label: str, value: str | None) -> str | None:
+    return f"{emoji} <b>{label}:</b> {_esc(value)}" if value else None
+
+
+def _labeled_list(emoji: str, label: str, values: list[str], *, limit: int) -> str | None:
     picked = [value for value in values if value][:limit]
-    return f"{prefix}{_esc(', '.join(picked))}" if picked else None
+    return _labeled(emoji, label, ", ".join(picked)) if picked else None
+
+
+_LINKEDIN_PEOPLE = "https://www.linkedin.com/search/results/people/?keywords="
+_GOOGLE = "https://www.google.com/search?q="
 
 
 def format_match(message: MatchMessage) -> str:
-    """Render one match as a rich single Telegram HTML message."""
-    header = f"🎯 <b>{_esc(message.title)}</b> · {message.score}/100"
+    """Render one match as a rich, fully labeled single Telegram HTML message."""
+    lines: list[str] = [f"🎯 <b>{_esc(message.title)}</b> · {message.score}/100", ""]
 
-    facts: list[str] = []
-    if message.company:
-        client = " · 🤝 Endkunde" if message.is_endcustomer else " · 🕵 Vermittler"
-        facts.append(
-            f"🏢 {_esc(message.company)}{client if message.is_endcustomer is not None else ''}"
-        )
-    place = [f"📍 {_esc(message.location)}"] if message.location else []
-    if message.remote_label:
-        place.append(f"🏠 {_esc(message.remote_label)}")
-    if place:
-        facts.append(" · ".join(place))
-    contract = [f"💼 {_esc(message.contract_type)}"] if message.contract_type else []
-    if message.workload_label:
-        contract.append(f"📊 {_esc(message.workload_label)}")
-    if message.duration_label:
-        contract.append(f"⏳ {_esc(message.duration_label)}")
-    if contract:
-        facts.append(" · ".join(contract))
-    timing = [f"📅 {_esc(message.start)}"] if message.start else []
-    if message.posted_ago:
-        timing.append(f"🕒 {_esc(message.posted_ago)}")
-    if message.expires_label:
-        timing.append(f"✍️ Bewerbung {_esc(message.expires_label)}")
-    if timing:
-        facts.append(" · ".join(timing))
-    tail = [f"🏭 {_esc(message.industry)}"] if message.industry else []
-    if message.language:
-        tail.append(f"🗣 {_esc(message.language)}")
-    if tail:
-        facts.append(" · ".join(tail))
-    if skills := _join("🛠 ", message.skills, limit=12):
-        facts.append(skills)
+    def add(line: str | None) -> None:
+        if line:
+            lines.append(line)
 
-    insight: list[str] = []
-    if reasons := _join("✅ Passt: ", message.reasons, limit=3):
-        insight.append(reasons)
-    if match_skills := _join("🎯 Deine Skills: ", message.matching_skills, limit=8):
-        insight.append(match_skills)
-    gaps = _join("⚠️ Lücken: ", message.missing_requirements, limit=4)
-    risks = _join("🚩 ", message.risk_flags, limit=3)
-    if gaps and risks:
-        insight.append(f"{gaps} · {risks}")
-    elif gaps or risks:
-        insight.append(gaps or risks or "")
+    add(_labeled("🏢", "Firma", message.company))
+    if message.contact_name:
+        link = _search_link(_LINKEDIN_PEOPLE, message.contact_name, message.contact_name)
+        lines.append(f"👤 <b>Ansprechpartner:</b> {link}")
+    if message.is_endcustomer is not None:
+        who = "Endkunde" if message.is_endcustomer else "Vermittler"
+        add(_labeled("🤝", "Auftraggeber", who))
+    add(_labeled("📍", "Einsatzort", message.location))
+    add(_labeled("🏠", "Remote", message.remote_label))
+    add(_labeled("💼", "Beschäftigungsart", message.contract_type))
+    add(_labeled("📊", "Auslastung", message.workload_label))
+    add(_labeled("⏳", "Dauer", message.duration_label))
+    add(_labeled("📅", "Start", message.start))
+    add(_labeled("🕒", "Eingestellt", message.posted_ago))
+    add(_labeled("✍️", "Bewerbung bis", message.expires_label))
+    add(_labeled("🏭", "Branche", message.industry))
+    add(_labeled("🗣", "Sprache", message.language))
+    add(_labeled_list("🛠", "Skills", message.skills, limit=12))
+    add(_labeled_list("✅", "Passt", message.reasons, limit=3))
+    add(_labeled_list("🎯", "Deine Skills", message.matching_skills, limit=8))
+    add(_labeled_list("⚠️", "Lücken", message.missing_requirements, limit=4))
+    add(_labeled_list("🚩", "Risiken", message.risk_flags, limit=3))
 
-    body: list[str] = []
     if message.description:
         text = message.description
         if len(text) > _DESCRIPTION_LIMIT:
             text = text[:_DESCRIPTION_LIMIT].rstrip() + " …"
-        body.append(f"📄 <b>Beschreibung:</b>\n{_esc(text)}")
+        lines.append(f"\n📄 <b>Beschreibung:</b>\n{_esc(text)}")
 
-    links = [f"🔗 {_link(message.url, 'Zum Projekt')}"]
-    if message.contact_name:
-        links.append(
-            "👤 "
-            + _search_link(
-                "https://www.linkedin.com/search/results/people/?keywords=",
-                message.contact_name,
-                f"Ansprechperson auf LinkedIn: {message.contact_name}",
-            )
-        )
+    lines.append("")
+    lines.append(f"🔗 {_link(message.url, 'Zum Projekt')}")
     if message.company:
-        links.append(
-            "🔎 "
-            + _search_link(
-                "https://www.google.com/search?q=",
-                message.company,
-                f"Firma recherchieren: {message.company}",
-            )
-        )
+        lines.append(f"🔎 {_search_link(_GOOGLE, message.company, 'Firma googeln')}")
 
-    sections = [header, "\n".join(facts), "\n".join(insight), *body, "\n".join(links)]
-    return "\n\n".join(section for section in sections if section)
+    return "\n".join(lines)
 
 
 class TelegramClient:

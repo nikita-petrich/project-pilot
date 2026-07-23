@@ -20,16 +20,16 @@ def _full_message() -> MatchMessage:
         url="https://x/1",
         score=90,
         company="Talent Co",
-        contact_name="Harry Schneider",
+        contact_name="Anna Kleinen",
         is_endcustomer=True,
         location="London, GB",
-        remote_label="100% Remote / 0% vor Ort",
+        remote_label="100%",
         contract_type="Freiberuflich",
-        workload_label="80% Auslastung",
+        workload_label="80%",
         duration_label="6 Mon (+ Verlängerung)",
         start="ab sofort",
         posted_ago="vor 8 Min",
-        expires_label="bis 23.10.2026",
+        expires_label="23.10.2026",
         industry="IT",
         language="Englisch",
         skills=["Python", "RAG", "TypeScript"],
@@ -41,21 +41,28 @@ def _full_message() -> MatchMessage:
     )
 
 
-def test_format_match_includes_all_sections() -> None:
+def test_format_match_includes_all_labeled_fields() -> None:
     text = format_match(_full_message())
     assert '<a href="https://x/1">' in text
     assert "AI Engineer" in text and "90/100" in text
-    assert "Talent Co" in text and "Endkunde" in text
-    assert "London, GB" in text and "100% Remote / 0% vor Ort" in text
-    assert "Freiberuflich" in text and "80% Auslastung" in text and "Verlängerung" in text
-    assert "ab sofort" in text and "vor 8 Min" in text and "bis 23.10.2026" in text
-    assert "IT" in text and "Englisch" in text
-    assert "Python" in text and "RAG" in text
-    assert "LLM/RAG core" in text
-    assert "Solidity" in text and "budget unclear" in text
-    assert "Build the future of AI." in text
+    assert "<b>Firma:</b> Talent Co" in text
+    assert "<b>Ansprechpartner:</b>" in text and "Anna Kleinen" in text
+    assert "<b>Auftraggeber:</b> Endkunde" in text
+    assert "<b>Einsatzort:</b> London, GB" in text
+    assert "<b>Remote:</b> 100%" in text
+    assert "<b>Beschäftigungsart:</b> Freiberuflich" in text
+    assert "<b>Auslastung:</b> 80%" in text
+    assert "<b>Dauer:</b> 6 Mon (+ Verlängerung)" in text
+    assert "<b>Start:</b> ab sofort" in text
+    assert "<b>Eingestellt:</b> vor 8 Min" in text
+    assert "<b>Bewerbung bis:</b> 23.10.2026" in text
+    assert "<b>Branche:</b> IT" in text and "<b>Sprache:</b> Englisch" in text
+    assert "<b>Skills:</b>" in text and "Python" in text
+    assert "<b>Passt:</b>" in text and "LLM/RAG core" in text
+    assert "<b>Lücken:</b> Solidity" in text and "<b>Risiken:</b> budget unclear" in text
+    assert "<b>Beschreibung:</b>" in text and "Build the future of AI." in text
     # research links, url-encoded
-    assert "linkedin.com/search/results/people/?keywords=Harry%20Schneider" in text
+    assert "linkedin.com/search/results/people/?keywords=Anna%20Kleinen" in text
     assert "google.com/search?q=Talent%20Co" in text
 
 
@@ -68,8 +75,8 @@ def test_format_match_escapes_html() -> None:
 def test_format_match_minimal_omits_absent_fields() -> None:
     text = format_match(MatchMessage(title="T", url="https://x", score=60))
     assert "T" in text and "60/100" in text
-    assert "🏢" not in text  # no company line
-    assert "📄" not in text  # no description
+    assert "Firma:" not in text
+    assert "Beschreibung:" not in text
 
 
 def test_format_match_caps_description() -> None:

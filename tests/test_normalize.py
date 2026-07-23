@@ -8,7 +8,10 @@ from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
     detect_language,
+    extract_contact_person,
     html_to_text,
+    is_onsite_only,
+    looks_like_company,
     next_page_url,
     parse_end,
     parse_german_date,
@@ -135,3 +138,27 @@ def test_detect_language() -> None:
     assert detect_language("We are looking for a senior engineer for this role") == "en"
     assert detect_language("Python asyncio PostgreSQL") is None  # no stopword signal
     assert detect_language("") is None
+
+
+def test_looks_like_company() -> None:
+    assert looks_like_company("Hays AG") is True
+    assert looks_like_company("Acme GmbH") is True
+    assert looks_like_company("Anna Kleinen") is False
+
+
+def test_extract_contact_person() -> None:
+    text = "... My contact at Hays: My contact person: Anna Kleinen Referencenumber: 42 ..."
+    assert extract_contact_person(text) == "Anna Kleinen"
+    assert extract_contact_person("Ihr Ansprechpartner: Max Mustermann bei uns") == "Max Mustermann"
+    assert extract_contact_person("Ansprechpartner: Hays AG") is None  # company, not a person
+    assert extract_contact_person("no contact here") is None
+
+
+def test_is_onsite_only() -> None:
+    # 0% remote and no remote hint anywhere -> on-site only
+    assert is_onsite_only(0, "München", "Vor-Ort-Einsatz beim Kunden") is True
+    # 0% remote but description mentions remote -> NOT on-site only (agency default)
+    assert is_onsite_only(0, "Remote, Deutschland", "Remote work possible") is False
+    # genuine hybrid / remote
+    assert is_onsite_only(60, "Berlin", "hybrid") is False
+    assert is_onsite_only(None, "Berlin", "onsite") is False  # unknown percent -> keep
