@@ -24,6 +24,15 @@ class SmtpConfig:
     use_starttls: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SlackConfig:
+    """Validated Slack settings: bot token (Web API), app token (Socket Mode), channel."""
+
+    bot_token: str
+    app_token: str
+    channel: str
+
+
 class Settings(BaseSettings):
     """Typed view of the environment. Built once at CLI entry (fail fast).
 
@@ -45,6 +54,10 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
+
+    slack_bot_token: str = ""
+    slack_app_token: str = ""
+    slack_channel: str = ""
 
     openai_api_key: str = ""
     llm_model: str = ""
@@ -114,6 +127,22 @@ class Settings(BaseSettings):
         if not self.telegram_bot_token or not self.telegram_chat_id:
             raise ConfigError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must both be set")
         return self.telegram_bot_token, self.telegram_chat_id
+
+    def has_slack(self) -> bool:
+        return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)
+
+    def require_slack(self) -> SlackConfig:
+        if not self.slack_bot_token:
+            raise ConfigError("SLACK_BOT_TOKEN must be set (xoxb-… bot token)")
+        if not self.slack_app_token:
+            raise ConfigError("SLACK_APP_TOKEN must be set (xapp-… token for Socket Mode)")
+        if not self.slack_channel:
+            raise ConfigError("SLACK_CHANNEL must be set (channel id or name to post to)")
+        return SlackConfig(
+            bot_token=self.slack_bot_token,
+            app_token=self.slack_app_token,
+            channel=self.slack_channel,
+        )
 
     def require_openai(self) -> tuple[str, str]:
         if not self.openai_api_key:

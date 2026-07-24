@@ -2,7 +2,6 @@
 
 import html
 import logging
-from dataclasses import dataclass, field
 from typing import Self
 from urllib.parse import quote
 
@@ -12,6 +11,18 @@ from pydantic import BaseModel, ConfigDict
 from project_pilot.application.schemas import LINKEDIN_LIMIT
 from project_pilot.application.service import DraftView
 from project_pilot.models import ApplicationStatus
+from project_pilot.notification.messages import MatchMessage
+
+__all__ = [
+    "MatchMessage",
+    "TelegramClient",
+    "TelegramUpdate",
+    "apply_keyboard",
+    "draft_keyboard",
+    "email_body_messages",
+    "format_draft",
+    "format_match",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -53,35 +64,6 @@ class TelegramUpdate(BaseModel):
 
 
 TelegramMessage.model_rebuild()
-
-
-@dataclass(frozen=True, slots=True)
-class MatchMessage:
-    """Display-ready fields for one matched listing (all values pre-formatted)."""
-
-    title: str
-    url: str
-    score: int
-    company: str | None = None
-    contact_name: str | None = None
-    is_endcustomer: bool | None = None
-    location: str | None = None
-    remote_label: str | None = None
-    contract_type: str | None = None
-    workload_label: str | None = None
-    duration_label: str | None = None
-    start: str | None = None
-    posted_ago: str | None = None
-    expires_label: str | None = None
-    industry: str | None = None
-    language: str | None = None
-    skills: list[str] = field(default_factory=list)
-    reasons: list[str] = field(default_factory=list)
-    matching_skills: list[str] = field(default_factory=list)
-    missing_requirements: list[str] = field(default_factory=list)
-    risk_flags: list[str] = field(default_factory=list)
-    description: str = ""
-    onsite_only: bool = False
 
 
 def _esc(text: str) -> str:
