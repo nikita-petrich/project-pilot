@@ -84,6 +84,23 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
     assert "open_project" in _action_ids(blocks)
 
 
+def test_match_blocks_show_short_description_in_full() -> None:
+    message = MatchMessage(title="t", url="https://x", score=1, description="Kurze Beschreibung.")
+    joined = "\n".join(_section_texts(format_match_blocks(message, listing_id=1)))
+    assert "```Kurze Beschreibung.```" in joined
+    assert "Gekürzt" not in joined
+
+
+def test_match_blocks_preview_long_description_and_keep_link() -> None:
+    long_text = "wort " * 400  # ~2000 chars, far over the preview budget
+    message = MatchMessage(title="t", url="https://x/proj", score=1, description=long_text)
+    blocks = format_match_blocks(message, listing_id=1)
+    desc = next(t for t in _section_texts(blocks) if "Beschreibung" in t)
+    assert len(desc) < 900  # compact preview, not the whole description
+    assert "Gekürzt" in desc and "…" in desc
+    assert "open_project" in _action_ids(blocks)  # full text stays behind the link
+
+
 def test_match_blocks_escape_slack_specials() -> None:
     message = MatchMessage(title="A & B <x>", url="https://x", score=50)
     header = format_match_blocks(message, listing_id=1)[0]["text"]
@@ -155,8 +172,12 @@ class _FakeWeb:
         text: str,
         blocks: list[Block] | None = None,
         thread_ts: str | None = None,
+        unfurl_links: bool = True,
+        unfurl_media: bool = True,
     ) -> SlackResponse:
-        self.calls.append({"channel": channel, "text": text, "thread_ts": thread_ts})
+        self.calls.append(
+            {"channel": channel, "text": text, "thread_ts": thread_ts, "unfurl_links": unfurl_links}
+        )
         if self.boom:
             raise RuntimeError("network down")
         return _Resp({"ok": self.ok, "ts": "1700.42", "channel": channel, "error": self.error})

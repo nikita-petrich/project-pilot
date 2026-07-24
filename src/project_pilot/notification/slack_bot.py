@@ -17,6 +17,7 @@ from project_pilot.notification.slack import (
     PostedMessage,
     draft_fallback_text,
     format_draft_blocks,
+    status_blocks,
 )
 
 logger = logging.getLogger(__name__)
@@ -95,7 +96,9 @@ class SlackBot:
         if payload.get("type") != "block_actions":
             return
         channel = _text(_mapping(payload.get("channel")).get("id"))
-        message_ts = _text(_mapping(payload.get("message")).get("ts"))
+        message = _mapping(payload.get("message"))
+        message_ts = _text(message.get("ts"))
+        thread_ts = _text(message.get("thread_ts"))
         actions = payload.get("actions")
         if channel is None or message_ts is None or not isinstance(actions, list):
             return
@@ -104,7 +107,7 @@ class SlackBot:
             action_id = _text(action_map.get("action_id"))
             value = _text(action_map.get("value"))
             if action_id is not None:
-                await self.on_block_action(action_id, value, channel, message_ts)
+                await self.on_block_action(action_id, value, channel, message_ts, thread_ts)
 
     async def _dispatch_event(self, payload: dict[str, object]) -> None:
         event = _mapping(payload.get("event"))
@@ -127,16 +130,27 @@ class SlackBot:
         )
 
     async def on_block_action(
-        self, action_id: str, value: str | None, channel: str, message_ts: str
+        self,
+        action_id: str,
+        value: str | None,
+        channel: str,
+        message_ts: str,
+        thread_ts: str | None = None,
     ) -> None:
-        if channel != self._channel:
+        if channel != self._channel or value is None or not value.isdigit():
             return
-        if action_id == "apply" and value is not None and value.isdigit():
-            await self._post_new_draft(lambda: self._service.draft_for_listing(int(value)))
-        elif action_id == "send" and value is not None and value.isdigit():
-            await self._send_application(int(value), message_ts)
-        elif action_id == "cancel" and value is not None and value.isdigit():
-            await self._update_from(message_ts, lambda: self._service.cancel(int(value)))
+        target = int(value)
+        root = thread_ts or message_ts  # the thread everything for this draft lives in
+        if action_id == "apply":
+            await self._post_new_draft(
+                lambda: self._service.draft_for_listing(target),
+                root,
+                progress="⏳ Erstelle Bewerbungsentwurf …",
+            )
+        elif action_id == "send":
+            await self._send_application(target, draft_ts=message_ts, thread_root=root)
+        elif action_id == "cancel":
+            await self._cancel_application(target, draft_ts=message_ts, thread_root=root)
         # open_mail / open_project are URL buttons handled by Slack itself.
 
     async def on_slash_apply(self, channel_id: str | None, text: str) -> None:
@@ -144,99 +158,130 @@ class SlackBot:
         if not argument:
             await self._client.post_text(USAGE)
             return
-        if not argument.lower().startswith(("http://", "https://")):
-            await self._post_new_draft(lambda: self._service.draft_from_text(argument))
+        factory = await self._resolve_apply(argument)
+        if factory is None:
+            return  # a hint was already posted
+        parent = await self._client.post_text(f"📥 Bewerbung: {argument[:150]}")
+        if parent is None:
             return
+        await self._post_new_draft(factory, parent.ts, progress="⏳ Erstelle Bewerbungsentwurf …")
+
+    async def _resolve_apply(self, argument: str) -> Callable[[], Awaitable[DraftView]] | None:
+        if not argument.lower().startswith(("http://", "https://")):
+            return lambda: self._service.draft_from_text(argument)
         listing_id = await self._service.find_listing_id_by_url(argument)
         if listing_id is not None:
-            await self._post_new_draft(lambda: self._service.draft_for_listing(listing_id))
-            return
+            return lambda: self._service.draft_for_listing(listing_id)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
                 "⚠️ Diesen Link kenne ich nicht. Nutze `/apply` mit der "
                 "Projektbeschreibung als Text."
             )
-            return
+            return None
         fetcher = self._fetcher
-        await self._client.post_text("⏳ Lade das Projekt …")
 
         async def fetch_and_draft() -> DraftView:
             parsed = await fetcher(argument)
             return await self._service.draft_from_parsed(parsed)
 
-        await self._post_new_draft(fetch_and_draft)
+        return fetch_and_draft
 
     async def on_thread_message(
         self, *, channel: str | None, thread_ts: str | None, text: str, from_bot: bool
     ) -> None:
         if from_bot or channel != self._channel or thread_ts is None or not text.strip():
             return
-        ref = f"{channel}:{thread_ts}"
-        view = await self._service.find_by_draft_ref(ref)
+        view = await self._service.find_by_draft_ref(f"{channel}:{thread_ts}")
         if view is None:
             return  # a reply in some other thread, not a draft
         message = text.strip()
         if is_email(message):
-            await self._update_from(
-                thread_ts, lambda: self._service.set_recipient(view.application_id, message)
+            await self._post_new_draft(
+                lambda: self._service.set_recipient(view.application_id, message),
+                thread_ts,
+                progress="✅ Setze Empfänger …",
             )
         else:
-            await self._update_from(
-                thread_ts, lambda: self._service.revise(view.application_id, message)
+            await self._post_new_draft(
+                lambda: self._service.revise(view.application_id, message),
+                thread_ts,
+                progress="✏️ Überarbeite den Entwurf …",
             )
 
-    async def _post_new_draft(self, factory: Callable[[], Awaitable[DraftView]]) -> None:
+    async def _post_new_draft(
+        self,
+        factory: Callable[[], Awaitable[DraftView]],
+        thread_ts: str,
+        *,
+        progress: str,
+    ) -> None:
+        # Post a progress placeholder immediately, then update it in place to the
+        # finished draft — instant feedback without an extra lingering message.
+        placeholder = await self._client.post_text(progress, thread_ts=thread_ts)
         try:
             view = await factory()
         except (ApplicationStateError, LlmSchemaError) as err:
-            await self._client.post_text(f"⚠️ {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ {err}")
             return
         except Exception as err:
             logger.exception("drafting failed")
-            await self._client.post_text(f"⚠️ Unerwarteter Fehler: {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ Unerwarteter Fehler: {err}")
             return
-        posted = await self._client.post_blocks(
-            format_draft_blocks(view), draft_fallback_text(view)
-        )
-        if posted is None:
-            await self._client.post_text("⚠️ Entwurf konnte nicht gepostet werden.")
-            return
-        await self._service.record_draft_ref(view.application_id, posted.ref)
+        blocks = format_draft_blocks(view)
+        fallback = draft_fallback_text(view)
+        if placeholder is not None:
+            await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
+        else:
+            await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
+        # Routing key is the thread root, so any reply in this thread reaches the draft.
+        await self._service.record_draft_ref(view.application_id, f"{self._channel}:{thread_ts}")
 
-    async def _update_from(
-        self, message_ts: str, action: Callable[[], Awaitable[DraftView]]
+    async def _send_application(
+        self, application_id: int, *, draft_ts: str, thread_root: str
     ) -> None:
-        try:
-            view = await action()
-        except (ApplicationStateError, LlmSchemaError, EmailSendError) as err:
-            await self._client.post_text(f"⚠️ {err}", thread_ts=message_ts)
-            return
-        except Exception as err:
-            logger.exception("draft update failed")
-            await self._client.post_text(f"⚠️ Unerwarteter Fehler: {err}", thread_ts=message_ts)
-            return
-        await self._client.update_blocks(
-            self._channel, message_ts, format_draft_blocks(view), draft_fallback_text(view)
-        )
-
-    async def _send_application(self, application_id: int, message_ts: str) -> None:
+        progress = await self._client.post_text("⏳ Sende E-Mail …", thread_ts=thread_root)
         try:
             view = await self._service.send(application_id)
         except (ApplicationStateError, EmailSendError) as err:
-            await self._client.post_text(f"⚠️ {err}", thread_ts=message_ts)
+            await self._replace(progress, thread_root, f"⚠️ {err}")
             return
         except Exception as err:
             logger.exception("sending application %d failed", application_id)
-            await self._client.post_text(f"⚠️ Unerwarteter Fehler: {err}", thread_ts=message_ts)
+            await self._replace(progress, thread_root, f"⚠️ Unerwarteter Fehler: {err}")
             return
         await self._client.update_blocks(
-            self._channel, message_ts, format_draft_blocks(view), draft_fallback_text(view)
+            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
         )
-        await self._client.post_text(
+        await self._replace(
+            progress,
+            thread_root,
             f"✅ Bewerbung verschickt an *{view.recipient}*\n"
             f"💬 LinkedIn-Nachricht zum Kopieren:\n```{view.linkedin_message}```",
-            thread_ts=message_ts,
         )
+
+    async def _cancel_application(
+        self, application_id: int, *, draft_ts: str, thread_root: str
+    ) -> None:
+        try:
+            view = await self._service.cancel(application_id)
+        except ApplicationStateError as err:
+            await self._client.post_text(f"⚠️ {err}", thread_ts=thread_root)
+            return
+        except Exception as err:
+            logger.exception("cancelling application %d failed", application_id)
+            await self._client.post_text(f"⚠️ Unerwarteter Fehler: {err}", thread_ts=thread_root)
+            return
+        await self._client.update_blocks(
+            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
+        )
+        await self._client.post_text("❌ Entwurf verworfen.", thread_ts=thread_root)
+
+    async def _replace(self, posted: PostedMessage | None, thread_ts: str, text: str) -> None:
+        """Turn a progress placeholder into its final text, or post it fresh."""
+        if posted is not None:
+            await self._client.update_blocks(posted.channel, posted.ts, status_blocks(text), text)
+        else:
+            await self._client.post_text(text, thread_ts=thread_ts)
 
 
 async def run_socket_mode(  # pragma: no cover - network boundary

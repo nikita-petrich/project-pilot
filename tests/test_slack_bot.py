@@ -48,30 +48,52 @@ def _parsed() -> ParsedListing:
     )
 
 
+def _block_text(block: Block) -> str:
+    text = block.get("text")
+    return str(text.get("text")) if isinstance(text, dict) else ""
+
+
+def _is_draft(blocks: list[Block]) -> bool:
+    return any(b.get("type") == "header" and "Bewerbungsentwurf" in _block_text(b) for b in blocks)
+
+
 class _FakePoster:
     def __init__(self) -> None:
         self.texts: list[tuple[str, str | None]] = []
-        self.blocks: list[tuple[list[Block], str, str | None]] = []
-        self.updates: list[tuple[str, str]] = []
+        self.posted_blocks: list[tuple[list[Block], str | None]] = []
+        self.updates: list[tuple[str, str, list[Block]]] = []
         self._ts = 100
+
+    async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
+        self._ts += 1
+        self.texts.append((text, thread_ts))
+        return PostedMessage(channel=CHANNEL, ts=str(self._ts))
 
     async def post_blocks(
         self, blocks: list[Block], text: str, *, thread_ts: str | None = None
     ) -> PostedMessage | None:
         self._ts += 1
-        self.blocks.append((blocks, text, thread_ts))
+        self.posted_blocks.append((blocks, thread_ts))
         return PostedMessage(channel=CHANNEL, ts=str(self._ts))
 
-    async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
-        self.texts.append((text, thread_ts))
-        return PostedMessage(channel=CHANNEL, ts="1")
-
     async def update_blocks(self, channel: str, ts: str, blocks: list[Block], text: str) -> bool:
-        self.updates.append((channel, ts))
+        self.updates.append((channel, ts, blocks))
         return True
 
-    def all_text(self) -> list[str]:
-        return [t for t, _ in self.texts]
+    def visible_texts(self) -> list[str]:
+        """Everything the user can read: plain posts plus status-block updates."""
+        out = [t for t, _ in self.texts]
+        for _, _, blocks in self.updates:
+            out.extend(_block_text(b) for b in blocks if b.get("type") == "section")
+        return out
+
+    def draft_rendered(self) -> bool:
+        return any(_is_draft(blocks) for _, _, blocks in self.updates) or any(
+            _is_draft(blocks) for blocks, _ in self.posted_blocks
+        )
+
+    def draft_update_ids(self) -> list[str]:
+        return [ts for _, ts, blocks in self.updates if _is_draft(blocks)]
 
 
 class _FakeService:
@@ -136,12 +158,20 @@ def _bot(
 
 
 def _interactive(
-    action_id: str, value: str, *, channel: str = CHANNEL, ts: str = "111.1"
+    action_id: str,
+    value: str | None,
+    *,
+    channel: str = CHANNEL,
+    ts: str = "111.1",
+    thread_ts: str | None = None,
 ) -> dict[str, object]:
+    message: dict[str, object] = {"ts": ts}
+    if thread_ts is not None:
+        message["thread_ts"] = thread_ts
     return {
         "type": "block_actions",
         "channel": {"id": channel},
-        "message": {"ts": ts},
+        "message": message,
         "actions": [{"action_id": action_id, "value": value}],
     }
 
@@ -161,37 +191,40 @@ def _slash(text: str) -> dict[str, object]:
     return {"command": "/apply", "text": text, "channel_id": CHANNEL}
 
 
-async def test_apply_action_drafts_and_records_ref() -> None:
+async def test_apply_action_threads_draft_and_records_root_ref() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("interactive", _interactive("apply", "7"))
     assert ("draft_for_listing", 7) in service.calls
-    assert len(poster.blocks) == 1  # draft posted as one message
-    assert service.recorded == [(1, "C1:101")]  # (application_id, channel:ts)
+    # progress placeholder is posted in the match's thread, then filled with the draft
+    assert any("⏳" in text and thread == "111.1" for text, thread in poster.texts)
+    assert poster.draft_rendered()
+    # routing key is the thread root (the match message ts), not the draft's own ts
+    assert service.recorded == [(1, "C1:111.1")]
 
 
 async def test_apply_from_foreign_channel_is_ignored() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("interactive", _interactive("apply", "7", channel="C2"))
     assert service.calls == []
-    assert poster.blocks == []
+    assert poster.texts == [] and poster.updates == []
 
 
-async def test_send_action_updates_and_confirms_with_linkedin() -> None:
+async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:
     poster, service = _FakePoster(), _FakeService()
     service.view = _view(status=ApplicationStatus.SENT)
-    await _bot(poster, service).dispatch("interactive", _interactive("send", "1", ts="222.2"))
+    await _bot(poster, service).dispatch(
+        "interactive", _interactive("send", "1", ts="222.2", thread_ts="111.1")
+    )
     assert ("send", 1) in service.calls
-    assert ("C1", "222.2") in poster.updates  # the draft message is updated in place
-    confirmation = poster.all_text()[-1]
-    assert "verschickt an" in confirmation and "Hallo!" in confirmation
+    assert "222.2" in poster.draft_update_ids()  # the draft message is updated in place
+    assert any("verschickt an" in t and "Hallo!" in t for t in poster.visible_texts())
 
 
-async def test_send_action_surfaces_error_in_thread() -> None:
+async def test_send_action_surfaces_error() -> None:
     poster, service = _FakePoster(), _FakeService()
     service.error = EmailSendError("smtp down")
     await _bot(poster, service).dispatch("interactive", _interactive("send", "1", ts="222.2"))
-    text, thread_ts = poster.texts[-1]
-    assert "smtp down" in text and thread_ts == "222.2"
+    assert any("smtp down" in t for t in poster.visible_texts())
 
 
 async def test_cancel_action_updates_message() -> None:
@@ -199,7 +232,7 @@ async def test_cancel_action_updates_message() -> None:
     service.view = _view(status=ApplicationStatus.CANCELLED)
     await _bot(poster, service).dispatch("interactive", _interactive("cancel", "1", ts="9.9"))
     assert ("cancel", 1) in service.calls
-    assert ("C1", "9.9") in poster.updates
+    assert "9.9" in [ts for _, ts, _ in poster.updates]
 
 
 async def test_open_mail_action_is_ignored() -> None:
@@ -208,10 +241,13 @@ async def test_open_mail_action_is_ignored() -> None:
     assert service.calls == []
 
 
-async def test_slash_apply_text_drafts_from_text() -> None:
+async def test_slash_apply_text_drafts_from_text_in_thread() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("slash_commands", _slash("Python Projekt gesucht"))
     assert ("draft_from_text", "Python Projekt gesucht") in service.calls
+    assert poster.draft_rendered()
+    # a parent message is created and the draft lives in its thread
+    assert service.recorded and service.recorded[0][0] == 1
 
 
 async def test_slash_apply_known_url_uses_stored_listing() -> None:
@@ -235,14 +271,14 @@ async def test_slash_apply_foreign_url_hints() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
     assert service.calls == []
-    assert "Projektbeschreibung" in poster.all_text()[-1]
+    assert any("Projektbeschreibung" in t for t in poster.visible_texts())
 
 
 async def test_slash_apply_empty_shows_usage() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("slash_commands", _slash("   "))
     assert service.calls == []
-    assert poster.all_text()[-1] == USAGE
+    assert poster.texts[-1][0] == USAGE
 
 
 async def test_thread_reply_with_email_sets_recipient() -> None:
@@ -250,7 +286,7 @@ async def test_thread_reply_with_email_sets_recipient() -> None:
     service.by_ref["C1:111.1"] = _view()
     await _bot(poster, service).dispatch("events_api", _event("neu@firma.de"))
     assert ("set_recipient", (1, "neu@firma.de")) in service.calls
-    assert ("C1", "111.1") in poster.updates
+    assert poster.draft_rendered()
 
 
 async def test_thread_reply_with_instruction_revises() -> None:
@@ -258,15 +294,15 @@ async def test_thread_reply_with_instruction_revises() -> None:
     service.by_ref["C1:111.1"] = _view()
     await _bot(poster, service).dispatch("events_api", _event("Bitte kürzer"))
     assert ("revise", (1, "Bitte kürzer")) in service.calls
+    assert any("⏳" in t or "Überarbeite" in t for t in poster.visible_texts())
 
 
-async def test_thread_reply_error_posts_in_thread() -> None:
+async def test_thread_reply_error_is_shown() -> None:
     poster, service = _FakePoster(), _FakeService()
     service.by_ref["C1:111.1"] = _view()
     service.error = ApplicationStateError("nicht erlaubt")
     await _bot(poster, service).dispatch("events_api", _event("Bitte kürzer"))
-    text, thread_ts = poster.texts[-1]
-    assert "nicht erlaubt" in text and thread_ts == "111.1"
+    assert any("nicht erlaubt" in t for t in poster.visible_texts())
 
 
 async def test_bot_message_is_ignored() -> None:

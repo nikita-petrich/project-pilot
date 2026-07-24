@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 # Slack caps a section's text at 3000 chars and a message at 50 blocks; stay under.
 _SECTION_LIMIT = 2900
 _HEADER_LIMIT = 150
+# Match alerts show a compact description preview; the full text stays one click
+# away behind the "Zum Projekt" link (Slack has no native collapse/expand).
+_DESCRIPTION_PREVIEW = 700
 
 type Block = dict[str, object]
 
@@ -85,15 +88,40 @@ def _split_text(text: str, limit: int) -> list[str]:
     return chunks
 
 
+def status_blocks(text: str) -> list[Block]:
+    """A single mrkdwn section — used for progress/confirmation/error messages."""
+    return [_section(text)]
+
+
 def _code_sections(text: str, *, label: str) -> list[Block]:
-    """Render ``text`` as one or more copyable code-block sections under ``label``."""
+    """Render ``text`` as one or more copyable code-block sections under ``label``.
+
+    Long text is split across consecutive sections (Slack caps a section at 3000
+    chars); the pieces render as one continuous block, with no part counter.
+    """
     parts = _split_text(text.strip() or "(leer)", _SECTION_LIMIT - len(label) - 12)
     blocks: list[Block] = []
     for index, part in enumerate(parts):
         prefix = f"*{label}*\n" if index == 0 else ""
-        suffix = f"\n_Teil {index + 1}/{len(parts)}_" if len(parts) > 1 else ""
-        blocks.append(_section(f"{prefix}```{_esc(part)}```{suffix}"))
+        blocks.append(_section(f"{prefix}```{_esc(part)}```"))
     return blocks
+
+
+def _description_block(description: str) -> Block:
+    """A compact, copyable description preview; the full text stays behind the link.
+
+    Slack messages have no native collapse, so a long freelancermap description is
+    trimmed on a word boundary and marked as shortened — the ``Zum Projekt`` link
+    carries the complete text.
+    """
+    text = description.strip()
+    if len(text) > _DESCRIPTION_PREVIEW:
+        cut = text.rfind(" ", _DESCRIPTION_PREVIEW // 2, _DESCRIPTION_PREVIEW)
+        text = text[: cut if cut != -1 else _DESCRIPTION_PREVIEW].rstrip() + " …"
+        suffix = "\n_Gekürzt — vollständige Beschreibung über 🔗 Zum Projekt._"
+    else:
+        suffix = ""
+    return _section(f"*📄 Beschreibung*\n```{_esc(text)}```{suffix}")
 
 
 def _labeled(label: str, value: str | None) -> str | None:
@@ -124,7 +152,7 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
         _labeled("📅 Start", message.start),
         _labeled("🕒 Eingestellt", message.posted_ago),
         _labeled("✍️ Bewerbung bis", message.expires_label),
-        _labeled("🏭 Branche", message.industry),
+        _labeled("🏭 Branche", message.industry or "unbekannt"),  # always shown
         _labeled("🗣 Sprache", message.language),
         _labeled_list("🛠 Skills", message.skills, limit=12),
     ]
@@ -143,7 +171,7 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
         blocks.append(_section(verdict_text))
 
     if message.description:
-        blocks.extend(_code_sections(message.description, label="📄 Beschreibung"))
+        blocks.append(_description_block(message.description))
 
     actions: list[Block] = [_button("📝 Bewerben", action_id="apply", value=str(listing_id))]
     if message.url:
@@ -181,10 +209,14 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
 
     hints: list[str] = []
     if view.status is ApplicationStatus.AWAITING_EMAIL:
-        hints.append("❗ Kein Empfänger gefunden - antworte im Thread mit der E-Mail-Adresse.")
+        hints.append("❗ Kein Empfänger erkannt — antworte im Thread mit der E-Mail-Adresse.")
     if view.revision_count:
         hints.append(f"🔁 Überarbeitung #{view.revision_count}")
-    hints.append("✏️ Antworte im Thread, um Änderungen zu beschreiben.")
+    hints.append(
+        "✏️ Im Thread antworten: freier Text = Änderung am Entwurf · nur eine "
+        "E-Mail-Adresse = Empfänger setzen (dann erscheint 📤 Senden). "
+        "Zum Kopieren über einen Code-Block fahren."
+    )
     blocks.append(_context(" · ".join(hints)))
     return blocks
 
@@ -224,6 +256,8 @@ class SlackWebClient(Protocol):
         text: str,
         blocks: list[Block] | None = None,
         thread_ts: str | None = None,
+        unfurl_links: bool = True,
+        unfurl_media: bool = True,
     ) -> SlackResponse: ...
 
     async def chat_update(
@@ -268,7 +302,12 @@ class SlackClient:
     ) -> PostedMessage | None:
         try:
             response = await self._web.chat_postMessage(
-                channel=self._channel, text=text, blocks=blocks, thread_ts=thread_ts
+                channel=self._channel,
+                text=text,
+                blocks=blocks,
+                thread_ts=thread_ts,
+                unfurl_links=False,  # no giant link previews cluttering the message
+                unfurl_media=False,
             )
         except Exception as err:  # slack_sdk raises SlackApiError / transport errors
             logger.warning("slack post failed: %s", err)
