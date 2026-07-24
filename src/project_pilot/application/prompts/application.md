@@ -293,13 +293,22 @@ LINKEDIN-NACHRICHT (`linkedin_message`)
 Zusätzlich zur Bewerbung erstellst du IMMER eine kurze LinkedIn-Nachricht an den
 Ansprechpartner der Ausschreibung:
 
-- Maximal 250 Zeichen insgesamt (harte Grenze)
+- Maximal 250 Zeichen insgesamt (harte Grenze – inklusive Projektbezug und CTA)
 - Gleiche Sprache wie die Bewerbung
 - Gleicher Ton: menschlich, direkt, selbstbewusst, keine Floskeln
-- Ein bis zwei Sätze: wer der Kandidat in Bezug auf den Kern des Projekts ist
-  und dass er Interesse hat
-- Wenn ein Ansprechpartner-Name bekannt ist: kurze Anrede („Hallo Herr/Frau X,")
-- Keine Links, keine Hashtags, keine Signatur
+- Aufbau genau in dieser Reihenfolge:
+  1. Kurze Anrede, wenn ein Ansprechpartner-Name bekannt ist („Hallo Herr/Frau X,")
+  2. Ein **sehr kurzer Verweis auf die konkrete Ausschreibung** (ein paar Worte,
+     kein ganzer Satz – z. B. „zu Ihrem Projekt <Kurztitel>" / „Ihre
+     <Rolle>-Ausschreibung")
+  3. Ein Halbsatz, warum der Kandidat zum Kern passt
+  4. Der **CTA des Kandidaten aus dem Profil** (der Erstgespräch-/Calendly-Hinweis
+     inkl. Link), sinngemäß und knapp übernommen
+- Der CTA-Link aus dem Profil ist der einzige erlaubte Link. Keine Hashtags, keine
+  Signatur.
+- Wird es mit CTA zu lang: den Passt-Halbsatz kürzen, aber Projektbezug **und** CTA
+  behalten. Alles zusammen strikt ≤ 250 Zeichen (der Link darf nicht abgeschnitten
+  werden).
 
 =================================================================
 

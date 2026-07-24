@@ -12,6 +12,7 @@ from project_pilot.notification.telegram import (
     TelegramClient,
     apply_keyboard,
     draft_keyboard,
+    email_body_messages,
     format_draft,
     format_match,
 )
@@ -142,30 +143,47 @@ def _draft_view(
     )
 
 
-def test_format_draft_shows_all_review_fields() -> None:
+def test_format_draft_summary_has_metadata_not_body() -> None:
     text = format_draft(_draft_view())
     assert "Bewerbungsentwurf" in text
     assert "KI-Projekt &lt;live&gt;" in text  # HTML-escaped title
     assert "<b>An:</b> pm@firma.de" in text
-    assert "<b>Betreff:</b> Bewerbung: KI-Projekt" in text
-    assert "ich passe." in text
-    assert "<pre>Hallo, kurzes Interesse!</pre>" in text
+    assert "<code>Bewerbung: KI-Projekt</code>" in text  # subject in a copy block
+    assert "<pre>Hallo, kurzes Interesse!</pre>" in text  # LinkedIn copy block
+    # mailto link opens the mail client with recipient + subject prefilled
+    assert 'href="mailto:pm@firma.de?subject=Bewerbung' in text
     assert "Überarbeitung #1" in text
     assert "oder tippe Senden" in text
+    # the e-mail body is NOT in the summary (it ships in its own message)
+    assert "ich passe." not in text
 
 
-def test_format_draft_without_recipient_asks_for_address() -> None:
+def test_format_draft_without_recipient_omits_mailto_and_asks_for_address() -> None:
     text = format_draft(_draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL))
     assert "❓ unbekannt" in text
     assert "E-Mail-Adresse" in text
+    assert "mailto:" not in text  # no recipient → no mail-client link
     assert "oder tippe Senden" not in text
 
 
-def test_format_draft_warns_when_display_is_truncated() -> None:
-    text = format_draft(_draft_view(body="x" * 4000))
-    assert "Anzeige gekürzt" in text
-    short = format_draft(_draft_view())
-    assert "Anzeige gekürzt" not in short
+def test_email_body_messages_single_block_when_short() -> None:
+    messages = email_body_messages(_draft_view())
+    assert len(messages) == 1
+    assert "Vollständige E-Mail" in messages[0]
+    assert "<pre>Sehr geehrte Damen und Herren,\nich passe.</pre>" in messages[0]
+    assert "Teil " not in messages[0]  # no part counter for a single message
+
+
+def test_email_body_messages_split_long_body_without_truncation() -> None:
+    body = "\n".join(f"Zeile {i}: " + "wort " * 40 for i in range(200))
+    messages = email_body_messages(_draft_view(body=body))
+    assert len(messages) >= 2
+    assert all(len(message) <= 4096 for message in messages)  # under Telegram's limit
+    assert all("…" not in message for message in messages)  # nothing cut off
+    assert "Teil 1/" in messages[0] and f"Teil {len(messages)}/" in messages[-1]
+    # every source line survives somewhere across the messages (lossless)
+    joined = "".join(messages)
+    assert "Zeile 0:" in joined and "Zeile 199:" in joined
 
 
 def test_keyboards_carry_callback_data() -> None:

@@ -21,6 +21,7 @@ from project_pilot.notification.telegram import (
     TelegramMessage,
     TelegramUpdate,
     draft_keyboard,
+    email_body_messages,
     format_draft,
 )
 
@@ -232,16 +233,26 @@ class TelegramBot:
         keyboard = None
         if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
             keyboard = draft_keyboard(view.application_id, can_send=view.recipient is not None)
-        message_id = await self._client.send(format_draft(view), reply_markup=keyboard)
-        if message_id is not None:
-            self._remember_draft_message(message_id, view.application_id)
-            await self._service.record_draft_message(view.application_id, message_id)
-        else:
-            logger.warning("draft message for application %d not sent", view.application_id)
+        # The full e-mail goes out first as its own copyable message(s) so it is
+        # never truncated; the summary (with the action buttons and reply routing)
+        # is sent last so it sits at the bottom of the group.
+        sent_ids: list[int] = []
+        for chunk in email_body_messages(view):
+            body_id = await self._client.send(chunk)
+            if body_id is not None:
+                sent_ids.append(body_id)
+        summary_id = await self._client.send(format_draft(view), reply_markup=keyboard)
+        if summary_id is None:
+            logger.warning("draft summary for application %d not sent", view.application_id)
             await self._client.send(
                 "⚠️ Der Entwurf konnte nicht angezeigt werden (Telegram-Fehler). "
                 "Er ist gespeichert - starte den Flow einfach erneut."
             )
+            return
+        sent_ids.append(summary_id)
+        for message_id in sent_ids:  # a reply to any of the draft's messages routes back
+            self._remember_draft_message(message_id, view.application_id)
+        await self._service.record_draft_message(view.application_id, summary_id)
 
     def _remember_draft_message(self, message_id: int, application_id: int) -> None:
         self._draft_messages[message_id] = application_id

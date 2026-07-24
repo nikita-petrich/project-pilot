@@ -16,7 +16,9 @@ from project_pilot.models import ApplicationStatus
 logger = logging.getLogger(__name__)
 
 _DESCRIPTION_LIMIT = 2500
-_DRAFT_BODY_LIMIT = 2500
+# Headroom under Telegram's hard 4096-char message limit; the full e-mail body is
+# split across this many visible chars per message so it is never truncated.
+_TELEGRAM_TEXT_LIMIT = 3500
 
 
 class TelegramChat(BaseModel):
@@ -167,24 +169,20 @@ def draft_keyboard(application_id: int, *, can_send: bool) -> dict[str, object]:
 
 
 def format_draft(view: DraftView) -> str:
-    """Render an application draft for review: recipient, subject, body, LinkedIn."""
+    """Render the draft summary: recipient, subject, mail-client link, LinkedIn.
+
+    The full e-mail body is delivered separately via ``email_body_messages`` so it
+    is shown in full and never truncated.
+    """
     lines = [f"📨 <b>Bewerbungsentwurf:</b> {_esc(view.title)}"]
     if view.url:
         lines.append(f"🔗 {_link(view.url, 'Zum Projekt')}")
     lines.append("")
     lines.append(f"📧 <b>An:</b> {_esc(view.recipient) if view.recipient else '❓ unbekannt'}")
-    lines.append(f"✉️ <b>Betreff:</b> {_esc(view.subject)}")
-    lines.append("")
-    body = view.body
-    truncated = len(body) > _DRAFT_BODY_LIMIT
-    if truncated:
-        body = body[:_DRAFT_BODY_LIMIT].rstrip() + " …"
-    lines.append(_esc(body))
-    if truncated:
-        lines.append(
-            "⚠️ Anzeige gekürzt - die E-Mail enthält den vollständigen Text "
-            "(antworte z. B. mit 'kürzer')."
-        )
+    lines.append(f"✉️ <b>Betreff (zum Kopieren):</b> <code>{_esc(view.subject)}</code>")
+    if view.recipient:
+        mailto = f"mailto:{view.recipient}?subject={quote(view.subject)}"
+        lines.append(f"📧 {_link(mailto, 'Im Mail-Client öffnen (Empfänger + Betreff)')}")
     lines.append("")
     lines.append(
         f"💬 <b>LinkedIn ({len(view.linkedin_message)}/{LINKEDIN_LIMIT}) - zum Kopieren:</b>"
@@ -203,6 +201,50 @@ def format_draft(view: DraftView) -> str:
         + (" - oder tippe Senden." if view.recipient else ".")
     )
     return "\n".join(lines)
+
+
+def _split_text(text: str, limit: int) -> list[str]:
+    """Split ``text`` into ``<= limit`` chunks, preferring line boundaries.
+
+    A single line longer than ``limit`` is hard-split; nothing is dropped.
+    """
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        while len(line) > limit:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > limit:
+            chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def email_body_messages(view: DraftView) -> list[str]:
+    """The full e-mail body as one or more copyable ``<pre>`` messages.
+
+    Long applications are split across several messages (Telegram caps a message
+    at 4096 chars) so the whole e-mail is always visible and copyable, never cut.
+    """
+    body = view.body.strip() or "(leer)"
+    parts = _split_text(body, _TELEGRAM_TEXT_LIMIT)
+    total = len(parts)
+    messages: list[str] = []
+    for index, part in enumerate(parts):
+        header = "📄 <b>Vollständige E-Mail (zum Kopieren):</b>\n" if index == 0 else ""
+        footer = f"\n<i>Teil {index + 1}/{total}</i>" if total > 1 else ""
+        messages.append(f"{header}<pre>{_esc(part)}</pre>{footer}")
+    return messages
 
 
 class TelegramClient:

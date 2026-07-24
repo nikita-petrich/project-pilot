@@ -186,11 +186,16 @@ async def test_apply_callback_creates_and_shows_draft() -> None:
     await _bot(telegram, service).process_update(_callback("apply:7"))
     assert ("draft_for_listing", 7) in service.calls
     assert telegram.answered[0][1] is not None  # progress feedback on the tap
+    # full e-mail body ships in its own copyable message first
+    assert any("Vollständige E-Mail" in t for t in telegram.texts())
+    assert any("Sehr geehrte Damen und Herren" in t for t in telegram.texts())
+    # the summary is sent last and carries the action buttons + reply routing
     text, markup = telegram.sent[-1]
     assert "Bewerbungsentwurf" in text
     assert "pm@firma.de" in text
     assert _keyboard_actions(markup) == ["send:1", "cancel:1"]
-    assert service.recorded == [(1, 101)]
+    assert len(service.recorded) == 1
+    assert service.recorded[0][0] == 1  # (application_id, summary_message_id)
 
 
 async def test_draft_without_recipient_asks_for_email_and_hides_send() -> None:
