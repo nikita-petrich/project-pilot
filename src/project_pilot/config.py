@@ -1,5 +1,6 @@
 """Application configuration via pydantic-settings (parsed and validated at boot)."""
 
+from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import Field, ValidationError, field_validator
@@ -9,6 +10,18 @@ from project_pilot.errors import ConfigError
 
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
+
+
+@dataclass(frozen=True, slots=True)
+class SmtpConfig:
+    """Validated SMTP connection settings for sending application e-mails."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    sender: str
+    use_starttls: bool
 
 
 class Settings(BaseSettings):
@@ -35,6 +48,13 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     llm_model: str = ""
+
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -101,6 +121,21 @@ class Settings(BaseSettings):
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
+
+    def has_smtp(self) -> bool:
+        return bool(self.smtp_host and self.smtp_user and self.smtp_password)
+
+    def require_smtp(self) -> SmtpConfig:
+        if not self.has_smtp():
+            raise ConfigError("SMTP_HOST, SMTP_USER and SMTP_PASSWORD must all be set")
+        return SmtpConfig(
+            host=self.smtp_host,
+            port=self.smtp_port,
+            username=self.smtp_user,
+            password=self.smtp_password,
+            sender=self.smtp_from or self.smtp_user,
+            use_starttls=self.smtp_starttls,
+        )
 
 
 def load_settings() -> Settings:

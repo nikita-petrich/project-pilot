@@ -6,6 +6,7 @@ readme = "README.md"
 authors = [{ name = "Nik Petrich" }]
 requires-python = ">=3.13"
 dependencies = [
+    "aiosmtplib>=5.1.2",
     "alembic>=1.18.5",
     "apscheduler>=3.11.3",
     "asyncpg>=0.31.0",
@@ -76,6 +77,7 @@ known-first-party = ["project_pilot"]
 
 [tool.mypy]
 python_version = "3.13"
+files = ["src", "tests"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true

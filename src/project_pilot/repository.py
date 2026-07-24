@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from project_pilot.models import (
+    Application,
     Evaluation,
     EvaluationStage,
     Listing,
@@ -132,3 +133,20 @@ class Repository:
         for listing in listings:
             listing.notified_at = when
         await self._session.flush()
+
+    async def get_listing(self, listing_id: int) -> Listing | None:
+        return await self._session.get(Listing, listing_id)
+
+    async def add_application(self, application: Application) -> Application:
+        self._session.add(application)
+        await self._session.flush()
+        return application
+
+    async def get_application(self, application_id: int) -> Application | None:
+        return await self._session.get(Application, application_id)
+
+    async def get_application_by_draft_message(self, message_id: int) -> Application | None:
+        result = await self._session.scalars(
+            select(Application).where(Application.draft_message_id == message_id)
+        )
+        return result.first()

@@ -45,6 +45,11 @@ class SchedulerRunner:
     def has_job(self) -> bool:
         return self._scheduler.get_job(self._job_id) is not None
 
+    @property
+    def stop_event(self) -> asyncio.Event:
+        """The shutdown signal, shared with co-running loops (e.g. the Telegram bot)."""
+        return self._stop
+
     def request_stop(self) -> None:
         self._stop.set()
 

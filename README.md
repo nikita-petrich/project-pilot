@@ -36,13 +36,18 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 ```sh
 uv sync                              # install dependencies (creates .venv)
 cp .env.example .env                 # then fill in the values (see below)
+cp profile/profile.example.md profile/profile.md   # then fill in your real profile
 docker compose -f compose.dev.yaml up -d   # local Postgres on :5432
 uv run project-pilot init-db         # apply migrations
 ```
 
-Fill in the two profile files (they feed the matcher and the hard rules):
+Fill in the two profile files (they feed the matcher, the hard rules, and the
+application drafts):
 
-- `profile/profile.md` free-text profile (skills, desired projects, no-gos)
+- `profile/profile.md` free-text profile: positioning, skills, desired projects,
+  no-gos, reference projects, and the application signature. **This file is
+  gitignored and stays local** (it holds personal CV/contact data) — a sanitized
+  `profile/profile.example.md` template is tracked instead, like `.env.example`.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
@@ -59,17 +64,42 @@ gitignored and `.env.example` is the template):
 | `ANALYSIS_WINDOW_MIN` | default 30 |
 | `MATCH_THRESHOLD` | default 60 |
 | `LOG_LEVEL` | default `info` |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | your mail server, used to send application e-mails (port 465 implies TLS, otherwise STARTTLS) |
+| `SMTP_FROM` / `SMTP_STARTTLS` | optional sender override (defaults to `SMTP_USER`) and STARTTLS toggle |
 
 ## Commands
 
 ```sh
 uv run project-pilot init-db        # apply Alembic migrations
 uv run project-pilot run-once       # one scan now (non-zero exit on a failed run)
-uv run project-pilot daemon         # run the scheduler until SIGTERM
+uv run project-pilot daemon         # scheduler + Telegram bot until SIGTERM
+uv run project-pilot bot            # only the Telegram bot (no scanning)
 uv run project-pilot test-notify    # send a Telegram test message
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
 ```
+
+## Applying from Telegram
+
+Every match message carries a **📝 Bewerben** button. Tapping it makes the LLM
+write a personalized application. The single prompt file
+`src/project_pilot/application/prompts/application.md` contains the full
+application prompt (style rules, reference projects, skills, signature) - edit
+it directly to change how applications are written. The bot then shows the full
+draft for review:
+
+- **Recipient** - auto-extracted from the listing when an e-mail address is
+  visible anywhere in it; otherwise the bot asks you to reply with the address.
+- **Revise** - reply to the draft message in the chat with what you want changed
+  ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and a new draft appears.
+- **Send** - only the **📤 Senden** button actually delivers the e-mail, directly
+  through your SMTP server. Double-taps are guarded; failures keep the draft.
+- **LinkedIn** - each draft includes a copy-pastable LinkedIn message
+  (max 250 chars) for contacting the poster manually.
+
+`/apply <freelancermap-link>` starts the same flow for any listing (stored or
+freshly fetched), and `/apply <pasted project description>` works without a link.
+Nothing is ever sent without the explicit Send tap.
 
 ## Running on the home server (Docker)
 

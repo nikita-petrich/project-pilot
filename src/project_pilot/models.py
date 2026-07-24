@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -44,6 +44,14 @@ class RunStatus(StrEnum):
     SUCCESS = "success"
     PARTIAL = "partial"
     ERROR = "error"
+
+
+class ApplicationStatus(StrEnum):
+    AWAITING_EMAIL = "awaiting_email"
+    READY = "ready"
+    SENDING = "sending"
+    SENT = "sent"
+    CANCELLED = "cancelled"
 
 
 def _utcnow() -> datetime:
@@ -141,6 +149,44 @@ class Run(Base):
     matched: Mapped[int] = mapped_column(default=0)
     notified: Mapped[int] = mapped_column(default=0)
     error: Mapped[str | None] = mapped_column(Text, default=None)
+
+
+class Application(Base):
+    """One application draft/send cycle for a listing (or an ad-hoc `/apply` text)."""
+
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("listings.id", ondelete="SET NULL"), index=True, default=None
+    )
+    listing_url: Mapped[str | None] = mapped_column(String(1024), default=None)
+    listing_title: Mapped[str] = mapped_column(String(512))
+    listing_text: Mapped[str] = mapped_column(Text, default="")
+
+    recipient_email: Mapped[str | None] = mapped_column(String(320), default=None)
+    subject: Mapped[str] = mapped_column(String(512), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    linkedin_message: Mapped[str] = mapped_column(String(300), default="")
+
+    status: Mapped[ApplicationStatus] = mapped_column(
+        _pg_enum(ApplicationStatus, "application_status"), default=ApplicationStatus.READY
+    )
+    draft_message_id: Mapped[int | None] = mapped_column(BigInteger, index=True, default=None)
+    revision_count: Mapped[int] = mapped_column(default=0)
+
+    model: Mapped[str | None] = mapped_column(String(128), default=None)
+    prompt_version: Mapped[str | None] = mapped_column(String(64), default=None)
+    profile_hash: Mapped[str | None] = mapped_column(String(64), default=None)
+    tokens_in: Mapped[int | None] = mapped_column(default=None)
+    tokens_out: Mapped[int | None] = mapped_column(default=None)
+
+    error: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
 
 
 class SourceState(Base):

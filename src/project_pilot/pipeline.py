@@ -71,6 +71,7 @@ class Matcher(Protocol):
 
 class Notifier(Protocol):
     async def send_message(self, text: str, *, disable_preview: bool = True) -> bool: ...
+    async def send_match(self, text: str, *, listing_id: int) -> bool: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -362,16 +363,19 @@ class Pipeline:
         if self._telegram is None:
             logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(pending))
             return
+        failed = 0
         for listing in pending:  # one message per match, marked notified only on a successful send
             message = _to_match_message(listing, now)
             if message.onsite_only:
                 logger.info("skipping on-site-only match: %s", listing.external_url)
                 continue
-            if await self._telegram.send_message(format_match(message)):
+            if await self._telegram.send_match(format_match(message), listing_id=listing.id):
                 await repo.mark_notified([listing], now)
                 outcome.notified += 1
-        else:
-            logger.warning("telegram send failed; %d match(es) will retry next run", len(pending))
+            else:
+                failed += 1
+        if failed:
+            logger.warning("telegram send failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

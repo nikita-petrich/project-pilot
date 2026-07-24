@@ -91,7 +91,8 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
-- Scheduler daemon: `uv run project-pilot daemon`
+- Scheduler daemon (scan loop + Telegram bot): `uv run project-pilot daemon`
+- Telegram bot only (Apply buttons, `/apply`, draft review): `uv run project-pilot bot`
 - Send a test Telegram message: `uv run project-pilot test-notify`
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
 - Reporting summary: `uv run project-pilot stats`

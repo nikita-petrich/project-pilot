@@ -15,7 +15,7 @@ def test_test_notify_sends(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok:123")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "42")
     respx.post("https://api.telegram.org/bottok:123/sendMessage").mock(
-        return_value=httpx.Response(200, json={"ok": True})
+        return_value=httpx.Response(200, json={"ok": True, "result": {"message_id": 1}})
     )
     result = runner.invoke(app, ["test-notify"])
     assert result.exit_code == 0

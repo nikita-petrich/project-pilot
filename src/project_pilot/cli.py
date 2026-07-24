@@ -1,20 +1,32 @@
 """Typer command-line interface for project-pilot.
 
-Commands: ``init-db``, ``run-once``, ``daemon``, ``test-notify`` (``test-filter``
-and ``stats`` land with their features).
+Commands: ``init-db``, ``run-once``, ``daemon``, ``bot``, ``healthcheck``,
+``stats``, ``test-notify``.
 """
 
 import asyncio
+import contextlib
 import logging
+import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import typer
 
-from project_pilot.config import Settings, load_settings
+from project_pilot.application.generator import (
+    ApplicationGenerator,
+    OpenAiDraftClient,
+    load_application_prompt,
+)
+from project_pilot.application.mailer import SmtpMailer
+from project_pilot.application.service import ApplicationService
+from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
-from project_pilot.ingestion.client import PolitenessClient
+from project_pilot.ingestion.client import BASE_URL, PolitenessClient
+from project_pilot.ingestion.normalize import canonicalize_url
+from project_pilot.ingestion.parser import ParsedListing, parse_detail_page
+from project_pilot.notification.bot import TelegramBot
 from project_pilot.notification.telegram import TelegramClient
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import ProfileService
@@ -73,6 +85,51 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     return pipeline, closer
 
 
+def _build_bot(settings: Settings) -> tuple[TelegramBot, Callable[[], Awaitable[None]]]:
+    """Wire the Telegram bot: draft generator, mailer, application service, fetcher."""
+    profile = ProfileService(Path("profile")).load()
+    api_key, model = settings.require_openai()
+    bot_token, chat_id = settings.require_telegram()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+
+    generator = ApplicationGenerator(
+        OpenAiDraftClient(api_key), model=model, prompt_template=load_application_prompt()
+    )
+    mailer = SmtpMailer(settings.require_smtp()) if settings.has_smtp() else None
+    service = ApplicationService(
+        session_factory=session_factory,
+        generator=generator,
+        profile=profile,
+        mailer=mailer,
+    )
+    telegram = TelegramClient(bot_token=bot_token, chat_id=chat_id)
+
+    async def fetch_listing(url: str) -> ParsedListing:
+        client = PolitenessClient(user_agent=settings.user_agent())
+        try:
+            await client.check_robots([url])
+            response = await client.get(url)
+            return parse_detail_page(
+                response.text,
+                BASE_URL,
+                source=SOURCE_NAME,
+                external_url=canonicalize_url(url, BASE_URL),
+            )
+        finally:
+            await client.aclose()
+
+    telegram_bot = TelegramBot(
+        client=telegram, chat_id=chat_id, service=service, fetcher=fetch_listing
+    )
+
+    async def closer() -> None:
+        await telegram.aclose()
+        await engine.dispose()
+
+    return telegram_bot, closer
+
+
 async def _run_once(settings: Settings) -> RunOutcome:
     pipeline, closer = _build_pipeline(settings)
     try:
@@ -84,9 +141,33 @@ async def _run_once(settings: Settings) -> RunOutcome:
 async def _run_daemon(settings: Settings) -> None:
     pipeline, closer = _build_pipeline(settings)
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
+    bot_runtime: tuple[TelegramBot, Callable[[], Awaitable[None]]] | None = None
+    if settings.telegram_bot_token and settings.telegram_chat_id:
+        bot_runtime = _build_bot(settings)
     try:
         await pipeline.run_once()  # initial run so the healthcheck has a baseline
-        await runner.run_forever()
+        if bot_runtime is None:
+            await runner.run_forever()
+        else:
+            await asyncio.gather(
+                runner.run_forever(),
+                bot_runtime[0].run_forever(stop=runner.stop_event),
+            )
+    finally:
+        if bot_runtime is not None:
+            await bot_runtime[1]()
+        await closer()
+
+
+async def _run_bot(settings: Settings) -> None:
+    telegram_bot, closer = _build_bot(settings)
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        with contextlib.suppress(NotImplementedError):
+            loop.add_signal_handler(sig, stop.set)
+    try:
+        await telegram_bot.run_forever(stop=stop)
     finally:
         await closer()
 
@@ -147,9 +228,17 @@ def run_once() -> None:
 
 @app.command("daemon")
 def daemon() -> None:
-    """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) until SIGTERM."""
+    """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) plus the bot until SIGTERM."""
     settings = load_settings()
     asyncio.run(_run_daemon(settings))
+
+
+@app.command("bot")
+def bot() -> None:
+    """Run only the Telegram bot (Apply buttons, /apply command, draft review)."""
+    settings = load_settings()
+    settings.require_telegram()
+    asyncio.run(_run_bot(settings))
 
 
 @app.command("healthcheck")

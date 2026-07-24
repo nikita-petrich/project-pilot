@@ -3,6 +3,11 @@
 .env.*
 !.env.example
 
+# Personal profile (local only — never commit real CV / contact data).
+# Copy profile.example.md to profile.md and fill it in; the real file stays local.
+profile/profile.md
+!profile/profile.example.md
+
 # Logs
 *.log
 logs/

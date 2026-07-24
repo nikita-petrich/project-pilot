@@ -1,4 +1,4 @@
-"""Lean Telegram Bot API client (sendMessage) over httpx."""
+"""Lean Telegram Bot API client (sendMessage, getUpdates, callbacks) over httpx."""
 
 import html
 import logging
@@ -7,10 +7,50 @@ from typing import Self
 from urllib.parse import quote
 
 import httpx
+from pydantic import BaseModel, ConfigDict
+
+from project_pilot.application.schemas import LINKEDIN_LIMIT
+from project_pilot.application.service import DraftView
+from project_pilot.models import ApplicationStatus
 
 logger = logging.getLogger(__name__)
 
 _DESCRIPTION_LIMIT = 2500
+_DRAFT_BODY_LIMIT = 2500
+
+
+class TelegramChat(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+
+
+class TelegramMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    message_id: int
+    text: str | None = None
+    chat: TelegramChat
+    reply_to_message: "TelegramMessage | None" = None
+
+
+class TelegramCallbackQuery(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    data: str | None = None
+    message: TelegramMessage | None = None
+
+
+class TelegramUpdate(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    update_id: int
+    message: TelegramMessage | None = None
+    callback_query: TelegramCallbackQuery | None = None
+
+
+TelegramMessage.model_rebuild()
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +152,59 @@ def format_match(message: MatchMessage) -> str:
     return "\n".join(lines)
 
 
+def apply_keyboard(listing_id: int) -> dict[str, object]:
+    """Inline keyboard under a match message: one Apply button."""
+    return {"inline_keyboard": [[{"text": "📝 Bewerben", "callback_data": f"apply:{listing_id}"}]]}
+
+
+def draft_keyboard(application_id: int, *, can_send: bool) -> dict[str, object]:
+    """Inline keyboard under a draft: Send (only with a recipient) and Discard."""
+    row: list[dict[str, object]] = []
+    if can_send:
+        row.append({"text": "📤 Senden", "callback_data": f"send:{application_id}"})
+    row.append({"text": "❌ Verwerfen", "callback_data": f"cancel:{application_id}"})
+    return {"inline_keyboard": [row]}
+
+
+def format_draft(view: DraftView) -> str:
+    """Render an application draft for review: recipient, subject, body, LinkedIn."""
+    lines = [f"📨 <b>Bewerbungsentwurf:</b> {_esc(view.title)}"]
+    if view.url:
+        lines.append(f"🔗 {_link(view.url, 'Zum Projekt')}")
+    lines.append("")
+    lines.append(f"📧 <b>An:</b> {_esc(view.recipient) if view.recipient else '❓ unbekannt'}")
+    lines.append(f"✉️ <b>Betreff:</b> {_esc(view.subject)}")
+    lines.append("")
+    body = view.body
+    truncated = len(body) > _DRAFT_BODY_LIMIT
+    if truncated:
+        body = body[:_DRAFT_BODY_LIMIT].rstrip() + " …"
+    lines.append(_esc(body))
+    if truncated:
+        lines.append(
+            "⚠️ Anzeige gekürzt - die E-Mail enthält den vollständigen Text "
+            "(antworte z. B. mit 'kürzer')."
+        )
+    lines.append("")
+    lines.append(
+        f"💬 <b>LinkedIn ({len(view.linkedin_message)}/{LINKEDIN_LIMIT}) - zum Kopieren:</b>"
+    )
+    lines.append(f"<pre>{_esc(view.linkedin_message)}</pre>")
+    lines.append("")
+    if view.status is ApplicationStatus.AWAITING_EMAIL:
+        lines.append(
+            "❗ Keine Empfänger-Adresse gefunden - antworte auf diese Nachricht "
+            "mit der E-Mail-Adresse."
+        )
+    if view.revision_count:
+        lines.append(f"🔁 Überarbeitung #{view.revision_count}")
+    lines.append(
+        "✏️ Antworte auf diese Nachricht, um Änderungen zu beschreiben"
+        + (" - oder tippe Senden." if view.recipient else ".")
+    )
+    return "\n".join(lines)
+
+
 class TelegramClient:
     """Minimal Bot API client: sendMessage with HTML, returning success as a bool."""
 
@@ -138,24 +231,99 @@ class TelegramClient:
         if self._owns_client:
             await self._client.aclose()
 
-    async def send_message(self, text: str, *, disable_preview: bool = True) -> bool:
-        """Send an HTML message; return True only on a Bot API ``ok`` response."""
-        payload = {
+    async def send(
+        self,
+        text: str,
+        *,
+        disable_preview: bool = True,
+        reply_markup: dict[str, object] | None = None,
+    ) -> int | None:
+        """Send an HTML message; return its message id, or None on any failure."""
+        payload: dict[str, object] = {
             "chat_id": self._chat_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": disable_preview,
         }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        body = await self._call("sendMessage", payload)
+        if body is None:
+            return None
+        result = body.get("result")
+        if isinstance(result, dict):
+            message_id = result.get("message_id")
+            if isinstance(message_id, int):
+                return message_id
+        return None
+
+    async def send_message(self, text: str, *, disable_preview: bool = True) -> bool:
+        """Send an HTML message; return True only on a Bot API ``ok`` response."""
+        return await self.send(text, disable_preview=disable_preview) is not None
+
+    async def send_match(self, text: str, *, listing_id: int) -> bool:
+        """Send a match message with its Apply button."""
+        return await self.send(text, reply_markup=apply_keyboard(listing_id)) is not None
+
+    async def answer_callback(self, callback_query_id: str, text: str | None = None) -> bool:
+        """Acknowledge a button tap (stops the client-side spinner)."""
+        payload: dict[str, object] = {"callback_query_id": callback_query_id}
+        if text is not None:
+            payload["text"] = text
+        return await self._call("answerCallbackQuery", payload) is not None
+
+    async def get_updates(
+        self, *, offset: int | None = None, timeout_s: int = 25
+    ) -> list[TelegramUpdate] | None:
+        """Long-poll for updates; None signals a failed call (caller backs off)."""
+        payload: dict[str, object] = {
+            "timeout": timeout_s,
+            "allowed_updates": ["message", "callback_query"],
+        }
+        if offset is not None:
+            payload["offset"] = offset
+        body = await self._call("getUpdates", payload, request_timeout=timeout_s + 10)
+        if body is None:
+            return None
+        result = body.get("result")
+        if not isinstance(result, list):
+            return None
+        updates: list[TelegramUpdate] = []
+        for item in result:
+            try:
+                updates.append(TelegramUpdate.model_validate(item))
+            except ValueError:  # unexpected shapes must never kill the poll loop
+                logger.warning("skipping unparsable telegram update: %r", item)
+                update_id = item.get("update_id") if isinstance(item, dict) else None
+                if isinstance(update_id, int):  # still advance the offset past it
+                    updates.append(TelegramUpdate(update_id=update_id))
+        return updates
+
+    async def _call(
+        self, method: str, payload: dict[str, object], *, request_timeout: float | None = None
+    ) -> dict[str, object] | None:
+        """POST one Bot API method; return the response body only on ``ok``."""
         try:
-            response = await self._client.post(f"{self._base_url}/sendMessage", json=payload)
+            response = await self._client.post(
+                f"{self._base_url}/{method}",
+                json=payload,
+                timeout=(
+                    request_timeout if request_timeout is not None else httpx.USE_CLIENT_DEFAULT
+                ),
+            )
         except httpx.HTTPError as err:
-            logger.warning("telegram send failed (transport): %s", err)
-            return False
+            logger.warning("telegram %s failed (transport): %s", method, err)
+            return None
         if response.status_code != 200:
-            logger.warning("telegram send failed (status %s)", response.status_code)
-            return False
-        body = response.json()
-        ok = bool(body.get("ok"))
-        if not ok:
-            logger.warning("telegram send rejected: %s", body.get("description"))
-        return ok
+            logger.warning("telegram %s failed (status %s)", method, response.status_code)
+            return None
+        try:
+            body: object = response.json()
+        except ValueError:
+            logger.warning("telegram %s returned a non-JSON body", method)
+            return None
+        if not isinstance(body, dict) or not body.get("ok"):
+            detail = body.get("description") if isinstance(body, dict) else body
+            logger.warning("telegram %s rejected: %s", method, detail)
+            return None
+        return body

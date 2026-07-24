@@ -1,0 +1,143 @@
+"""LLM generation of personalized application drafts (subject, body, LinkedIn)."""
+
+from dataclasses import dataclass
+from pathlib import Path
+from time import perf_counter
+from typing import TYPE_CHECKING, Protocol
+
+from openai import AsyncOpenAI
+
+from project_pilot.application.schemas import ApplicationDraft
+from project_pilot.errors import ConfigError, LlmSchemaError
+
+if TYPE_CHECKING:
+    from openai.types.chat import ChatCompletionMessageParam
+
+PROMPT_VERSION = "application"
+_PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+
+@dataclass(frozen=True, slots=True)
+class DraftResponse:
+    """What a structured draft client returns: a parsed draft (or None) plus tokens."""
+
+    draft: ApplicationDraft | None
+    tokens_in: int | None
+    tokens_out: int | None
+
+
+class StructuredDraftClient(Protocol):
+    async def complete(self, *, model: str, system: str, user: str) -> DraftResponse: ...
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedDraft:
+    draft: ApplicationDraft
+    model: str
+    prompt_version: str
+    tokens_in: int | None
+    tokens_out: int | None
+    latency_ms: int
+
+
+def load_application_prompt(name: str = PROMPT_VERSION) -> str:
+    """Read the single application prompt file (``application.md``, Nik's own prompt)."""
+    path = _PROMPTS_DIR / f"{name}.md"
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as err:
+        raise ConfigError(f"cannot read prompt {path}: {err}") from err
+
+
+class ApplicationGenerator:
+    """One call plus one retry; a second failure raises ``LlmSchemaError``.
+
+    Unlike stage-3 matching there is no silent fallback: drafting is interactive,
+    so the error surfaces to Telegram and Nik simply retries.
+    """
+
+    def __init__(
+        self,
+        client: StructuredDraftClient,
+        *,
+        model: str,
+        prompt_template: str,
+        prompt_version: str = PROMPT_VERSION,
+    ) -> None:
+        self._client = client
+        self._model = model
+        self._prompt_template = prompt_template
+        self._prompt_version = prompt_version
+
+    async def generate(self, *, profile_text: str, listing_text: str) -> GeneratedDraft:
+        user = f"## Candidate profile\n{profile_text}\n\n## Project listing\n{listing_text}"
+        return await self._complete(user)
+
+    async def revise(
+        self,
+        *,
+        profile_text: str,
+        listing_text: str,
+        current: ApplicationDraft,
+        instruction: str,
+    ) -> GeneratedDraft:
+        user = (
+            f"## Candidate profile\n{profile_text}\n\n"
+            f"## Project listing\n{listing_text}\n\n"
+            f"## Current draft\nSubject: {current.subject}\n\n{current.body}\n\n"
+            f"LinkedIn: {current.linkedin_message}\n\n"
+            f"## Revision instruction\n{instruction}"
+        )
+        return await self._complete(user)
+
+    async def _complete(self, user: str) -> GeneratedDraft:
+        started = perf_counter()
+        detail = "no response"
+        for _ in range(2):
+            try:
+                response = await self._client.complete(
+                    model=self._model, system=self._prompt_template, user=user
+                )
+            except Exception as err:  # retried once, then surfaced as LlmSchemaError
+                detail = f"llm call failed: {err}"
+                continue
+            if response.draft is not None:
+                return GeneratedDraft(
+                    draft=response.draft,
+                    model=self._model,
+                    prompt_version=self._prompt_version,
+                    tokens_in=response.tokens_in,
+                    tokens_out=response.tokens_out,
+                    latency_ms=int((perf_counter() - started) * 1000),
+                )
+            detail = "schema violation (empty parse)"
+        raise LlmSchemaError(f"application draft failed: {detail}")
+
+
+class OpenAiDraftClient:
+    """Thin adapter over the OpenAI SDK's structured `parse` (network, not unit-tested)."""
+
+    def __init__(
+        self, api_key: str, *, client: AsyncOpenAI | None = None
+    ) -> None:  # pragma: no cover
+        self._client = client or AsyncOpenAI(api_key=api_key)
+
+    async def complete(
+        self, *, model: str, system: str, user: str
+    ) -> DraftResponse:  # pragma: no cover
+        messages: list[ChatCompletionMessageParam] = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        completion = await self._client.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=ApplicationDraft,
+        )
+        message = completion.choices[0].message
+        usage = completion.usage
+        return DraftResponse(
+            draft=message.parsed,
+            tokens_in=usage.prompt_tokens if usage is not None else None,
+            tokens_out=usage.completion_tokens if usage is not None else None,
+        )

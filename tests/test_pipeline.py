@@ -100,9 +100,15 @@ class _FakeNotifier:
     def __init__(self, *, ok: bool = True) -> None:
         self.ok = ok
         self.sent: list[str] = []
+        self.match_listing_ids: list[int] = []
 
     async def send_message(self, text: str, *, disable_preview: bool = True) -> bool:
         self.sent.append(text)
+        return self.ok
+
+    async def send_match(self, text: str, *, listing_id: int) -> bool:
+        self.sent.append(text)
+        self.match_listing_ids.append(listing_id)
         return self.ok
 
 

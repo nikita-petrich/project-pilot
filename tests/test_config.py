@@ -96,3 +96,39 @@ def test_load_settings_wraps_validation_error(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setenv("SCAN_INTERVAL_MIN", "5")
     with pytest.raises(ConfigError):
         load_settings()
+
+
+def _set_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMTP_HOST", "mail.example.com")
+    monkeypatch.setenv("SMTP_USER", "nik@example.com")
+    monkeypatch.setenv("SMTP_PASSWORD", "secret")
+
+
+def test_require_smtp_rejects_missing_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("SMTP_HOST", "SMTP_USER", "SMTP_PASSWORD"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert not settings.has_smtp()
+    with pytest.raises(ConfigError):
+        settings.require_smtp()
+
+
+def test_require_smtp_defaults_sender_to_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_smtp(monkeypatch)
+    monkeypatch.delenv("SMTP_FROM", raising=False)
+    smtp = Settings().require_smtp()
+    assert smtp.host == "mail.example.com"
+    assert smtp.port == 587
+    assert smtp.sender == "nik@example.com"
+    assert smtp.use_starttls is True
+
+
+def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_smtp(monkeypatch)
+    monkeypatch.setenv("SMTP_FROM", "bewerbung@nik.dev")
+    monkeypatch.setenv("SMTP_PORT", "465")
+    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    smtp = Settings().require_smtp()
+    assert smtp.sender == "bewerbung@nik.dev"
+    assert smtp.port == 465
+    assert smtp.use_starttls is False
