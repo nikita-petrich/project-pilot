@@ -39,7 +39,7 @@ from project_pilot.models import (
     SourceState,
     Verdict,
 )
-from project_pilot.notification.telegram import MatchMessage, format_match
+from project_pilot.notification.messages import MatchMessage
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -70,8 +70,8 @@ class Matcher(Protocol):
 
 
 class Notifier(Protocol):
-    async def send_message(self, text: str, *, disable_preview: bool = True) -> bool: ...
-    async def send_match(self, text: str, *, listing_id: int) -> bool: ...
+    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool: ...
+    async def send_warning(self, text: str) -> bool: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -105,7 +105,7 @@ class Pipeline:
         session_factory: async_sessionmaker[AsyncSession],
         client_factory: ClientFactory,
         matcher: Matcher,
-        telegram: Notifier | None,
+        notifier: Notifier | None,
         base_url: str = BASE_URL,
     ) -> None:
         self._settings = settings
@@ -113,7 +113,7 @@ class Pipeline:
         self._session_factory = session_factory
         self._client_factory = client_factory
         self._matcher = matcher
-        self._telegram = telegram
+        self._notifier = notifier
         self._base_url = base_url
         self._source = SOURCE_NAME
 
@@ -178,10 +178,10 @@ class Pipeline:
             state.cooldown_until = None
 
     async def _warn(self, text: str) -> None:
-        if self._telegram is not None:
-            await self._telegram.send_message(f"⚠️ {text}")
+        if self._notifier is not None:
+            await self._notifier.send_warning(f"⚠️ {text}")
         else:
-            logger.warning("warning (no telegram): %s", text)
+            logger.warning("warning (no notifier): %s", text)
 
     async def _execute(
         self,
@@ -360,8 +360,8 @@ class Pipeline:
         pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
         if not pending:
             return
-        if self._telegram is None:
-            logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(pending))
+        if self._notifier is None:
+            logger.info("dry-run: %d match(es) not sent (no notifier configured)", len(pending))
             return
         failed = 0
         for listing in pending:  # one message per match, marked notified only on a successful send
@@ -369,13 +369,13 @@ class Pipeline:
             if message.onsite_only:
                 logger.info("skipping on-site-only match: %s", listing.external_url)
                 continue
-            if await self._telegram.send_match(format_match(message), listing_id=listing.id):
+            if await self._notifier.send_match(message, listing_id=listing.id):
                 await repo.mark_notified([listing], now)
                 outcome.notified += 1
             else:
                 failed += 1
         if failed:
-            logger.warning("telegram send failed; %d match(es) will retry next run", failed)
+            logger.warning("notifier send failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

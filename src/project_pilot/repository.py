@@ -145,8 +145,8 @@ class Repository:
     async def get_application(self, application_id: int) -> Application | None:
         return await self._session.get(Application, application_id)
 
-    async def get_application_by_draft_message(self, message_id: int) -> Application | None:
+    async def get_application_by_draft_ref(self, draft_ref: str) -> Application | None:
         result = await self._session.scalars(
-            select(Application).where(Application.draft_message_id == message_id)
+            select(Application).where(Application.draft_ref == draft_ref)
         )
         return result.first()

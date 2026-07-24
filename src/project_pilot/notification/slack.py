@@ -251,6 +251,18 @@ class SlackClient:
     async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
         return await self._post(text=text, blocks=None, thread_ts=thread_ts)
 
+    async def update_blocks(self, channel: str, ts: str, blocks: list[Block], text: str) -> bool:
+        """Replace an existing message's blocks in place (draft revisions/send/cancel)."""
+        try:
+            response = await self._web.chat_update(channel=channel, ts=ts, text=text, blocks=blocks)
+        except Exception as err:
+            logger.warning("slack update failed: %s", err)
+            return False
+        if not response.get("ok"):
+            logger.warning("slack update rejected: %s", response.get("error"))
+            return False
+        return True
+
     async def _post(
         self, *, text: str, blocks: list[Block] | None, thread_ts: str | None
     ) -> PostedMessage | None:
@@ -269,3 +281,19 @@ class SlackClient:
         if isinstance(channel, str) and isinstance(ts, str):
             return PostedMessage(channel=channel, ts=ts)
         return None
+
+
+class SlackNotifier:
+    """Pipeline notifier: posts match messages (with apply button) and warnings to Slack."""
+
+    def __init__(self, client: SlackClient) -> None:
+        self._client = client
+
+    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
+        posted = await self._client.post_blocks(
+            format_match_blocks(message, listing_id=listing_id), match_fallback_text(message)
+        )
+        return posted is not None
+
+    async def send_warning(self, text: str) -> bool:
+        return await self._client.post_text(text) is not None

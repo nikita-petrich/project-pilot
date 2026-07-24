@@ -52,9 +52,6 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot"
     contact_mail: str = "you@example.com"
 
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
-
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_channel: str = ""
@@ -122,11 +119,6 @@ class Settings(BaseSettings):
         if not self.search_urls:
             raise ConfigError("SEARCH_URLS is empty; set at least one search URL")
         return self.search_urls
-
-    def require_telegram(self) -> tuple[str, str]:
-        if not self.telegram_bot_token or not self.telegram_chat_id:
-            raise ConfigError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must both be set")
-        return self.telegram_bot_token, self.telegram_chat_id
 
     def has_slack(self) -> bool:
         return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)

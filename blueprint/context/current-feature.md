@@ -31,19 +31,19 @@ No new application/matching logic; only the delivery/interaction surface changes
   ≤3000-char code sections, subject, recipient, LinkedIn, Senden/Verwerfen/mailto
   buttons); thin `SlackClient` wrapper (post/update/thread) over an injectable
   web-client protocol; unit tests (pure builders + fake client).
-- [ ] 3. Data model: applications draft reference becomes a Slack `channel:ts`
+- [x] 3. Data model: applications draft reference becomes a Slack `channel:ts`
   string — Alembic migration `draft_message_id` (BigInteger) → `draft_ref` (String);
   repository + service updated (`record_draft_ref`, `find_by_draft_ref`).
-- [ ] 4. `SlackBot`: Socket Mode loop routing block-button actions (apply/send/cancel),
+- [x] 4. `SlackBot`: Socket Mode loop routing block-button actions (apply/send/cancel),
   the `/apply` slash command, and thread replies (revision vs. recipient e-mail);
   only the configured channel is served; posts one-message drafts; `bot` CLI; daemon
   runs scanner + Slack bot concurrently.
-- [ ] 5. Pipeline & CLI: notifier posts Slack blocks (`send_match` takes the
+- [x] 5. Pipeline & CLI: notifier posts Slack blocks (`send_match` takes the
   `MatchMessage`), warnings via Slack, `test-notify` posts to Slack; wire Slack into
   `_build_pipeline`/`_build_bot`.
-- [ ] 6. Remove Telegram: delete `notification/telegram.py`, `notification/bot.py`,
+- [x] 6. Remove Telegram: delete `notification/telegram.py`, `notification/bot.py`,
   their tests, and the Telegram config; drop `httpx` Telegram usage.
-- [ ] 7. Docs: README + AGENTS.md Slack setup (app, Socket Mode, scopes, tokens,
+- [x] 7. Docs: README + AGENTS.md Slack setup (app, Socket Mode, scopes, tokens,
   channel), build-plan entry 17.
 
 ### Done when

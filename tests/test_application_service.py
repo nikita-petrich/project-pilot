@@ -318,17 +318,17 @@ async def test_cancel_blocks_further_edits(
         await service.revise(view.application_id, "egal")
 
 
-async def test_draft_message_roundtrip(
+async def test_draft_ref_roundtrip(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     listing_id = await _store(session_factory, _listing())
     service = _service(session_factory)
     view = await service.draft_for_listing(listing_id)
-    await service.record_draft_message(view.application_id, 4711)
-    found = await service.find_by_draft_message(4711)
+    await service.record_draft_ref(view.application_id, "C0123:1700.42")
+    found = await service.find_by_draft_ref("C0123:1700.42")
     assert found is not None
     assert found.application_id == view.application_id
-    assert await service.find_by_draft_message(999) is None
+    assert await service.find_by_draft_ref("C0123:9.9") is None
 
 
 async def test_find_listing_id_by_url_canonicalizes(

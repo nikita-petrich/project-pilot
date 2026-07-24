@@ -280,16 +280,16 @@ class ApplicationService:
             await session.flush()
             return _to_view(application)
 
-    async def record_draft_message(self, application_id: int, message_id: int) -> None:
-        """Remember the Telegram message that shows the draft (reply routing key)."""
+    async def record_draft_ref(self, application_id: int, draft_ref: str) -> None:
+        """Remember the Slack message (``channel:ts``) that shows the draft (routing key)."""
         async with session_scope(self._session_factory) as session:
             application = await Repository(session).get_application(application_id)
             if application is not None:
-                application.draft_message_id = message_id
+                application.draft_ref = draft_ref
 
-    async def find_by_draft_message(self, message_id: int) -> DraftView | None:
+    async def find_by_draft_ref(self, draft_ref: str) -> DraftView | None:
         async with session_scope(self._session_factory) as session:
-            application = await Repository(session).get_application_by_draft_message(message_id)
+            application = await Repository(session).get_application_by_draft_ref(draft_ref)
             return _to_view(application) if application is not None else None
 
     async def find_listing_id_by_url(self, url: str) -> int | None:

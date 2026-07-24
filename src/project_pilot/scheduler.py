@@ -47,7 +47,7 @@ class SchedulerRunner:
 
     @property
     def stop_event(self) -> asyncio.Event:
-        """The shutdown signal, shared with co-running loops (e.g. the Telegram bot)."""
+        """The shutdown signal, shared with co-running loops (e.g. the Slack bot)."""
         return self._stop
 
     def request_stop(self) -> None:

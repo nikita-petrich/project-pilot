@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -172,7 +172,7 @@ class Application(Base):
     status: Mapped[ApplicationStatus] = mapped_column(
         _pg_enum(ApplicationStatus, "application_status"), default=ApplicationStatus.READY
     )
-    draft_message_id: Mapped[int | None] = mapped_column(BigInteger, index=True, default=None)
+    draft_ref: Mapped[str | None] = mapped_column(String(128), index=True, default=None)
     revision_count: Mapped[int] = mapped_column(default=0)
 
     model: Mapped[str | None] = mapped_column(String(128), default=None)

@@ -1,7 +1,7 @@
 """Notifier-agnostic display data for a matched listing.
 
-Kept separate from any transport (Telegram/Slack) so the data shape survives when
-a delivery backend is swapped out.
+Kept separate from any transport (e.g. Slack) so the data shape survives when a
+delivery backend is swapped out.
 """
 
 from dataclasses import dataclass, field

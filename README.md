@@ -3,7 +3,7 @@
 A personal, single-user worker that watches freelancermap.de for new project
 listings, persists every listing losslessly in PostgreSQL, evaluates fresh ones
 against a profile (deterministic hard rules, then an LLM match), and reports real
-matches to Telegram within minutes. Backend only, no web UI.
+matches to Slack within minutes. Backend only, no web UI.
 
 Built as a modern, strictly-typed Python codebase (Python 3.13, asyncio,
 Pydantic v2, SQLAlchemy 2.0, `mypy --strict`). The binding detail specification is
@@ -21,14 +21,14 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. Sends a Telegram alert for matches at or above `MATCH_THRESHOLD`, and stores a
+4. Posts a Slack alert for matches at or above `MATCH_THRESHOLD`, and stores a
    reason for every verdict (match and no-match alike) for later reporting.
 
 ## Requirements
 
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
-- A Telegram bot (via @BotFather) and an OpenAI API key for live operation
+- A Slack app (Socket Mode, see below) and an OpenAI API key for live operation
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -57,7 +57,7 @@ gitignored and `.env.example` is the template):
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | your bot and your chat id |
+| `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | Slack bot token (`xoxb-…`), app-level token for Socket Mode (`xapp-…`), and the channel id to post to |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
@@ -72,30 +72,58 @@ gitignored and `.env.example` is the template):
 ```sh
 uv run project-pilot init-db        # apply Alembic migrations
 uv run project-pilot run-once       # one scan now (non-zero exit on a failed run)
-uv run project-pilot daemon         # scheduler + Telegram bot until SIGTERM
-uv run project-pilot bot            # only the Telegram bot (no scanning)
-uv run project-pilot test-notify    # send a Telegram test message
+uv run project-pilot daemon         # scheduler + Slack bot until SIGTERM
+uv run project-pilot bot            # only the Slack bot (no scanning)
+uv run project-pilot test-notify    # post a test message to the Slack channel
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
 ```
 
-## Applying from Telegram
+## Slack setup
 
-Every match message carries a **📝 Bewerben** button. Tapping it makes the LLM
-write a personalized application. The single prompt file
-`src/project_pilot/application/prompts/application.md` contains the full
-application prompt (style rules, reference projects, skills, signature) - edit
-it directly to change how applications are written. The bot then shows the full
-draft for review:
+Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) → **From a
+manifest** (paste the manifest below) → **Create**. Then:
 
-- **Recipient** - auto-extracted from the listing when an e-mail address is
-  visible anywhere in it; otherwise the bot asks you to reply with the address.
-- **Revise** - reply to the draft message in the chat with what you want changed
-  ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and a new draft appears.
-- **Send** - only the **📤 Senden** button actually delivers the e-mail, directly
-  through your SMTP server. Double-taps are guarded; failures keep the draft.
-- **LinkedIn** - each draft includes a copy-pastable LinkedIn message
-  (max 250 chars) for contacting the poster manually.
+1. **App-Level Token** (Socket Mode): *Basic Information → App-Level Tokens →
+   Generate Token and Scopes* with scope `connections:write` → `SLACK_APP_TOKEN`.
+2. **Install App** → *Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`.
+3. Create a channel, invite the bot (`/invite @project-pilot`), copy its channel
+   id → `SLACK_CHANNEL`. The bot must be a member to post and to read thread replies.
+
+```yaml
+display_information:
+  name: project-pilot
+features:
+  bot_user: { display_name: project-pilot, always_online: true }
+  slash_commands:
+    - { command: /apply, description: Bewerbung erstellen, usage_hint: "<link oder text>", should_escape: false }
+oauth_config:
+  scopes: { bot: [chat:write, commands, channels:history] }
+settings:
+  event_subscriptions: { bot_events: [message.channels] }
+  interactivity: { is_enabled: true }
+  socket_mode_enabled: true
+```
+
+Socket Mode means the app connects out to Slack — no public URL, works behind NAT.
+
+## Applying from Slack
+
+Every match posts a Slack message with an **📝 Bewerben** button. Tapping it makes
+the LLM write a personalized application. The single prompt file
+`src/project_pilot/application/prompts/application.md` holds the full application
+prompt (style rules, reference projects, skills, signature) — edit it directly to
+change how applications are written. The draft posts as **one** message:
+
+- **Full e-mail** in copyable code blocks (split across Block Kit sections when
+  long, never truncated), plus the subject and the LinkedIn message.
+- **Recipient** — auto-extracted from the listing when an e-mail address is
+  visible anywhere in it; otherwise reply in the thread with the address.
+- **Revise** — reply in the message's thread with what you want changed
+  ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
+- **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
+  (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
+  your mail client with recipient + subject prefilled; **❌ Verwerfen** cancels.
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
@@ -122,11 +150,11 @@ matches are missed. Restart the worker after changing `.env`.
 ## Troubleshooting
 
 - **Cooldown**: a 403 or captcha sets a 6-hour cooldown in `source_state`; the
-  worker skips scans until it expires and sends one Telegram warning.
+  worker skips scans until it expires and posts one Slack warning.
 - **`SelectorMismatchError`**: freelancermap changed its markup. Update the
   selector constants at the top of `src/project_pilot/ingestion/parser.py`,
   refresh the fixtures, and re-run.
-- **Repeated failures**: three consecutive failed runs send one Telegram warning.
+- **Repeated failures**: three consecutive failed runs post one Slack warning.
 - **Container unhealthy**: no successful run within three times the interval;
   check `docker compose logs app`.
 
@@ -167,7 +195,7 @@ src/project_pilot/
   config.py profile_loader.py errors.py db.py models.py repository.py
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, prompts/
-  notification/ telegram
+  notification/ slack
   pipeline.py scheduler.py reporting.py cli.py
 alembic/        async migrations
 docs/           compliance.md, operations.md, adr/

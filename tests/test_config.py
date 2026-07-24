@@ -67,14 +67,22 @@ def test_require_search_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_search_urls() == ["https://a.example/x"]
 
 
-def test_require_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+def test_require_slack(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_CHANNEL"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert not settings.has_slack()
     with pytest.raises(ConfigError):
-        Settings().require_telegram()
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
-    assert Settings().require_telegram() == ("tok", "123")
+        settings.require_slack()
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-1")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1")
+    monkeypatch.setenv("SLACK_CHANNEL", "C0123")
+    settings = Settings()
+    assert settings.has_slack()
+    slack = settings.require_slack()
+    assert slack.bot_token == "xoxb-1"
+    assert slack.app_token == "xapp-1"
+    assert slack.channel == "C0123"
 
 
 def test_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
