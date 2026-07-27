@@ -180,7 +180,7 @@ class SlackBot:
             await self._send_application(target, draft_ts=message_ts, thread_root=root)
         elif action_id == "cancel":
             await self._cancel_application(target, draft_ts=message_ts, thread_root=root)
-        # open_mail / open_project are URL buttons handled by Slack itself.
+        # open_project is a URL button handled by Slack itself.
 
     async def on_slash_apply(self, channel_id: str | None, text: str) -> None:
         argument = text.strip()

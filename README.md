@@ -120,9 +120,10 @@ change how applications are written. The draft posts as **one** message:
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
-  (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
-  your mail client with subject (and recipient, once known) prefilled — available
-  from the start; **❌ Verwerfen** cancels.
+  (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
+  **📧 Open in mail client** link above the buttons opens your mail client with
+  subject (and recipient, once known) prefilled — available from the start. It is
+  a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.

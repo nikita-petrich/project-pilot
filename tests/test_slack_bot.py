@@ -251,9 +251,9 @@ async def test_cancel_action_updates_message() -> None:
     assert "9.9" in [ts for _, ts, _ in poster.updates]
 
 
-async def test_open_mail_action_is_ignored() -> None:
+async def test_url_button_action_is_ignored() -> None:
     poster, service = _FakePoster(), _FakeService()
-    await _bot(poster, service).on_block_action("open_mail", None, CHANNEL, "1.1")
+    await _bot(poster, service).on_block_action("open_project", None, CHANNEL, "1.1")
     assert service.calls == []
 
 
