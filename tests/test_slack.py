@@ -13,6 +13,7 @@ from project_pilot.notification.slack import (
     SlackWebClient,
     format_draft_blocks,
     format_match_blocks,
+    sent_confirmation_blocks,
 )
 
 
@@ -47,11 +48,13 @@ def _draft_view(
     status: ApplicationStatus = ApplicationStatus.READY,
     body: str = "Sehr geehrte Damen und Herren,\nich passe gut.",
     revision_count: int = 1,
+    contact_name: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=7,
         title="KI-Projekt",
         url="https://www.freelancermap.de/projekt/x",
+        contact_name=contact_name,
         recipient=recipient,
         subject="Bewerbung: KI-Projekt",
         body=body,
@@ -137,6 +140,58 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "e-mail address" in str(context[0]["text"])
+
+
+def _all_action_elements(blocks: list[Block]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for actions in _blocks_of_type(blocks, "actions"):
+        block_elements = actions["elements"]
+        assert isinstance(block_elements, list)
+        elements.extend(cast("dict[str, object]", element) for element in block_elements)
+    return elements
+
+
+def test_draft_blocks_offer_linkedin_search_for_contact() -> None:
+    blocks = format_draft_blocks(_draft_view(contact_name="Anna Kleinen"))
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert button["url"] == (
+        "https://www.linkedin.com/search/results/people/?keywords=Anna%20Kleinen"
+    )
+    text = button["text"]
+    assert isinstance(text, dict)
+    assert "Anna Kleinen" in str(text["text"])
+    # the search button rides directly under the LinkedIn section, before the review row
+    assert _action_ids(blocks) == ["linkedin_search"]
+    assert len(_blocks_of_type(blocks, "actions")) == 2
+
+
+def test_draft_blocks_keep_linkedin_search_after_send() -> None:
+    blocks = format_draft_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
+    assert ids == ["linkedin_search"]  # review buttons gone, the search stays
+
+
+def test_draft_blocks_without_contact_have_no_linkedin_search() -> None:
+    ids = [str(e["action_id"]) for e in _all_action_elements(format_draft_blocks(_draft_view()))]
+    assert "linkedin_search" not in ids
+
+
+def test_sent_confirmation_carries_linkedin_text_and_search_button() -> None:
+    blocks = sent_confirmation_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    joined = "\n".join(_section_texts(blocks))
+    assert "sent to *pm@firma.de*" in joined
+    assert "```Hallo, kurzes Interesse!```" in joined
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert "keywords=Anna%20Kleinen" in str(button["url"])
+
+
+def test_sent_confirmation_without_contact_has_no_button() -> None:
+    blocks = sent_confirmation_blocks(_draft_view(status=ApplicationStatus.SENT))
+    assert _blocks_of_type(blocks, "actions") == []
 
 
 def test_draft_blocks_split_long_email_without_truncation() -> None:

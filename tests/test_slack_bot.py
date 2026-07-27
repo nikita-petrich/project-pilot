@@ -17,11 +17,13 @@ def _view(
     application_id: int = 1,
     recipient: str | None = "pm@firma.de",
     status: ApplicationStatus = ApplicationStatus.READY,
+    contact_name: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=application_id,
         title="KI-Projekt",
         url="https://www.freelancermap.de/projekt/ki-projekt",
+        contact_name=contact_name,
         recipient=recipient,
         subject="Bewerbung: KI-Projekt",
         body="Sehr geehrte Damen und Herren",
@@ -57,6 +59,17 @@ def _block_text(block: Block) -> str:
 
 def _is_draft(blocks: list[Block]) -> bool:
     return any(b.get("type") == "header" and "Application draft" in _block_text(b) for b in blocks)
+
+
+def _button_elements(blocks: list[Block]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for block in blocks:
+        if block.get("type") != "actions":
+            continue
+        block_elements = block.get("elements")
+        assert isinstance(block_elements, list)
+        elements.extend(element for element in block_elements if isinstance(element, dict))
+    return elements
 
 
 class _FakePoster:
@@ -227,13 +240,20 @@ async def test_apply_from_foreign_channel_is_ignored() -> None:
 
 async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:
     poster, service = _FakePoster(), _FakeService()
-    service.view = _view(status=ApplicationStatus.SENT)
+    service.view = _view(status=ApplicationStatus.SENT, contact_name="Anna Kleinen")
     await _bot(poster, service).dispatch(
         "interactive", _interactive("send", "1", ts="222.2", thread_ts="111.1")
     )
     assert ("send", 1) in service.calls
     assert "222.2" in poster.draft_update_ids()  # the draft message is updated in place
-    assert any("sent to" in t and "Hallo!" in t for t in poster.visible_texts())
+    visible = "\n".join(poster.visible_texts())
+    assert "sent to" in visible and "Hallo!" in visible
+    # the confirmation carries the LinkedIn people-search button for the contact
+    buttons = [e for _, _, blocks in poster.updates for e in _button_elements(blocks)]
+    assert any(
+        e.get("action_id") == "linkedin_search" and "Anna%20Kleinen" in str(e.get("url"))
+        for e in buttons
+    )
 
 
 async def test_send_action_surfaces_error() -> None:

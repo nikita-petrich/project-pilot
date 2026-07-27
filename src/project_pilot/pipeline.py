@@ -18,10 +18,9 @@ from project_pilot.evaluation.rules import apply_hard_rules
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import (
     detect_language,
-    extract_contact_person,
     is_onsite_only,
-    looks_like_company,
     next_page_url,
+    resolve_contact_name,
 )
 from project_pilot.ingestion.parser import (
     ListingSummary,
@@ -523,13 +522,9 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     if duration_label and raw.extension_possible:
         duration_label += " (+ extension)"
 
-    # The structured contact is the real person for direct posts, but the agency name for
-    # brokered ones; in that case pull the person out of the description text instead.
-    structured = " ".join(part for part in (raw.first_name, raw.last_name) if part) or None
-    if structured and not looks_like_company(structured) and structured != raw.company:
-        contact_name: str | None = structured
-    else:
-        contact_name = extract_contact_person(listing.description or "")
+    contact_name = resolve_contact_name(
+        raw.first_name, raw.last_name, raw.company, listing.description or ""
+    )
 
     language = detect_language(listing.description or listing.title)
 
