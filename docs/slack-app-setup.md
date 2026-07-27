@@ -7,8 +7,8 @@ workspace, follow these steps and you get an identical bot back.
 project-pilot talks to Slack over **Socket Mode**: the app dials out to Slack, so it
 needs **no public URL** and runs happily behind NAT on a home server. Socket Mode is
 available on Slack's free tier. Everything the app needs — the bot user, the `/apply`
-slash command, the required scopes, event subscriptions, and interactivity — is
-declared once in the app manifest below, so nothing gets forgotten.
+and `/check` slash commands, the required scopes, event subscriptions, and
+interactivity — is declared once in the app manifest below, so nothing gets forgotten.
 
 All bot output (Slack messages and logs) is in English. The only text that follows
 the project's language is the generated application e-mail itself: a German project
@@ -34,6 +34,10 @@ features:
   slash_commands:
     - command: /apply
       description: Create an application from a link or project description
+      usage_hint: "<freelancermap link or project description>"
+      should_escape: false
+    - command: /check
+      description: Check a listing against your profile (hard rules + LLM match)
       usage_hint: "<freelancermap link or project description>"
       should_escape: false
 oauth_config:
@@ -79,7 +83,7 @@ not the `#name`. The bot only serves this one channel.
 | Scope | Why |
 | --- | --- |
 | `chat:write` | post and update match/draft/status messages |
-| `commands` | receive the `/apply` slash command |
+| `commands` | receive the `/apply` and `/check` slash commands |
 | `channels:history` | read thread replies (revisions, recipient address) |
 | `files:read` | download an uploaded PDF/text file to draft from it |
 | `connections:write` (app-level) | open the Socket Mode connection |

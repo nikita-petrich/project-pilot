@@ -16,7 +16,8 @@ from urllib.parse import quote
 
 from project_pilot.application.schemas import LINKEDIN_LIMIT
 from project_pilot.application.service import DraftView
-from project_pilot.models import ApplicationStatus
+from project_pilot.evaluation.check import CheckResult
+from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
 from project_pilot.notification.messages import MatchMessage
 
 logger = logging.getLogger(__name__)
@@ -137,8 +138,8 @@ def _labeled_list(label: str, values: list[str], *, limit: int) -> str | None:
     return f"*{label}:* {_esc(', '.join(picked))}" if picked else None
 
 
-def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
-    """Build the Block Kit message for one matched listing (with an apply button)."""
+def _match_body(message: MatchMessage) -> list[Block]:
+    """The match message's content blocks (everything except the action buttons)."""
     blocks: list[Block] = [_header(f"🎯 {message.title} · {message.score}/100")]
 
     who = None
@@ -176,12 +177,89 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
 
     if message.description:
         blocks.append(_description_block(message.description))
+    return blocks
 
+
+def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
+    """Build the Block Kit message for one matched listing (with an apply button)."""
+    blocks = _match_body(message)
     actions: list[Block] = [_button("📝 Apply", action_id="apply", value=str(listing_id))]
     if message.url:
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
     return blocks
+
+
+def _reason_list(reason: dict[str, object], key: str) -> list[str]:
+    value = reason.get(key)
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _hard_rule_line(reason: dict[str, object]) -> str:
+    rule = str(reason.get("rule", "unknown"))
+    if rule == "blacklist":
+        term = str(reason.get("matched_term", ""))
+        return f"🚫 Hard rule *blacklist* hit: `{_esc(term)}` (0 tokens spent)."
+    required = ", ".join(_reason_list(reason, "required"))
+    return f"🚫 Hard rule *must-have* failed: none of the required terms found ({_esc(required)})."
+
+
+def format_check_blocks(
+    result: CheckResult, *, apply_action: str | None = None, apply_value: str | None = None
+) -> list[Block]:
+    """Render a manual ``/check`` verdict; a pass reuses the match-message body.
+
+    A passing check looks exactly like a scan match (full listing, apply button) so
+    the follow-up flow is identical; the apply button's action/value depend on how
+    the checked listing can be reached again (stored id, URL, or remembered text).
+    """
+    if result.passed and result.message is not None:
+        blocks = _match_body(result.message)
+        actions: list[Block] = []
+        if apply_action is not None and apply_value is not None:
+            actions.append(_button("📝 Apply", action_id=apply_action, value=apply_value))
+        if result.message.url:
+            actions.append(
+                _button("🔗 View project", action_id="open_project", url=result.message.url)
+            )
+        if actions:
+            blocks.append({"type": "actions", "elements": actions})
+        blocks.append(
+            _context(
+                f"🔍 Check verdict: ✅ match — score {result.score} ≥ "
+                f"threshold {result.threshold}. Nothing was stored."
+            )
+        )
+        return blocks
+
+    blocks = [_header(f"❌ No match: {result.title}")]
+    if result.stage is EvaluationStage.HARD_RULE:
+        blocks.append(_section(_hard_rule_line(result.reason)))
+    elif result.is_llm_error:
+        blocks.append(
+            _section("⚠️ The LLM returned no verdict (fallback: no match) — try again later.")
+        )
+    else:
+        lines = [f"*Score:* {result.score}/100 (threshold {result.threshold})"]
+        if result.verdict is Verdict.MATCH:
+            lines[0] += " — a match, but below your threshold"
+        for label, key, limit in (
+            ("📝 Reasons", "reasons", 4),
+            ("🎯 Your skills", "matching_skills", 8),
+            ("⚠️ Gaps", "missing_requirements", 4),
+            ("🚩 Risks", "risk_flags", 3),
+        ):
+            line = _labeled_list(label, _reason_list(result.reason, key), limit=limit)
+            if line:
+                lines.append(line)
+        blocks.append(_section("\n".join(lines)))
+    blocks.append(_context("🔍 Check verdict — nothing was stored or notified."))
+    return blocks
+
+
+def check_fallback_text(result: CheckResult) -> str:
+    verdict = "match" if result.passed else "no match"
+    return f"🔍 Check: {verdict} — {result.title}"
 
 
 def format_draft_blocks(view: DraftView) -> list[Block]:

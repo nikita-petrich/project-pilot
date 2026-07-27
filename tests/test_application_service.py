@@ -9,14 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.generator import ApplicationGenerator, DraftResponse
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.application.service import (
-    ApplicationService,
-    extract_email,
-    is_email,
-    render_listing_entity,
-)
+from project_pilot.application.service import ApplicationService, extract_email, is_email
 from project_pilot.config import CvAttachments, SmtpConfig
 from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.evaluation.llm import render_listing_entity
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
 from project_pilot.ingestion.parser import ParsedListing

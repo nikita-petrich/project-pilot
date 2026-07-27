@@ -3,7 +3,8 @@
 from typing import cast
 
 from project_pilot.application.service import DraftView
-from project_pilot.models import ApplicationStatus
+from project_pilot.evaluation.check import CheckResult
+from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.slack import (
     Block,
@@ -11,6 +12,8 @@ from project_pilot.notification.slack import (
     SlackClient,
     SlackResponse,
     SlackWebClient,
+    check_fallback_text,
+    format_check_blocks,
     format_draft_blocks,
     format_match_blocks,
 )
@@ -150,6 +153,89 @@ def test_draft_blocks_split_long_email_without_truncation() -> None:
     assert all("…" not in t for t in email_sections)  # nothing cut off
     joined = "".join(email_sections)
     assert "Zeile 0:" in joined and "Zeile 299:" in joined
+
+
+def _check_result(
+    *,
+    passed: bool = True,
+    stage: EvaluationStage = EvaluationStage.LLM,
+    verdict: Verdict = Verdict.MATCH,
+    score: int | None = 80,
+    reason: dict[str, object] | None = None,
+    message: MatchMessage | None = None,
+    is_llm_error: bool = False,
+) -> CheckResult:
+    return CheckResult(
+        title="KI-Projekt",
+        stage=stage,
+        verdict=verdict,
+        passed=passed,
+        score=score,
+        threshold=60,
+        reason=reason or {},
+        message=message,
+        is_llm_error=is_llm_error,
+    )
+
+
+def test_check_blocks_pass_reuse_match_body_with_custom_apply_button() -> None:
+    message = MatchMessage(
+        title="KI-Projekt", url="https://x/1", score=80, reasons=["RAG Erfahrung"]
+    )
+    blocks = format_check_blocks(
+        _check_result(message=message), apply_action="apply", apply_value="42"
+    )
+    header = next(b for b in blocks if b.get("type") == "header")["text"]
+    assert isinstance(header, dict)
+    assert "KI-Projekt" in str(header["text"]) and "80/100" in str(header["text"])
+    apply_button = _action_elements(blocks)[0]
+    assert apply_button["action_id"] == "apply" and apply_button["value"] == "42"
+    assert "open_project" in _action_ids(blocks)
+    context = next(b for b in blocks if b.get("type") == "context")["elements"]
+    assert isinstance(context, list)
+    assert "✅ match" in str(context[0]["text"]) and "threshold 60" in str(context[0]["text"])
+
+
+def test_check_blocks_pass_without_url_or_apply_ref_has_no_buttons() -> None:
+    message = MatchMessage(title="Text-Check", url="", score=70)
+    blocks = format_check_blocks(_check_result(message=message))
+    assert not [b for b in blocks if b.get("type") == "actions"]
+
+
+def test_check_blocks_hard_rule_shows_matched_term() -> None:
+    result = _check_result(
+        passed=False,
+        stage=EvaluationStage.HARD_RULE,
+        verdict=Verdict.NO_MATCH,
+        score=None,
+        reason={"rule": "blacklist", "matched_term": "sap"},
+    )
+    blocks = format_check_blocks(result)
+    joined = "\n".join(_section_texts(blocks))
+    assert "blacklist" in joined and "`sap`" in joined
+    assert "No match" in str(next(b for b in blocks if b.get("type") == "header")["text"])
+
+
+def test_check_blocks_match_below_threshold_says_so() -> None:
+    result = _check_result(
+        passed=False,
+        score=55,
+        reason={"reasons": ["passt teils"], "missing_requirements": ["kubernetes"]},
+    )
+    joined = "\n".join(_section_texts(format_check_blocks(result)))
+    assert "55/100" in joined and "below your threshold" in joined
+    assert "passt teils" in joined and "kubernetes" in joined
+
+
+def test_check_blocks_llm_error_warns() -> None:
+    result = _check_result(passed=False, verdict=Verdict.NO_MATCH, score=0, is_llm_error=True)
+    joined = "\n".join(_section_texts(format_check_blocks(result)))
+    assert "no verdict" in joined
+
+
+def test_check_fallback_text_states_verdict() -> None:
+    assert "match" in check_fallback_text(_check_result(message=None))
+    assert "no match" in check_fallback_text(_check_result(passed=False))
 
 
 class _Resp:

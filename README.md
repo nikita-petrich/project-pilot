@@ -95,6 +95,7 @@ features:
   bot_user: { display_name: project-pilot, always_online: true }
   slash_commands:
     - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
+    - { command: /check, description: Check a listing against your profile, usage_hint: "<link or text>", should_escape: false }
 oauth_config:
   scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:
@@ -133,6 +134,24 @@ freshly fetched), and `/apply <pasted project description>` works without a link
 **Uploading a file** (PDF or text) to the channel drafts from its contents the same
 way — drop in a project-description PDF and the draft appears. Nothing is ever sent
 without the explicit Send tap.
+
+## Checking a listing from Slack
+
+`/check <freelancermap-link or pasted project description>` runs any listing through
+the same evaluation the scanner uses — hard rules from `constraints.yaml` first
+(0 tokens), then the LLM match against your profile:
+
+- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full match message you know from
+  the scanner (all listing facts, reasons, gaps, risks) including the **📝 Bewerben**
+  button, so the apply flow starts exactly as if the scanner had found it.
+- **No match** — posts the verdict with the failed hard rule (matched blacklist
+  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
+- **Files** — upload a PDF/text file with a comment containing `check` and the
+  extracted text is checked instead of drafted (a comment without `check` keeps the
+  usual upload-to-apply behavior).
+
+A check is read-only: nothing is stored, the freshness gate is skipped, and the
+scanner's watermark stays untouched.
 
 ## Running on the home server (Docker)
 
