@@ -18,11 +18,23 @@ SPRACHE
 
 =======
 
-- Wenn die Projektbeschreibung auf Deutsch ist → Bewerbung auf Deutsch
-- Wenn die Projektbeschreibung auf Englisch ist → Bewerbung auf Englisch
-- Wenn Sprache explizit vorgegeben ist → diese verwenden
-- Niemals Sprachen mischen
-- Sprache muss vollständig konsistent sein
+Bestimme zuerst die **Bewerbungssprache** aus der Projektbeschreibung. Diese eine
+Entscheidung gilt dann für ALLES: Betreff, Body, LinkedIn-Nachricht UND die Auswahl
+des Erstgespräch-Links.
+
+- Projektbeschreibung überwiegend auf Deutsch → Bewerbungssprache = Deutsch
+- Projektbeschreibung überwiegend auf Englisch → Bewerbungssprache = Englisch
+- Sprache explizit vorgegeben → diese verwenden (schlägt die Erkennung)
+- Bei gemischter Beschreibung: die dominante Sprache des Fließtexts entscheidet
+  (einzelne englische Fachbegriffe in einem deutschen Text machen sie nicht englisch)
+- Niemals Sprachen mischen; die Bewerbung ist vollständig in der Bewerbungssprache
+
+LINK-KOPPLUNG (HARTE REGEL):
+
+- Bewerbungssprache Deutsch → verwende die Zeile `Erstgespräch (DE)` aus dem Profil
+- Bewerbungssprache Englisch → verwende die Zeile `Erstgespräch (EN)` aus dem Profil
+- Der Link muss immer zur gewählten Bewerbungssprache passen — nie den deutschen
+  Link in einer englischen Bewerbung (oder umgekehrt)
 
 =================================================================
 
@@ -272,11 +284,11 @@ Format je Projekt:
 
 - Interesse am Projekt
 - Kurzer Ausblick / Gesprächsangebot
-- IMMER zu einem kostenlosen Erstgespräch einladen (HARTE REGEL). Wähle den zur
-  Sprache passenden Erstgespräch-Link aus dem Profil und schreibe genau einen
-  fertigen Satz, z. B.:
-  - Deutsch: „Kostenloses Erstgespräch buchen: <deutscher Erstgespräch-Link>"
-  - Englisch: „Book a free intro call: <englischer Erstgespräch-Link>"
+- IMMER zu einem kostenlosen Erstgespräch einladen (HARTE REGEL). Nimm den Link, der
+  zur oben bestimmten Bewerbungssprache gehört (Deutsch → `Erstgespräch (DE)`,
+  Englisch → `Erstgespräch (EN)`), und schreibe genau einen fertigen Satz:
+  - Deutsch: „Kostenloses Erstgespräch buchen: <Link aus Erstgespräch (DE)>"
+  - Englisch: „Book a free intro call: <Link aus Erstgespräch (EN)>"
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
@@ -306,9 +318,10 @@ Ansprechpartner der Ausschreibung:
      kein ganzer Satz – z. B. „zu Ihrem Projekt <Kurztitel>" / „Ihre
      <Rolle>-Ausschreibung")
   3. Ein Halbsatz, warum der Kandidat zum Kern passt
-  4. Einladung zum kostenlosen Erstgespräch mit dem zur Sprache passenden
-     Erstgespräch-Link aus dem Profil, z. B. „Kostenloses Erstgespräch: <Link>" /
-     „Free intro call: <Link>". Schreibe NIEMALS „CTA" oder Klammer-Alternativen.
+  4. Einladung zum kostenlosen Erstgespräch mit dem Link zur gewählten
+     Bewerbungssprache (Deutsch → `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`),
+     z. B. „Kostenloses Erstgespräch: <Link>" / „Free intro call: <Link>". Schreibe
+     NIEMALS „CTA" oder Klammer-Alternativen.
 - Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
   Hashtags, keine Signatur.
 - Wird es mit dem Link zu lang: den Passt-Halbsatz kürzen, aber Projektbezug **und**
