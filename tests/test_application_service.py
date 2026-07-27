@@ -395,6 +395,16 @@ async def test_render_listing_entity_includes_context(
     assert "Beschreibungstext" in text
 
 
+def test_render_listing_entity_carries_the_reference_number() -> None:
+    def listing(raw: dict[str, object]) -> Listing:
+        entity = _listing(raw=raw)
+        entity.remote_status = Remote.REMOTE  # column default only lands on flush
+        return entity
+
+    assert "Reference: 12345" in render_listing_entity(listing({"id": 12345}))
+    assert "Reference:" not in render_listing_entity(listing({"company": "Firma GmbH"}))
+
+
 async def test_drafts_are_queryable_per_listing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

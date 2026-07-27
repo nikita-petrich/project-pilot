@@ -153,6 +153,27 @@ def test_render_listing_includes_fields() -> None:
     assert "Py Dev" in text
     assert "Python" in text
     assert "ab sofort" in text
+    assert "Reference:" not in text
+
+
+def test_render_listing_carries_the_reference_number() -> None:
+    listing = ParsedListing(
+        source="freelancermap",
+        external_url="https://x/3",
+        url_hash="h3",
+        title="Py Dev",
+        description="Build async services",
+        skills=[],
+        start_date=None,
+        start_asap=True,
+        end_date=None,
+        location=None,
+        remote_status=RemoteStatus.REMOTE,
+        posted_at=None,
+        posted_at_precision=PostedPrecision.UNKNOWN,
+        raw={"id": 3028498},
+    )
+    assert "Reference: 3028498" in render_listing(listing)
 
 
 def test_load_prompt_reads_v1() -> None:
