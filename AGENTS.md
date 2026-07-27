@@ -92,7 +92,7 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
 - Scheduler daemon (scan loop + Slack bot): `uv run project-pilot daemon`
-- Slack bot only (Apply buttons, `/apply`, thread review): `uv run project-pilot bot`
+- Slack bot only (Apply buttons, `/apply`, `/check`, thread review): `uv run project-pilot bot`
 - Post a test Slack message: `uv run project-pilot test-notify`
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
 - Reporting summary: `uv run project-pilot stats`

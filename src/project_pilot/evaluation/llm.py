@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.ingestion.parser import ParsedListing
+from project_pilot.models import Listing
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
@@ -74,6 +75,32 @@ def load_prompt(version: str = PROMPT_VERSION) -> str:
 def render_listing(listing: ParsedListing) -> str:
     """Format a parsed listing into the text block handed to the model."""
     parts = [f"Title: {listing.title}", f"Remote: {listing.remote_status.value}"]
+    if listing.location:
+        parts.append(f"Location: {listing.location}")
+    if listing.start_asap:
+        parts.append("Start: ab sofort")
+    elif listing.start_date is not None:
+        parts.append(f"Start: {listing.start_date.isoformat()}")
+    if listing.skills:
+        parts.append("Skills: " + ", ".join(listing.skills))
+    parts.append("")
+    parts.append(listing.description)
+    return "\n".join(parts)
+
+
+def render_listing_entity(listing: Listing) -> str:
+    """Format a stored listing into the text block handed to the model."""
+    raw = listing.raw or {}
+    parts = [f"Title: {listing.title}"]
+    company = raw.get("company")
+    if isinstance(company, str) and company:
+        parts.append(f"Company: {company}")
+    contact = " ".join(
+        part for part in (raw.get("firstName"), raw.get("lastName")) if isinstance(part, str)
+    ).strip()
+    if contact:
+        parts.append(f"Contact: {contact}")
+    parts.append(f"Remote: {listing.remote_status.value}")
     if listing.location:
         parts.append(f"Location: {listing.location}")
     if listing.start_asap:

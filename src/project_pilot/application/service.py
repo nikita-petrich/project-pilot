@@ -14,11 +14,11 @@ from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.config import CvAttachments
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
-from project_pilot.evaluation.llm import render_listing
+from project_pilot.evaluation.llm import render_listing, render_listing_entity
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash, detect_language
 from project_pilot.ingestion.parser import ParsedListing
-from project_pilot.models import Application, ApplicationStatus, Listing
+from project_pilot.models import Application, ApplicationStatus
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -56,32 +56,6 @@ def _iter_strings(value: object) -> Iterator[str]:
     elif isinstance(value, list):
         for item in value:
             yield from _iter_strings(item)
-
-
-def render_listing_entity(listing: Listing) -> str:
-    """Format a stored listing into the text block handed to the draft LLM."""
-    raw = listing.raw or {}
-    parts = [f"Title: {listing.title}"]
-    company = raw.get("company")
-    if isinstance(company, str) and company:
-        parts.append(f"Company: {company}")
-    contact = " ".join(
-        part for part in (raw.get("firstName"), raw.get("lastName")) if isinstance(part, str)
-    ).strip()
-    if contact:
-        parts.append(f"Contact: {contact}")
-    parts.append(f"Remote: {listing.remote_status.value}")
-    if listing.location:
-        parts.append(f"Location: {listing.location}")
-    if listing.start_asap:
-        parts.append("Start: ab sofort")
-    elif listing.start_date is not None:
-        parts.append(f"Start: {listing.start_date.isoformat()}")
-    if listing.skills:
-        parts.append("Skills: " + ", ".join(listing.skills))
-    parts.append("")
-    parts.append(listing.description)
-    return "\n".join(parts)
 
 
 @dataclass(frozen=True, slots=True)
