@@ -1,13 +1,14 @@
 """Tests for the Slack bot routing (fake poster + fake application service)."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.service import DraftView
 from project_pilot.errors import ApplicationStateError, EmailSendError
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import ApplicationStatus, PostedPrecision, RemoteStatus
 from project_pilot.notification.slack import Block, PostedMessage
-from project_pilot.notification.slack_bot import USAGE, SlackBot
+from project_pilot.notification.slack_bot import DEFAULT_IMAGE_INSTRUCTION, USAGE, SlackBot
 
 CHANNEL = "C1"
 
@@ -106,6 +107,7 @@ class _FakeService:
         self.by_ref: dict[str, DraftView] = {}
         self.known_urls: dict[str, int] = {}
         self.error: Exception | None = None
+        self.last_images: list[str] = []
 
     def _result(self, name: str, arg: object) -> DraftView:
         self.calls.append((name, arg))
@@ -119,10 +121,16 @@ class _FakeService:
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView:
         return self._result("draft_from_parsed", parsed.external_url)
 
-    async def draft_from_text(self, text: str) -> DraftView:
+    async def draft_from_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
+        self.last_images = [image.name for image in images]
         return self._result("draft_from_text", text)
 
-    async def revise(self, application_id: int, instruction: str) -> DraftView:
+    async def revise(
+        self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
+        self.last_images = [image.name for image in images]
         return self._result("revise", (application_id, instruction))
 
     async def set_recipient(self, application_id: int, email: str) -> DraftView:
@@ -165,12 +173,25 @@ def _bot(
 
 
 def _file_event(
-    name: str, *, channel: str = CHANNEL, url: str | None = "https://files.slack/x"
+    name: str,
+    *,
+    channel: str = CHANNEL,
+    url: str | None = "https://files.slack/x",
+    mimetype: str | None = None,
+    thread_ts: str | None = None,
+    text: str = "",
 ) -> dict[str, object]:
     file: dict[str, object] = {"name": name}
     if url is not None:
         file["url_private_download"] = url
-    return {"event": {"type": "message", "channel": channel, "files": [file]}}
+    if mimetype is not None:
+        file["mimetype"] = mimetype
+    event: dict[str, object] = {"type": "message", "channel": channel, "files": [file]}
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    if text:
+        event["text"] = text
+    return {"event": event}
 
 
 def _interactive(
@@ -395,3 +416,77 @@ async def test_bot_file_upload_is_ignored() -> None:
     envelope["bot_id"] = "B1"  # the bot's own uploads must not loop back
     await _bot(poster, service, file_reader=reader).dispatch("events_api", event)
     assert service.calls == []
+
+
+async def _png_reader(url: str) -> bytes:
+    assert url == "https://files.slack/x"
+    return b"\x89PNG"
+
+
+async def test_image_upload_drafts_with_vision() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", text="Zusatzinfo")
+    )
+    assert ("draft_from_text", "Zusatzinfo") in service.calls
+    assert service.last_images == ["shot.png"]
+    assert any("Application from image" in text for text, _ in poster.texts)
+    assert poster.draft_rendered()
+
+
+async def test_image_in_draft_thread_revises_with_vision() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event("shot.png", mimetype="image/png", thread_ts="111.1", text="Bitte anpassen"),
+    )
+    assert ("revise", (1, "Bitte anpassen")) in service.calls
+    assert service.last_images == ["shot.png"]
+    assert poster.draft_rendered()
+
+
+async def test_image_only_thread_reply_revises_with_default_instruction() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", thread_ts="111.1")
+    )
+    assert ("revise", (1, DEFAULT_IMAGE_INSTRUCTION)) in service.calls
+    assert service.last_images == ["shot.png"]
+
+
+async def test_email_reply_with_image_still_sets_recipient() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event(
+            "sig.png",
+            mimetype="image/png",
+            thread_ts="111.1",
+            text="<mailto:neu@firma.de|neu@firma.de>",
+        ),
+    )
+    assert ("set_recipient", (1, "neu@firma.de")) in service.calls
+    assert not any(name == "revise" for name, _ in service.calls)
+
+
+async def test_non_image_file_in_draft_thread_posts_hint() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event("doc.pdf", mimetype="application/pdf", thread_ts="111.1", text="anpassen"),
+    )
+    assert service.calls == []
+    assert any("Only images" in text for text, _ in poster.texts)
+
+
+async def test_image_in_unknown_thread_starts_a_new_draft() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", thread_ts="999.9")
+    )
+    assert ("draft_from_text", "") in service.calls
+    assert service.last_images == ["shot.png"]

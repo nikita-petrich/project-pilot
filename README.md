@@ -119,6 +119,9 @@ change how applications are written. The draft posts as **one** message:
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
+  Attach a screenshot to the reply (with or without text) and it goes to the LLM
+  as vision input — e.g. a picture of the client's answer or of the listing detail
+  the revision should reflect.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
   (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
   your mail client with subject (and recipient, once known) prefilled — available
@@ -129,9 +132,12 @@ change how applications are written. The draft posts as **one** message:
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
-**Uploading a file** (PDF or text) to the channel drafts from its contents the same
-way — drop in a project-description PDF and the draft appears. Nothing is ever sent
-without the explicit Send tap.
+**Uploading a file** (PDF, text, or image) to the channel drafts from its contents
+the same way — drop in a project-description PDF, or a **screenshot of the listing**
+(PNG/JPEG/WebP/GIF, optionally with a caption) and the draft appears; screenshots
+are read by the vision LLM directly. Slash commands cannot carry files in Slack, so
+the upload *is* the image form of `/apply`. Nothing is ever sent without the
+explicit Send tap.
 
 ## Running on the home server (Docker)
 

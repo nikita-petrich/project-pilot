@@ -1,5 +1,7 @@
 """LLM generation of personalized application drafts (subject, body, LinkedIn)."""
 
+import base64
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -7,11 +9,12 @@ from typing import TYPE_CHECKING, Protocol
 
 from openai import AsyncOpenAI
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.errors import ConfigError, LlmSchemaError
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
 
 PROMPT_VERSION = "application"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -27,7 +30,14 @@ class DraftResponse:
 
 
 class StructuredDraftClient(Protocol):
-    async def complete(self, *, model: str, system: str, user: str) -> DraftResponse: ...
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> DraftResponse: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,9 +79,15 @@ class ApplicationGenerator:
         self._prompt_template = prompt_template
         self._prompt_version = prompt_version
 
-    async def generate(self, *, profile_text: str, listing_text: str) -> GeneratedDraft:
+    async def generate(
+        self,
+        *,
+        profile_text: str,
+        listing_text: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> GeneratedDraft:
         user = f"## Candidate profile\n{profile_text}\n\n## Project listing\n{listing_text}"
-        return await self._complete(user)
+        return await self._complete(user, images)
 
     async def revise(
         self,
@@ -80,6 +96,7 @@ class ApplicationGenerator:
         listing_text: str,
         current: ApplicationDraft,
         instruction: str,
+        images: Sequence[ImageAttachment] = (),
     ) -> GeneratedDraft:
         user = (
             f"## Candidate profile\n{profile_text}\n\n"
@@ -88,15 +105,15 @@ class ApplicationGenerator:
             f"LinkedIn: {current.linkedin_message}\n\n"
             f"## Revision instruction\n{instruction}"
         )
-        return await self._complete(user)
+        return await self._complete(user, images)
 
-    async def _complete(self, user: str) -> GeneratedDraft:
+    async def _complete(self, user: str, images: Sequence[ImageAttachment] = ()) -> GeneratedDraft:
         started = perf_counter()
         detail = "no response"
         for _ in range(2):
             try:
                 response = await self._client.complete(
-                    model=self._model, system=self._prompt_template, user=user
+                    model=self._model, system=self._prompt_template, user=user, images=images
                 )
             except Exception as err:  # retried once, then surfaced as LlmSchemaError
                 detail = f"llm call failed: {err}"
@@ -123,11 +140,28 @@ class OpenAiDraftClient:
         self._client = client or AsyncOpenAI(api_key=api_key)
 
     async def complete(
-        self, *, model: str, system: str, user: str
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
     ) -> DraftResponse:  # pragma: no cover
+        content: str | list[ChatCompletionContentPartParam] = user
+        if images:
+            parts: list[ChatCompletionContentPartParam] = [{"type": "text", "text": user}]
+            for image in images:
+                encoded = base64.b64encode(image.data).decode("ascii")
+                parts.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{image.mime_type};base64,{encoded}"},
+                    }
+                )
+            content = parts
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user", "content": content},
         ]
         completion = await self._client.chat.completions.parse(
             model=model,

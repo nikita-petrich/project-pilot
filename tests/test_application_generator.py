@@ -1,7 +1,10 @@
 """Tests for the application draft generator (retry, failure surfacing, prompts)."""
 
+from collections.abc import Sequence
+
 import pytest
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import (
     ApplicationGenerator,
     DraftResponse,
@@ -19,9 +22,18 @@ class _FakeClient:
     def __init__(self, responses: list[DraftResponse | Exception]) -> None:
         self.responses = list(responses)
         self.calls: list[str] = []
+        self.images: list[list[str]] = []
 
-    async def complete(self, *, model: str, system: str, user: str) -> DraftResponse:
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> DraftResponse:
         self.calls.append(user)
+        self.images.append([image.name for image in images])
         result = self.responses.pop(0)
         if isinstance(result, Exception):
             raise result
@@ -74,6 +86,22 @@ async def test_revise_prompt_includes_current_draft_and_instruction() -> None:
     assert "Alt" in prompt
     assert "Alter Text" in prompt
     assert "Bitte kürzer und auf Englisch" in prompt
+
+
+async def test_generate_and_revise_forward_images_to_the_client() -> None:
+    image = ImageAttachment(name="listing.png", mime_type="image/png", data=b"\x89PNG")
+    response = DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)
+    client = _FakeClient([response, response])
+    generator = _generator(client)
+    await generator.generate(profile_text="p", listing_text="l", images=[image])
+    await generator.revise(
+        profile_text="p",
+        listing_text="l",
+        current=_draft(),
+        instruction="Bitte kürzer",
+        images=[image],
+    )
+    assert client.images == [["listing.png"], ["listing.png"]]
 
 
 def test_load_application_prompt_reads_the_single_file() -> None:

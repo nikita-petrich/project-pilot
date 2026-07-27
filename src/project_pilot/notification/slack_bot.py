@@ -1,5 +1,9 @@
 """Slack bot: routes Block-Kit button actions, ``/apply``, and thread replies.
 
+Uploads work everywhere text does: a PDF/text/image dropped in the channel starts
+a draft (the image path of ``/apply``, since slash commands cannot carry files),
+and an image posted in a draft's thread feeds the next revision as vision input.
+
 The routing is pure and unit-tested; the Socket Mode connection that feeds it is
 wired in ``cli.py`` (network boundary). Only the configured channel is served, and
 every state change is guarded in the service layer.
@@ -8,10 +12,15 @@ every state change is guarded in the service layer.
 import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
-from project_pilot.application.documents import extract_document_text
+from project_pilot.application.documents import (
+    ImageAttachment,
+    extract_document_text,
+    is_image_mime_type,
+)
 from project_pilot.application.service import DraftView, is_email
 from project_pilot.errors import ApplicationStateError, EmailSendError, LlmSchemaError
 from project_pilot.ingestion.parser import ParsedListing
@@ -25,7 +34,17 @@ from project_pilot.notification.slack import (
 
 logger = logging.getLogger(__name__)
 
-USAGE = "Usage: `/apply <freelancermap link or project description>`"
+USAGE = (
+    "Usage: `/apply <freelancermap link or project description>` — or upload a "
+    "screenshot/PDF of the listing directly to the channel."
+)
+
+# What an image-only thread reply means: fold the screenshot into the draft.
+DEFAULT_IMAGE_INSTRUCTION = "Revise the draft taking the attached image(s) into account."
+
+# More screenshots than this per message is almost certainly a mistake; cap the
+# vision payload instead of uploading a whole gallery to the LLM.
+_MAX_IMAGES = 5
 
 
 class SlackPoster(Protocol):
@@ -49,8 +68,12 @@ class ApplicationFlow(Protocol):
 
     async def draft_for_listing(self, listing_id: int) -> DraftView: ...
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView: ...
-    async def draft_from_text(self, text: str) -> DraftView: ...
-    async def revise(self, application_id: int, instruction: str) -> DraftView: ...
+    async def draft_from_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView: ...
+    async def revise(
+        self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView: ...
     async def set_recipient(self, application_id: int, email: str) -> DraftView: ...
     async def send(self, application_id: int) -> DraftView: ...
     async def cancel(self, application_id: int) -> DraftView: ...
@@ -80,6 +103,31 @@ def _mapping(value: object) -> dict[str, object]:
 def _download_url(file: dict[str, object]) -> str | None:
     """Slack's authenticated download link for an uploaded file."""
     return _text(file.get("url_private_download")) or _text(file.get("url_private"))
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageFile:
+    """A supported image upload, not yet downloaded (name, type, and where from)."""
+
+    name: str
+    mime_type: str
+    url: str
+
+
+def _image_files(files: list[dict[str, object]]) -> list[_ImageFile]:
+    """The vision-capable image uploads among ``files`` (capped at ``_MAX_IMAGES``)."""
+    picked: list[_ImageFile] = []
+    for file in files:
+        mime_type = _text(file.get("mimetype"))
+        url = _download_url(file)
+        if mime_type is None or not is_image_mime_type(mime_type) or url is None:
+            continue
+        picked.append(
+            _ImageFile(name=_text(file.get("name")) or "screenshot", mime_type=mime_type, url=url)
+        )
+        if len(picked) == _MAX_IMAGES:
+            break
+    return picked
 
 
 def _text(value: object) -> str | None:
@@ -140,6 +188,8 @@ class SlackBot:
             await self.on_file_share(
                 channel=_text(event.get("channel")),
                 files=[_mapping(item) for item in files],
+                text=_text(event.get("text")) or "",
+                thread_ts=_text(event.get("thread_ts")),
             )
             return
         # A file-share message also carries a subtype; only text replies flow on.
@@ -214,9 +264,27 @@ class SlackBot:
 
         return fetch_and_draft
 
-    async def on_file_share(self, *, channel: str | None, files: list[dict[str, object]]) -> None:
-        """Draft from an uploaded file (PDF or text) exactly like ``/apply <text>``."""
+    async def on_file_share(
+        self,
+        *,
+        channel: str | None,
+        files: list[dict[str, object]],
+        text: str = "",
+        thread_ts: str | None = None,
+    ) -> None:
+        """Route an upload: in a draft's thread it feeds the revision, in the
+        channel it starts a draft (PDF/text extracted, images via vision) exactly
+        like ``/apply <text>``."""
         if channel != self._channel or self._file_reader is None:
+            return
+        if thread_ts is not None:
+            view = await self._service.find_by_draft_ref(f"{channel}:{thread_ts}")
+            if view is not None:
+                await self._revise_with_images(view, thread_ts=thread_ts, text=text, files=files)
+                return
+        images = _image_files(files)
+        if images:
+            await self._draft_from_images(images, text=text)
             return
         picked = next(
             ((file, url) for file in files if (url := _download_url(file)) is not None), None
@@ -238,6 +306,64 @@ class SlackBot:
         await self._post_new_draft(
             factory, parent.ts, progress="⏳ Reading file and creating draft …"
         )
+
+    async def _draft_from_images(self, images: list[_ImageFile], *, text: str) -> None:
+        """Start a draft from screenshot upload(s), like ``/apply`` with a picture."""
+        label = images[0].name if len(images) == 1 else f"{len(images)} images"
+        parent = await self._client.post_text(f"📥 Application from image: {label[:150]}")
+        if parent is None:
+            return
+        caption = _unwrap_slack_links(text).strip()
+
+        async def factory() -> DraftView:
+            return await self._service.draft_from_text(
+                caption, images=await self._download_images(images)
+            )
+
+        await self._post_new_draft(
+            factory, parent.ts, progress="⏳ Reading image and creating draft …"
+        )
+
+    async def _revise_with_images(
+        self, view: DraftView, *, thread_ts: str, text: str, files: list[dict[str, object]]
+    ) -> None:
+        """An upload in a draft's thread: images become vision input for the revision."""
+        message = _unwrap_slack_links(text).strip()
+        if is_email(message):
+            # The reply is really a recipient correction; the upload changes nothing.
+            await self._post_new_draft(
+                lambda: self._service.set_recipient(view.application_id, message),
+                thread_ts,
+                progress="✅ Setting recipient …",
+            )
+            return
+        images = _image_files(files)
+        if not images:
+            await self._client.post_text(
+                "⚠️ Only images (PNG/JPEG/WebP/GIF) can accompany a revision — "
+                "please paste document content as text.",
+                thread_ts=thread_ts,
+            )
+            return
+        instruction = message or DEFAULT_IMAGE_INSTRUCTION
+
+        async def factory() -> DraftView:
+            return await self._service.revise(
+                view.application_id, instruction, images=await self._download_images(images)
+            )
+
+        await self._post_new_draft(factory, thread_ts, progress="✏️ Revising the draft …")
+
+    async def _download_images(self, images: list[_ImageFile]) -> list[ImageAttachment]:
+        reader = self._file_reader
+        if reader is None:  # guarded by every caller; keeps the types honest
+            return []
+        return [
+            ImageAttachment(
+                name=image.name, mime_type=image.mime_type, data=await reader(image.url)
+            )
+            for image in images
+        ]
 
     async def on_thread_message(
         self, *, channel: str | None, thread_ts: str | None, text: str, from_bot: bool
