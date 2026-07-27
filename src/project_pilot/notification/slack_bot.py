@@ -5,11 +5,13 @@ wired in ``cli.py`` (network boundary). Only the configured channel is served, a
 every state change is guarded in the service layer.
 """
 
+import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
+from project_pilot.application.documents import extract_document_text
 from project_pilot.application.service import DraftView, is_email
 from project_pilot.errors import ApplicationStateError, EmailSendError, LlmSchemaError
 from project_pilot.ingestion.parser import ParsedListing
@@ -58,6 +60,7 @@ class ApplicationFlow(Protocol):
 
 
 type ListingFetcher = Callable[[str], Awaitable[ParsedListing]]
+type FileReader = Callable[[str], Awaitable[bytes]]
 
 
 # Slack auto-links addresses and URLs in message text: an e-mail becomes
@@ -74,6 +77,11 @@ def _mapping(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
 
+def _download_url(file: dict[str, object]) -> str | None:
+    """Slack's authenticated download link for an uploaded file."""
+    return _text(file.get("url_private_download")) or _text(file.get("url_private"))
+
+
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
@@ -88,11 +96,13 @@ class SlackBot:
         channel: str,
         service: ApplicationFlow,
         fetcher: ListingFetcher | None = None,
+        file_reader: FileReader | None = None,
     ) -> None:
         self._client = client
         self._channel = channel
         self._service = service
         self._fetcher = fetcher
+        self._file_reader = file_reader
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -124,12 +134,20 @@ class SlackBot:
         event = _mapping(payload.get("event"))
         if event.get("type") != "message":
             return
-        from_bot = bool(event.get("bot_id")) or event.get("subtype") is not None
+        from_bot = bool(event.get("bot_id"))
+        files = event.get("files")
+        if not from_bot and isinstance(files, list) and files:
+            await self.on_file_share(
+                channel=_text(event.get("channel")),
+                files=[_mapping(item) for item in files],
+            )
+            return
+        # A file-share message also carries a subtype; only text replies flow on.
         await self.on_thread_message(
             channel=_text(event.get("channel")),
             thread_ts=_text(event.get("thread_ts")),
             text=_text(event.get("text")) or "",
-            from_bot=from_bot,
+            from_bot=from_bot or event.get("subtype") is not None,
         )
 
     async def _dispatch_command(self, payload: dict[str, object]) -> None:
@@ -196,6 +214,31 @@ class SlackBot:
             return await self._service.draft_from_parsed(parsed)
 
         return fetch_and_draft
+
+    async def on_file_share(self, *, channel: str | None, files: list[dict[str, object]]) -> None:
+        """Draft from an uploaded file (PDF or text) exactly like ``/apply <text>``."""
+        if channel != self._channel or self._file_reader is None:
+            return
+        picked = next(
+            ((file, url) for file in files if (url := _download_url(file)) is not None), None
+        )
+        if picked is None:
+            return
+        file, url = picked
+        name = _text(file.get("name")) or "upload"
+        parent = await self._client.post_text(f"📥 Bewerbung aus Datei: {name[:150]}")
+        if parent is None:
+            return
+        reader = self._file_reader
+
+        async def factory() -> DraftView:
+            data = await reader(url)
+            text = await asyncio.to_thread(extract_document_text, name, data)
+            return await self._service.draft_from_text(text)
+
+        await self._post_new_draft(
+            factory, parent.ts, progress="⏳ Lese Datei und erstelle Entwurf …"
+        )
 
     async def on_thread_message(
         self, *, channel: str | None, thread_ts: str | None, text: str, from_bot: bool

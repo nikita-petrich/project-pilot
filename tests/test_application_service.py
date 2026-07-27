@@ -15,7 +15,7 @@ from project_pilot.application.service import (
     is_email,
     render_listing_entity,
 )
-from project_pilot.config import SmtpConfig
+from project_pilot.config import CvAttachments, SmtpConfig
 from project_pilot.errors import ApplicationStateError, EmailSendError
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
@@ -110,6 +110,7 @@ def _service(
     drafts: list[ApplicationDraft] | None = None,
     *,
     mailer: SmtpMailer | None = None,
+    cv_attachments: CvAttachments | None = None,
 ) -> ApplicationService:
     generator, _ = _generator(drafts if drafts is not None else [_draft(), _draft()])
     return ApplicationService(
@@ -117,6 +118,7 @@ def _service(
         generator=generator,
         profile=_profile(),
         mailer=mailer,
+        cv_attachments=cv_attachments,
     )
 
 
@@ -276,6 +278,43 @@ async def test_send_marks_sent_exactly_once(
     with pytest.raises(ApplicationStateError):  # double-tap guard
         await service.send(view.application_id)
     assert len(send.sent) == 1
+
+
+async def test_send_attaches_the_cv_matching_the_draft_language(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: object,
+) -> None:
+    from pathlib import Path
+
+    base = Path(str(tmp_path))
+    cv_de, cv_en = base / "CV-DE.pdf", base / "CV-EN.pdf"
+    cv_de.write_bytes(b"%PDF-DE")
+    cv_en.write_bytes(b"%PDF-EN")
+    attachments = CvAttachments(de=cv_de, en=cv_en)
+
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    send = _FakeSend()
+    english = _draft()
+    english.body = "Dear Sir or Madam, I would be glad to support your project."
+    service = _service(
+        session_factory, drafts=[english, english], mailer=_mailer(send), cv_attachments=attachments
+    )
+    view = await service.draft_for_listing(listing_id)
+    await service.send(view.application_id)
+
+    files = [part.get_filename() for part in send.sent[0].iter_attachments()]
+    assert files == ["CV-EN.pdf"]  # English body → English CV
+
+
+async def test_send_without_configured_cv_has_no_attachment(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    send = _FakeSend()
+    service = _service(session_factory, mailer=_mailer(send))  # no cv_attachments
+    view = await service.draft_for_listing(listing_id)
+    await service.send(view.application_id)
+    assert list(send.sent[0].iter_attachments()) == []
 
 
 async def test_send_without_recipient_or_mailer_is_rejected(

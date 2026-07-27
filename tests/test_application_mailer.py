@@ -94,3 +94,29 @@ async def test_subject_newlines_are_flattened() -> None:
     await SmtpMailer(_config(), send_fn=fake).send(to="a@b.de", subject="Zeile1\nZeile2", body="b")
     assert fake.message is not None
     assert fake.message["Subject"] == "Zeile1 Zeile2"
+
+
+async def test_send_attaches_files_with_name_and_type(tmp_path: object) -> None:
+    from pathlib import Path
+
+    cv = Path(str(tmp_path)) / "CV-DE.pdf"
+    cv.write_bytes(b"%PDF-1.4 fake")
+    fake = _FakeSend()
+    await SmtpMailer(_config(), send_fn=fake).send(
+        to="a@b.de", subject="s", body="b", attachments=[cv]
+    )
+    assert fake.message is not None
+    parts = list(fake.message.iter_attachments())
+    assert [p.get_filename() for p in parts] == ["CV-DE.pdf"]
+    assert parts[0].get_content_type() == "application/pdf"
+    assert parts[0].get_payload(decode=True) == b"%PDF-1.4 fake"
+
+
+async def test_missing_attachment_file_raises_email_send_error(tmp_path: object) -> None:
+    from pathlib import Path
+
+    missing = Path(str(tmp_path)) / "nope.pdf"
+    with pytest.raises(EmailSendError, match="attachment"):
+        await SmtpMailer(_config(), send_fn=_FakeSend()).send(
+            to="a@b.de", subject="s", body="b", attachments=[missing]
+        )

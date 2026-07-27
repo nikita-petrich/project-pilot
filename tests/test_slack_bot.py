@@ -1,5 +1,7 @@
 """Tests for the Slack bot routing (fake poster + fake application service)."""
 
+from collections.abc import Awaitable, Callable
+
 from project_pilot.application.service import DraftView
 from project_pilot.errors import ApplicationStateError, EmailSendError
 from project_pilot.ingestion.parser import ParsedListing
@@ -143,7 +145,11 @@ class _FakeService:
 
 
 def _bot(
-    poster: _FakePoster, service: _FakeService, *, fetched: ParsedListing | None = None
+    poster: _FakePoster,
+    service: _FakeService,
+    *,
+    fetched: ParsedListing | None = None,
+    file_reader: Callable[[str], Awaitable[bytes]] | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -154,7 +160,17 @@ def _bot(
         channel=CHANNEL,
         service=service,
         fetcher=fetcher if fetched is not None else None,
+        file_reader=file_reader,
     )
+
+
+def _file_event(
+    name: str, *, channel: str = CHANNEL, url: str | None = "https://files.slack/x"
+) -> dict[str, object]:
+    file: dict[str, object] = {"name": name}
+    if url is not None:
+        file["url_private_download"] = url
+    return {"event": {"type": "message", "channel": channel, "files": [file]}}
 
 
 def _interactive(
@@ -331,3 +347,51 @@ async def test_reply_to_unknown_thread_is_ignored() -> None:
     await _bot(poster, service).dispatch("events_api", _event("Bitte kürzer"))
     assert service.calls == []
     assert poster.texts == []
+
+
+async def test_file_upload_drafts_from_extracted_text() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        assert url == "https://files.slack/x"
+        return b"Senior Python Backend Engineer gesucht"
+
+    await _bot(poster, service, file_reader=reader).dispatch(
+        "events_api", _file_event("projekt.txt")
+    )
+    assert any(
+        name == "draft_from_text" and "Python Backend" in str(arg) for name, arg in service.calls
+    )
+    assert poster.draft_rendered()
+
+
+async def test_file_upload_without_reader_is_ignored() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("events_api", _file_event("x.txt"))
+    assert service.calls == [] and poster.texts == []
+
+
+async def test_file_upload_from_foreign_channel_is_ignored() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        return b"text"
+
+    await _bot(poster, service, file_reader=reader).dispatch(
+        "events_api", _file_event("x.txt", channel="C2")
+    )
+    assert service.calls == []
+
+
+async def test_bot_file_upload_is_ignored() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        return b"text"
+
+    event = _file_event("x.txt")
+    envelope = event["event"]
+    assert isinstance(envelope, dict)
+    envelope["bot_id"] = "B1"  # the bot's own uploads must not loop back
+    await _bot(poster, service, file_reader=reader).dispatch("events_api", event)
+    assert service.calls == []

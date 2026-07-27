@@ -11,11 +11,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.generator import ApplicationGenerator, GeneratedDraft
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
+from project_pilot.config import CvAttachments
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
 from project_pilot.evaluation.llm import render_listing
 from project_pilot.ingestion.client import BASE_URL
-from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
+from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash, detect_language
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import Application, ApplicationStatus, Listing
 from project_pilot.profile_loader import Profile
@@ -122,11 +123,13 @@ class ApplicationService:
         generator: ApplicationGenerator,
         profile: Profile,
         mailer: SmtpMailer | None,
+        cv_attachments: CvAttachments | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._generator = generator
         self._profile = profile
         self._mailer = mailer
+        self._cv_attachments = cv_attachments
 
     async def draft_for_listing(self, listing_id: int) -> DraftView:
         """Generate and persist a draft for a stored listing (Apply button, known URL)."""
@@ -250,10 +253,18 @@ class ApplicationService:
             subject = application.subject
             body = application.body
 
+        # Attach the CV that matches the draft language (English draft → EN CV).
+        cv = None
+        if self._cv_attachments is not None:
+            cv = self._cv_attachments.for_language(detect_language(body))
+        attachments = [cv] if cv is not None else []
+
         # The SMTP call happens outside any unit of work so a slow/failing server
         # never holds a transaction; the outcome is recorded in a follow-up one.
         try:
-            await self._mailer.send(to=recipient, subject=subject, body=body)
+            await self._mailer.send(
+                to=recipient, subject=subject, body=body, attachments=attachments
+            )
         except Exception as err:
             try:
                 async with session_scope(self._session_factory) as session:

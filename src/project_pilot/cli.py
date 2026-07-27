@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
 
+import httpx
 import typer
 from slack_sdk.web.async_client import AsyncWebClient
 
@@ -106,6 +107,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
         generator=generator,
         profile=profile,
         mailer=mailer,
+        cv_attachments=settings.cv_attachments(),
     )
     web = AsyncWebClient(token=config.bot_token)
     client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
@@ -124,8 +126,19 @@ def _build_bot(settings: Settings) -> BotRuntime:
         finally:
             await politeness.aclose()
 
+    async def read_slack_file(url: str) -> bytes:
+        headers = {"Authorization": f"Bearer {config.bot_token}"}
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            response = await http.get(url, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+            return response.content
+
     slack_bot = SlackBot(
-        client=client, channel=config.channel, service=service, fetcher=fetch_listing
+        client=client,
+        channel=config.channel,
+        service=service,
+        fetcher=fetch_listing,
+        file_reader=read_slack_file,
     )
 
     async def closer() -> None:

@@ -126,11 +126,14 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     assert send_button["value"] == "7"
 
 
-def test_draft_blocks_without_recipient_only_cancel_and_asks_email() -> None:
+def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() -> None:
     blocks = format_draft_blocks(
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
-    assert _action_ids(blocks) == ["cancel"]
+    # No Senden (no recipient yet), but the mail-client button is available up front.
+    assert _action_ids(blocks) == ["open_mail", "cancel"]
+    mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
+    assert str(mail_button["url"]).startswith("mailto:?subject=Bewerbung")
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "E-Mail-Adresse" in str(context[0]["text"])

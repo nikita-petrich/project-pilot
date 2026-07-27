@@ -202,8 +202,10 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         actions: list[Block] = []
         if view.recipient:
             actions.append(_button("📤 Senden", action_id="send", value=str(view.application_id)))
-            mailto = f"mailto:{view.recipient}?subject={quote(view.subject)}"
-            actions.append(_button("📧 Im Mail-Client öffnen", action_id="open_mail", url=mailto))
+        # "Im Mail-Client öffnen" is always offered — a missing recipient is simply
+        # left blank in the mailto and filled in the mail client.
+        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
+        actions.append(_button("📧 Im Mail-Client öffnen", action_id="open_mail", url=mailto))
         actions.append(_button("❌ Verwerfen", action_id="cancel", value=str(view.application_id)))
         blocks.append({"type": "actions", "elements": actions})
 

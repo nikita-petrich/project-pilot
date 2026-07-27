@@ -1,6 +1,7 @@
 """Application configuration via pydantic-settings (parsed and validated at boot)."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, ValidationError, field_validator
@@ -31,6 +32,19 @@ class SlackConfig:
     bot_token: str
     app_token: str
     channel: str
+
+
+@dataclass(frozen=True, slots=True)
+class CvAttachments:
+    """Optional CV files attached to application e-mails, chosen by draft language."""
+
+    de: Path | None
+    en: Path | None
+
+    def for_language(self, language: str | None) -> Path | None:
+        """The CV matching the draft language (English → EN, otherwise the German CV)."""
+        chosen = self.en if language == "en" else self.de
+        return chosen if chosen is not None and chosen.is_file() else None
 
 
 class Settings(BaseSettings):
@@ -65,6 +79,9 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_starttls: bool = True
+
+    cv_de_path: str = ""
+    cv_en_path: str = ""
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -156,6 +173,13 @@ class Settings(BaseSettings):
             password=self.smtp_password,
             sender=self.smtp_from or self.smtp_user,
             use_starttls=self.smtp_starttls,
+        )
+
+    def cv_attachments(self) -> CvAttachments:
+        """Resolve the configured CV files (either may be unset)."""
+        return CvAttachments(
+            de=Path(self.cv_de_path) if self.cv_de_path else None,
+            en=Path(self.cv_en_path) if self.cv_en_path else None,
         )
 
 

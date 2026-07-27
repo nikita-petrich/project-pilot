@@ -98,7 +98,7 @@ features:
   slash_commands:
     - { command: /apply, description: Bewerbung erstellen, usage_hint: "<link oder text>", should_escape: false }
 oauth_config:
-  scopes: { bot: [chat:write, commands, channels:history] }
+  scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:
   event_subscriptions: { bot_events: [message.channels] }
   interactivity: { is_enabled: true }
@@ -123,11 +123,17 @@ change how applications are written. The draft posts as **one** message:
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
   (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
-  your mail client with recipient + subject prefilled; **❌ Verwerfen** cancels.
+  your mail client with subject (and recipient, once known) prefilled — available
+  from the start; **❌ Verwerfen** cancels.
+- **CV attachment** — the sent e-mail attaches your CV automatically, picking the
+  language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
+  the letter references it. Leave the paths unset to send without an attachment.
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
-Nothing is ever sent without the explicit Send tap.
+**Uploading a file** (PDF or text) to the channel drafts from its contents the same
+way — drop in a project-description PDF and the draft appears. Nothing is ever sent
+without the explicit Send tap.
 
 ## Running on the home server (Docker)
 

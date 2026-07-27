@@ -284,6 +284,12 @@ Format je Projekt:
 
 - Interesse am Projekt
 - Kurzer Ausblick / Gesprächsangebot
+- Lebenslauf im Anhang: Die E-Mail versendet automatisch den passenden CV als
+  PDF-Anhang. Verweise **genau einmal** natürlich darauf (HARTE REGEL), in der
+  Bewerbungssprache, z. B.:
+  - Deutsch: „Meinen Lebenslauf habe ich angehängt."
+  - Englisch: „I have attached my CV for your reference."
+  Behaupte nichts über Anhänge, die nicht existieren, und hänge keinen Dateinamen an.
 - IMMER zu einem kostenlosen Erstgespräch einladen (HARTE REGEL). Nimm den Link, der
   zur oben bestimmten Bewerbungssprache gehört (Deutsch → `Erstgespräch (DE)`,
   Englisch → `Erstgespräch (EN)`), und schreibe genau einen fertigen Satz:

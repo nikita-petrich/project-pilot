@@ -140,3 +140,26 @@ def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> N
     assert smtp.sender == "bewerbung@nik.dev"
     assert smtp.port == 465
     assert smtp.use_starttls is False
+
+
+def test_cv_attachments_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CV_DE_PATH", raising=False)
+    monkeypatch.delenv("CV_EN_PATH", raising=False)
+    cvs = Settings().cv_attachments()
+    assert cvs.de is None and cvs.en is None
+    assert cvs.for_language("en") is None  # nothing configured → no attachment
+
+
+def test_cv_attachments_pick_language_and_require_existing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    from pathlib import Path
+
+    de = Path(str(tmp_path)) / "CV-DE.pdf"
+    de.write_bytes(b"%PDF")
+    monkeypatch.setenv("CV_DE_PATH", str(de))
+    monkeypatch.setenv("CV_EN_PATH", str(Path(str(tmp_path)) / "missing.pdf"))
+    cvs = Settings().cv_attachments()
+    assert cvs.for_language("de") == de
+    assert cvs.for_language(None) == de  # default is the German CV
+    assert cvs.for_language("en") is None  # configured but file absent → skipped
