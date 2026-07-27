@@ -15,6 +15,7 @@ from urllib.parse import quote
 
 from project_pilot.application.schemas import LINKEDIN_LIMIT
 from project_pilot.application.service import DraftView
+from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.models import ApplicationStatus
 from project_pilot.notification.messages import MatchMessage
 
@@ -176,7 +177,10 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
     if message.description:
         blocks.append(_description_block(message.description))
 
-    actions: list[Block] = [_button("📝 Apply", action_id="apply", value=str(listing_id))]
+    actions: list[Block] = [
+        _button("📝 Apply", action_id="apply", value=str(listing_id)),
+        _button("🔎 Find contact", action_id="enrich", value=str(listing_id)),
+    ]
     if message.url:
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
@@ -205,6 +209,12 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         actions: list[Block] = []
         if view.recipient:
             actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
+        # No recipient yet: offer contact research so the address can be found instead
+        # of typed in blind (the button carries the listing id, not the application id).
+        if not view.recipient and view.listing_id is not None:
+            actions.append(
+                _button("🔎 Find contact", action_id="enrich", value=str(view.listing_id))
+            )
         # "Open in mail client" is always offered — a missing recipient is simply
         # left blank in the mailto and filled in the mail client.
         mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
@@ -223,6 +233,54 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     )
     blocks.append(_context(" · ".join(hints)))
     return blocks
+
+
+def format_contact_blocks(enrichment: ContactEnrichment) -> list[Block]:
+    """Build the Block Kit message for a contact-research result (data + research links)."""
+    subject = enrichment.company or enrichment.person or "listing"
+    blocks: list[Block] = [_header(f"🔎 Contact research: {subject}")]
+
+    facts = [
+        _labeled("🏢 Company", enrichment.company),
+        _labeled("👤 Contact", enrichment.person),
+        (_link(enrichment.website, "🌐 Website") if enrichment.website else None),
+        _labeled_list("🧑‍💼 Named on site", enrichment.persons, limit=5),
+    ]
+    facts_text = "\n".join(fact for fact in facts if fact)
+    if facts_text:
+        blocks.append(_section(facts_text))
+
+    if enrichment.emails:
+        blocks.extend(_code_sections("\n".join(enrichment.emails), label="📧 E-mails (best first)"))
+    if enrichment.phones:
+        blocks.extend(_code_sections("\n".join(enrichment.phones), label="📞 Phone"))
+    if not enrichment.emails and not enrichment.phones:
+        blocks.append(
+            _section(
+                "_No direct e-mail or phone found on the company site — "
+                "use the LinkedIn/Google links below._"
+            )
+        )
+
+    links = enrichment.links
+    link_buttons = [
+        _button("🔗 Company on LinkedIn", action_id="open_li_company", url=links.linkedin_company),
+        _button("👥 People on LinkedIn", action_id="open_li_people", url=links.linkedin_people),
+        _button("🔍 Google contact", action_id="open_google", url=links.google_contact),
+    ]
+    blocks.append({"type": "actions", "elements": link_buttons})
+    blocks.append(
+        _context(
+            "🔒 The LinkedIn/Google buttons open a search in your browser — nothing is scraped. "
+            "Reply in a draft's thread with an address to set it as the recipient."
+        )
+    )
+    return blocks
+
+
+def contact_fallback_text(enrichment: ContactEnrichment) -> str:
+    subject = enrichment.company or enrichment.person or "listing"
+    return f"🔎 Contact research: {subject}"
 
 
 def match_fallback_text(message: MatchMessage) -> str:

@@ -142,6 +142,36 @@ def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> N
     assert smtp.use_starttls is False
 
 
+def test_enrichment_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("ENRICHMENT_ENABLED", "ENRICHMENT_SEARCH", "ENRICHMENT_MAX_PAGES"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert settings.enrichment_enabled is False
+    assert settings.has_enrichment() is False
+    assert settings.enrichment_search == "duckduckgo"
+    assert settings.enrichment_max_pages == 6
+
+
+def test_enrichment_enabled_and_search_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_ENABLED", "true")
+    monkeypatch.setenv("ENRICHMENT_SEARCH", "NONE")
+    settings = Settings()
+    assert settings.has_enrichment() is True
+    assert settings.enrichment_search == "none"
+
+
+def test_unknown_search_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_SEARCH", "bing")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_MAX_PAGES", "99")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_cv_attachments_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CV_DE_PATH", raising=False)
     monkeypatch.delenv("CV_EN_PATH", raising=False)

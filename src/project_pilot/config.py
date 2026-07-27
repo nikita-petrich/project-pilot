@@ -11,6 +11,7 @@ from project_pilot.errors import ConfigError
 
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
+_SEARCH_PROVIDERS = frozenset({"duckduckgo", "none"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +88,10 @@ class Settings(BaseSettings):
     analysis_window_min: int = 30
     match_threshold: int = 60
 
+    enrichment_enabled: bool = False
+    enrichment_search: str = "duckduckgo"
+    enrichment_max_pages: int = 6
+
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
@@ -116,6 +121,23 @@ class Settings(BaseSettings):
     def _threshold_bounds(cls, value: int) -> int:
         if not 0 <= value <= 100:
             raise ValueError("MATCH_THRESHOLD must be within 0..100")
+        return value
+
+    @field_validator("enrichment_search", mode="before")
+    @classmethod
+    def _known_search_provider(cls, value: object) -> object:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered not in _SEARCH_PROVIDERS:
+                raise ValueError(f"ENRICHMENT_SEARCH must be one of {sorted(_SEARCH_PROVIDERS)}")
+            return lowered
+        return value
+
+    @field_validator("enrichment_max_pages")
+    @classmethod
+    def _max_pages_bounds(cls, value: int) -> int:
+        if not 1 <= value <= 20:
+            raise ValueError("ENRICHMENT_MAX_PAGES must be within 1..20")
         return value
 
     @field_validator("log_level", mode="before")
@@ -159,6 +181,9 @@ class Settings(BaseSettings):
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
+
+    def has_enrichment(self) -> bool:
+        return self.enrichment_enabled
 
     def has_smtp(self) -> bool:
         return bool(self.smtp_host and self.smtp_user and self.smtp_password)

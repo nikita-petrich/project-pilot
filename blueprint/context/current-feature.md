@@ -5,54 +5,71 @@
 > an ad-hoc fix. Build one thing at a time; `/complete` archives it (to
 > `blueprint/history/features/` or `blueprint/history/fixes/`) and resets this file.
 
-## Feature 17: Slack statt Telegram (Notifier & Bewerbungs-Bot)
+## Feature 18: Kontakt-Anreicherung (contact enrichment: company website + LinkedIn/Google discovery)
 
-**Goal.** Replace Telegram entirely with Slack. A match posts **one** Slack message
-(Block Kit) carrying the full listing plus an **Bewerben** button. The apply flow
-posts **one** message with the complete e-mail (code blocks, copyable, split across
-`section` blocks so nothing is truncated), the LinkedIn message, and action buttons
-**📤 Senden / ❌ Verwerfen / 📧 Im Mail-Client öffnen** (a real `mailto:` URL button —
-Slack allows it, Telegram did not). Draft revisions happen by replying **in the
-message's thread**; a bare e-mail in the thread sets the recipient. `/apply
-<link-or-text>` is a Slack slash command. Runs behind NAT via **Socket Mode** (no
-public URL), free tier.
+**Goal.** Given a match's company (and, when known, the Ansprechpartner), find the
+real contact channel — e-mail and phone — and enrich our data with it. The
+automated, working source is the **company's own website**: discover the site via a
+pluggable web search, then read its **Impressum / Kontakt / Team / Karriere** pages
+(the legally-mandated German contact data) and extract e-mails, phone numbers, and
+contact-person names. LinkedIn and Google are surfaced as **one-click research
+links** (company search + people search), never scraped. Results are shown in Slack
+(a "🔎 Find contact" button on the match and on a recipient-less draft) and stored
+as `contact_leads` for traceability; the found e-mail can become the application
+recipient.
 
-**Out of scope.** No Telegram fallback (full replacement). No Slack Workflow/BOLT
-framework — thin `slack_sdk` AsyncWebClient + SocketModeClient, explicit composition.
-No new application/matching logic; only the delivery/interaction surface changes.
+**Why links, not scraping, for LinkedIn/Google (binding design decision).**
+- LinkedIn's User Agreement forbids automated scraping; it is also technically
+  infeasible here (auth wall, anti-bot) and never exposes phone/e-mail publicly. A
+  scraper would be both non-compliant and useless for the stated goal.
+- This project is compliance-first (robots gate, never bypass 403/captcha). Reading
+  a company's public Impressum is the sanctioned, effective source of phone/e-mail.
+- So LinkedIn/Google are honored as deep links Nik opens in his own browser session;
+  the crawler only fetches company websites, politely and robots-aware.
+
+**Out of scope.** No LinkedIn/Google HTML scraping. No paid data brokers. No bulk
+crawling — bounded page budget per company. No new Slack slash command (the button
+needs no Slack-app change). Feature stays **opt-in** (`ENRICHMENT_ENABLED`), so it
+never makes surprise outbound calls.
 
 ### Steps
 
-- [x] 1. Config & deps: `slack_sdk` dependency; `SlackConfig` + `require_slack()`
-  (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL`), `.env.example`; move the
-  `MatchMessage` data class to `notification/messages.py` (survives Telegram removal).
-- [x] 2. Slack messages: Block Kit builders in `notification/slack.py` — match
-  message (fields + Bewerben button) and draft message (full e-mail split into
-  ≤3000-char code sections, subject, recipient, LinkedIn, Senden/Verwerfen/mailto
-  buttons); thin `SlackClient` wrapper (post/update/thread) over an injectable
-  web-client protocol; unit tests (pure builders + fake client).
-- [x] 3. Data model: applications draft reference becomes a Slack `channel:ts`
-  string — Alembic migration `draft_message_id` (BigInteger) → `draft_ref` (String);
-  repository + service updated (`record_draft_ref`, `find_by_draft_ref`).
-- [x] 4. `SlackBot`: Socket Mode loop routing block-button actions (apply/send/cancel),
-  the `/apply` slash command, and thread replies (revision vs. recipient e-mail);
-  only the configured channel is served; posts one-message drafts; `bot` CLI; daemon
-  runs scanner + Slack bot concurrently.
-- [x] 5. Pipeline & CLI: notifier posts Slack blocks (`send_match` takes the
-  `MatchMessage`), warnings via Slack, `test-notify` posts to Slack; wire Slack into
-  `_build_pipeline`/`_build_bot`.
-- [x] 6. Remove Telegram: delete `notification/telegram.py`, `notification/bot.py`,
-  their tests, and the Telegram config; drop `httpx` Telegram usage.
-- [x] 7. Docs: README + AGENTS.md Slack setup (app, Socket Mode, scopes, tokens,
-  channel), build-plan entry 17.
+- [x] 1. Config & schemas: `ENRICHMENT_ENABLED`, `ENRICHMENT_SEARCH` (`duckduckgo|none`),
+  `ENRICHMENT_MAX_PAGES` in `Settings` + `.env.example`; `enrichment/schemas.py`
+  (`SearchResult`, `DiscoveryLinks`, `ContactEnrichment`).
+- [x] 2. Pure extractors `enrichment/extract.py`: e-mail extraction (dedupe,
+  de-obfuscate `[at]`/`[dot]`, drop noreply/asset false positives), German/intl phone
+  extraction, contact-person names, and contact-page link discovery — full unit tests.
+- [x] 3. Discovery links `enrichment/links.py`: LinkedIn company & people search URLs,
+  Google search URLs — pure builders + tests.
+- [x] 4. Web access: `enrichment/fetch.py` `WebFetcher` (identifying UA, timeout,
+  polite delay, best-effort robots, never-retry-403) behind a `Fetcher` protocol;
+  `enrichment/search.py` `SearchProvider` protocol + `DuckDuckGoSearch` (pure result
+  parser) + `NullSearchProvider` — respx/fixture tests, no live HTTP.
+- [x] 5. `EnrichmentService` (`enrichment/service.py`): find website → fetch homepage +
+  Impressum/Kontakt/Team/Karriere (bounded) → extract → rank e-mails (person-match,
+  then role, then rest) → build links → `ContactEnrichment`; errors never crash the
+  caller. Unit tests with fake fetcher + fake search.
+- [x] 6. Persistence & listing wiring: `ContactLead` model + Alembic migration + repo
+  methods; `ListingEnrichmentService.enrich_listing(listing_id)` derives
+  company/person/known-email from the stored listing and persists the lead.
+- [x] 7. CLI: `project-pilot enrich "<company>" [--person] [--url]` and
+  `enrich --listing-id N`; prints e-mails, phones, persons, website, and the links.
+- [x] 8. Slack: `format_contact_blocks`; "🔎 Find contact" button on match messages
+  and on recipient-less drafts; bot routes the `enrich` action via an
+  `EnrichmentFlow`; wire into `_build_bot`/daemon. Unit tests (fake flow + poster).
+- [x] 9. Docs: README enrichment section + compliance note, AGENTS.md command,
+  build-plan entry 18.
 
 ### Done when
 
-- A match posts one Slack message with all listing data and a Bewerben button.
-- Bewerben (or `/apply`) posts one message with the full e-mail (never truncated),
-  LinkedIn text, and Senden/Verwerfen/Mail-öffnen buttons.
-- Thread reply revises; a bare e-mail in the thread sets the recipient; Senden
-  delivers via SMTP exactly once; Mail-öffnen opens the client with recipient+subject.
-- Runs via Socket Mode without a public URL; no Telegram code remains.
+- With `ENRICHMENT_ENABLED=true`, `project-pilot enrich "<company>"` prints found
+  e-mails, phones, contact persons, the company website, and LinkedIn/Google links.
+- On a match's Slack message, "🔎 Find contact" posts those results in the thread;
+  a recipient-less draft offers the same button, and a found e-mail can be set as the
+  recipient by replying with it.
+- No LinkedIn or Google page is ever fetched; only company websites are crawled, and
+  robots.txt is respected (disallowed pages skipped, 403 never retried).
+- `contact_leads` records each lookup for traceability.
 - Quality gate green: `uv run ruff check`, `uv run ruff format --check`,
   `uv run mypy`, `uv run pytest`.

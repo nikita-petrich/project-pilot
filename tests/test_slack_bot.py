@@ -3,11 +3,12 @@
 from collections.abc import Awaitable, Callable
 
 from project_pilot.application.service import DraftView
-from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.enrichment.schemas import ContactEnrichment, DiscoveryLinks
+from project_pilot.errors import ApplicationStateError, EmailSendError, EnrichmentError
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import ApplicationStatus, PostedPrecision, RemoteStatus
 from project_pilot.notification.slack import Block, PostedMessage
-from project_pilot.notification.slack_bot import USAGE, SlackBot
+from project_pilot.notification.slack_bot import USAGE, EnrichmentFlow, SlackBot
 
 CHANNEL = "C1"
 
@@ -144,12 +145,39 @@ class _FakeService:
         return self.known_urls.get(url)
 
 
+class _FakeEnrichment:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+        self.error: Exception | None = None
+
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment:
+        self.calls.append(listing_id)
+        if self.error is not None:
+            raise self.error
+        return ContactEnrichment(
+            company="Muster GmbH",
+            person="Max Mustermann",
+            website="https://muster-gmbh.de/",
+            links=DiscoveryLinks(
+                linkedin_company="https://www.linkedin.com/search/results/companies/?keywords=Muster",
+                linkedin_people="https://www.linkedin.com/search/results/people/?keywords=Max",
+                google_company="https://www.google.com/search?q=Muster",
+                google_contact="https://www.google.com/search?q=Muster+Impressum",
+            ),
+            emails=["bewerbung@muster-gmbh.de"],
+            phones=["+49 30 1234567"],
+            persons=["Max Mustermann"],
+            sources=["https://muster-gmbh.de/impressum"],
+        )
+
+
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
     *,
     fetched: ParsedListing | None = None,
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
+    enrichment: EnrichmentFlow | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -161,6 +189,7 @@ def _bot(
         service=service,
         fetcher=fetcher if fetched is not None else None,
         file_reader=file_reader,
+        enrichment=enrichment,
     )
 
 
@@ -255,6 +284,43 @@ async def test_open_mail_action_is_ignored() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).on_block_action("open_mail", None, CHANNEL, "1.1")
     assert service.calls == []
+
+
+def _contact_rendered(poster: _FakePoster) -> bool:
+    def is_contact(blocks: list[Block]) -> bool:
+        return any(
+            b.get("type") == "header" and "Contact research" in _block_text(b) for b in blocks
+        )
+
+    return any(is_contact(blocks) for _, _, blocks in poster.updates) or any(
+        is_contact(blocks) for blocks, _ in poster.posted_blocks
+    )
+
+
+async def test_enrich_action_posts_contact_blocks() -> None:
+    poster, service, enrichment = _FakePoster(), _FakeService(), _FakeEnrichment()
+    await _bot(poster, service, enrichment=enrichment).dispatch(
+        "interactive", _interactive("enrich", "42", thread_ts="111.1")
+    )
+    assert enrichment.calls == [42]
+    assert _contact_rendered(poster)
+    rendered = [_block_text(b) for _, _, blocks in poster.updates for b in blocks]
+    assert any("bewerbung@muster-gmbh.de" in text for text in rendered)
+
+
+async def test_enrich_action_without_service_hints_to_enable() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("interactive", _interactive("enrich", "42"))
+    assert any("ENRICHMENT_ENABLED" in t for t in poster.visible_texts())
+
+
+async def test_enrich_action_surfaces_error() -> None:
+    poster, service, enrichment = _FakePoster(), _FakeService(), _FakeEnrichment()
+    enrichment.error = EnrichmentError("Listing 42 not found")
+    await _bot(poster, service, enrichment=enrichment).dispatch(
+        "interactive", _interactive("enrich", "42")
+    )
+    assert any("not found" in t for t in poster.visible_texts())
 
 
 async def test_slash_apply_text_drafts_from_text_in_thread() -> None:
