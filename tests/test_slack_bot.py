@@ -3,7 +3,7 @@
 from collections.abc import Awaitable, Callable
 
 from project_pilot.application.service import DraftView
-from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.errors import ApplicationStateError, EmailSendError, NotionError
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import ApplicationStatus, PostedPrecision, RemoteStatus
 from project_pilot.notification.slack import Block, PostedMessage
@@ -144,12 +144,32 @@ class _FakeService:
         return self.known_urls.get(url)
 
 
+class _FakeSalesPipeline:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int]] = []
+        self.error: Exception | None = None
+        self.page_url = "https://www.notion.so/lead-1"
+
+    def _result(self, name: str, arg: int) -> str:
+        self.calls.append((name, arg))
+        if self.error is not None:
+            raise self.error
+        return self.page_url
+
+    async def add_listing(self, listing_id: int) -> str:
+        return self._result("add_listing", listing_id)
+
+    async def add_application(self, application_id: int) -> str:
+        return self._result("add_application", application_id)
+
+
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
     *,
     fetched: ParsedListing | None = None,
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
+    sales_pipeline: _FakeSalesPipeline | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -161,6 +181,7 @@ def _bot(
         service=service,
         fetcher=fetcher if fetched is not None else None,
         file_reader=file_reader,
+        sales_pipeline=sales_pipeline,
     )
 
 
@@ -249,6 +270,52 @@ async def test_cancel_action_updates_message() -> None:
     await _bot(poster, service).dispatch("interactive", _interactive("cancel", "1", ts="9.9"))
     assert ("cancel", 1) in service.calls
     assert "9.9" in [ts for _, ts, _ in poster.updates]
+
+
+async def test_notion_action_on_match_files_listing_and_links_page() -> None:
+    poster, service, pipeline = _FakePoster(), _FakeService(), _FakeSalesPipeline()
+    await _bot(poster, service, sales_pipeline=pipeline).dispatch(
+        "interactive", _interactive("notion_lead", "7")
+    )
+    assert pipeline.calls == [("add_listing", 7)]
+    # progress placeholder in the match's thread, then replaced by the confirmation
+    assert any("⏳" in text and thread == "111.1" for text, thread in poster.texts)
+    assert any(
+        "sales pipeline" in t and "https://www.notion.so/lead-1" in t
+        for t in poster.visible_texts()
+    )
+
+
+async def test_notion_action_on_draft_files_application() -> None:
+    poster, service, pipeline = _FakePoster(), _FakeService(), _FakeSalesPipeline()
+    await _bot(poster, service, sales_pipeline=pipeline).dispatch(
+        "interactive", _interactive("notion_lead_app", "1", ts="222.2", thread_ts="111.1")
+    )
+    assert pipeline.calls == [("add_application", 1)]
+    assert any("sales pipeline" in t for t in poster.visible_texts())
+
+
+async def test_notion_action_without_configuration_hints() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("interactive", _interactive("notion_lead", "7"))
+    assert any("NOTION_TOKEN" in t for t in poster.visible_texts())
+
+
+async def test_notion_action_surfaces_error() -> None:
+    poster, service, pipeline = _FakePoster(), _FakeService(), _FakeSalesPipeline()
+    pipeline.error = NotionError("Notion rejected the lead (HTTP 401): unauthorized")
+    await _bot(poster, service, sales_pipeline=pipeline).dispatch(
+        "interactive", _interactive("notion_lead", "7")
+    )
+    assert any("⚠️" in t and "HTTP 401" in t for t in poster.visible_texts())
+
+
+async def test_notion_action_from_foreign_channel_is_ignored() -> None:
+    poster, service, pipeline = _FakePoster(), _FakeService(), _FakeSalesPipeline()
+    await _bot(poster, service, sales_pipeline=pipeline).dispatch(
+        "interactive", _interactive("notion_lead", "7", channel="C2")
+    )
+    assert pipeline.calls == [] and poster.texts == []
 
 
 async def test_open_mail_action_is_ignored() -> None:

@@ -176,7 +176,10 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
     if message.description:
         blocks.append(_description_block(message.description))
 
-    actions: list[Block] = [_button("📝 Apply", action_id="apply", value=str(listing_id))]
+    actions: list[Block] = [
+        _button("📝 Apply", action_id="apply", value=str(listing_id)),
+        _button("📊 Add to Notion", action_id="notion_lead", value=str(listing_id)),
+    ]
     if message.url:
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
@@ -201,8 +204,8 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         )
     )
 
+    actions: list[Block] = []
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
-        actions: list[Block] = []
         if view.recipient:
             actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
         # "Open in mail client" is always offered — a missing recipient is simply
@@ -210,6 +213,16 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
         actions.append(_button("📧 Open in mail client", action_id="open_mail", url=mailto))
         actions.append(_button("❌ Discard", action_id="cancel", value=str(view.application_id)))
+    if view.status in (
+        ApplicationStatus.READY,
+        ApplicationStatus.AWAITING_EMAIL,
+        ApplicationStatus.SENT,
+    ):
+        # Stays available after sending: a sent application files as "Contacted".
+        actions.append(
+            _button("📊 Add to Notion", action_id="notion_lead_app", value=str(view.application_id))
+        )
+    if actions:
         blocks.append({"type": "actions", "elements": actions})
 
     hints: list[str] = []

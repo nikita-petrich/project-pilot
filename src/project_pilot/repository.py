@@ -137,6 +137,14 @@ class Repository:
     async def get_listing(self, listing_id: int) -> Listing | None:
         return await self._session.get(Listing, listing_id)
 
+    async def get_listing_with_evaluations(self, listing_id: int) -> Listing | None:
+        stmt = (
+            select(Listing)
+            .where(Listing.id == listing_id)
+            .options(selectinload(Listing.evaluations))
+        )
+        return (await self._session.scalars(stmt)).first()
+
     async def add_application(self, application: Application) -> Application:
         self._session.add(application)
         await self._session.flush()

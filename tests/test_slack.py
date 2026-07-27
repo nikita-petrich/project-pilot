@@ -82,6 +82,8 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
     assert apply_button["action_id"] == "apply"
     assert apply_button["value"] == "42"
     assert "open_project" in _action_ids(blocks)
+    notion_button = next(e for e in _action_elements(blocks) if e["action_id"] == "notion_lead")
+    assert notion_button["value"] == "42"
 
 
 def test_match_blocks_show_short_description_in_full() -> None:
@@ -119,7 +121,7 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     assert "```Sehr geehrte Damen und Herren,\nich passe gut.```" in sections
     assert "```Hallo, kurzes Interesse!```" in sections
     ids = _action_ids(blocks)
-    assert ids == ["send", "open_mail", "cancel"]
+    assert ids == ["send", "open_mail", "cancel", "notion_lead_app"]
     mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
     assert str(mail_button["url"]).startswith("mailto:pm@firma.de?subject=Bewerbung")
     send_button = next(e for e in _action_elements(blocks) if e["action_id"] == "send")
@@ -131,12 +133,22 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
     # No Senden (no recipient yet), but the mail-client button is available up front.
-    assert _action_ids(blocks) == ["open_mail", "cancel"]
+    assert _action_ids(blocks) == ["open_mail", "cancel", "notion_lead_app"]
     mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
     assert str(mail_button["url"]).startswith("mailto:?subject=Bewerbung")
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "e-mail address" in str(context[0]["text"])
+
+
+def test_draft_blocks_after_send_keep_only_notion_button() -> None:
+    blocks = format_draft_blocks(_draft_view(status=ApplicationStatus.SENT))
+    assert _action_ids(blocks) == ["notion_lead_app"]
+
+
+def test_draft_blocks_cancelled_have_no_actions() -> None:
+    blocks = format_draft_blocks(_draft_view(status=ApplicationStatus.CANCELLED))
+    assert not _blocks_of_type(blocks, "actions")
 
 
 def test_draft_blocks_split_long_email_without_truncation() -> None:

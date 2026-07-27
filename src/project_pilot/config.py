@@ -35,6 +35,14 @@ class SlackConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class NotionConfig:
+    """Validated Notion settings: integration token and the sales-pipeline database id."""
+
+    token: str
+    database_id: str
+
+
+@dataclass(frozen=True, slots=True)
 class CvAttachments:
     """Optional CV files attached to application e-mails, chosen by draft language."""
 
@@ -72,6 +80,9 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     llm_model: str = ""
+
+    notion_token: str = ""
+    notion_database_id: str = ""
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -152,6 +163,14 @@ class Settings(BaseSettings):
             app_token=self.slack_app_token,
             channel=self.slack_channel,
         )
+
+    def has_notion(self) -> bool:
+        return bool(self.notion_token and self.notion_database_id)
+
+    def require_notion(self) -> NotionConfig:
+        if not self.has_notion():
+            raise ConfigError("NOTION_TOKEN and NOTION_DATABASE_ID must both be set")
+        return NotionConfig(token=self.notion_token, database_id=self.notion_database_id)
 
     def require_openai(self) -> tuple[str, str]:
         if not self.openai_api_key:

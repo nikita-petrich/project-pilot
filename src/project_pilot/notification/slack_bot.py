@@ -13,7 +13,12 @@ from typing import Protocol
 
 from project_pilot.application.documents import extract_document_text
 from project_pilot.application.service import DraftView, is_email
-from project_pilot.errors import ApplicationStateError, EmailSendError, LlmSchemaError
+from project_pilot.errors import (
+    ApplicationStateError,
+    EmailSendError,
+    LlmSchemaError,
+    NotionError,
+)
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.notification.slack import (
     Block,
@@ -59,6 +64,13 @@ class ApplicationFlow(Protocol):
     async def find_listing_id_by_url(self, url: str) -> int | None: ...
 
 
+class SalesPipeline(Protocol):
+    """The Notion sales-pipeline surface the bot drives (``NotionSalesPipeline``)."""
+
+    async def add_listing(self, listing_id: int) -> str: ...
+    async def add_application(self, application_id: int) -> str: ...
+
+
 type ListingFetcher = Callable[[str], Awaitable[ParsedListing]]
 type FileReader = Callable[[str], Awaitable[bytes]]
 
@@ -97,12 +109,14 @@ class SlackBot:
         service: ApplicationFlow,
         fetcher: ListingFetcher | None = None,
         file_reader: FileReader | None = None,
+        sales_pipeline: SalesPipeline | None = None,
     ) -> None:
         self._client = client
         self._channel = channel
         self._service = service
         self._fetcher = fetcher
         self._file_reader = file_reader
+        self._sales_pipeline = sales_pipeline
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -180,6 +194,10 @@ class SlackBot:
             await self._send_application(target, draft_ts=message_ts, thread_root=root)
         elif action_id == "cancel":
             await self._cancel_application(target, draft_ts=message_ts, thread_root=root)
+        elif action_id == "notion_lead":
+            await self._add_to_pipeline(lambda p: p.add_listing(target), thread_root=root)
+        elif action_id == "notion_lead_app":
+            await self._add_to_pipeline(lambda p: p.add_application(target), thread_root=root)
         # open_mail / open_project are URL buttons handled by Slack itself.
 
     async def on_slash_apply(self, channel_id: str | None, text: str) -> None:
@@ -288,6 +306,31 @@ class SlackBot:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
         # Routing key is the thread root, so any reply in this thread reaches the draft.
         await self._service.record_draft_ref(view.application_id, f"{self._channel}:{thread_ts}")
+
+    async def _add_to_pipeline(
+        self, action: Callable[[SalesPipeline], Awaitable[str]], *, thread_root: str
+    ) -> None:
+        """Run a sales-pipeline action and report the outcome in the message's thread."""
+        if self._sales_pipeline is None:
+            await self._client.post_text(
+                "⚠️ Notion is not configured (set NOTION_TOKEN and NOTION_DATABASE_ID).",
+                thread_ts=thread_root,
+            )
+            return
+        progress = await self._client.post_text(
+            "⏳ Adding to the Notion sales pipeline …", thread_ts=thread_root
+        )
+        try:
+            page_url = await action(self._sales_pipeline)
+        except NotionError as err:
+            await self._replace(progress, thread_root, f"⚠️ {err}")
+            return
+        except Exception as err:
+            logger.exception("notion sales-pipeline entry failed")
+            await self._replace(progress, thread_root, f"⚠️ Unexpected error: {err}")
+            return
+        link = f" — <{page_url}|open in Notion>" if page_url else ""
+        await self._replace(progress, thread_root, f"📊 Added to the sales pipeline{link}.")
 
     async def _send_application(
         self, application_id: int, *, draft_ts: str, thread_root: str

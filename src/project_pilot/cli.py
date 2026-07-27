@@ -29,9 +29,10 @@ from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, loa
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
 from project_pilot.ingestion.normalize import canonicalize_url
 from project_pilot.ingestion.parser import ParsedListing, parse_detail_page
+from project_pilot.notification.notion import NotionClient, NotionSalesPipeline
 from project_pilot.notification.slack import SlackClient, SlackNotifier, SlackWebClient
 from project_pilot.notification.slack_bot import SlackBot, run_socket_mode
-from project_pilot.pipeline import Pipeline, RunOutcome
+from project_pilot.pipeline import Pipeline, RunOutcome, to_match_message
 from project_pilot.profile_loader import ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
@@ -133,12 +134,21 @@ def _build_bot(settings: Settings) -> BotRuntime:
             response.raise_for_status()
             return response.content
 
+    sales_pipeline: NotionSalesPipeline | None = None
+    if settings.has_notion():
+        sales_pipeline = NotionSalesPipeline(
+            session_factory=session_factory,
+            client=NotionClient(settings.require_notion()),
+            build_message=to_match_message,
+        )
+
     slack_bot = SlackBot(
         client=client,
         channel=config.channel,
         service=service,
         fetcher=fetch_listing,
         file_reader=read_slack_file,
+        sales_pipeline=sales_pipeline,
     )
 
     async def closer() -> None:

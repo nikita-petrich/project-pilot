@@ -66,6 +66,7 @@ gitignored and `.env.example` is the template):
 | `LOG_LEVEL` | default `info` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | your mail server, used to send application e-mails (port 465 implies TLS, otherwise STARTTLS) |
 | `SMTP_FROM` / `SMTP_STARTTLS` | optional sender override (defaults to `SMTP_USER`) and STARTTLS toggle |
+| `NOTION_TOKEN` / `NOTION_DATABASE_ID` | optional: enables the **📊 Add to Notion** button (see [Notion sales pipeline](#notion-sales-pipeline)) |
 
 ## Commands
 
@@ -132,6 +133,31 @@ freshly fetched), and `/apply <pasted project description>` works without a link
 **Uploading a file** (PDF or text) to the channel drafts from its contents the same
 way — drop in a project-description PDF and the draft appears. Nothing is ever sent
 without the explicit Send tap.
+
+## Notion sales pipeline
+
+Match messages and application drafts carry an **📊 Add to Notion** button that
+files the project as a lead in the Notion **Sales Pipeline** database — with
+name (company when known), status (**Lead**, or **Contacted** for an already-sent
+application), lead source *Freelancermap*, customer type (Direct/Recruiter),
+link, and a notes summary (score, contact, location, start, skills).
+
+Setup:
+
+1. Create an internal integration at
+   [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its
+   secret into `NOTION_TOKEN`.
+2. In Notion, open the Sales Pipeline database → **⋯ → Connections** and add the
+   integration so it may write to the database.
+3. Set `NOTION_DATABASE_ID` to the database's id (the 32-hex-character part of its
+   URL).
+
+The button expects the database properties `Name`, `Status` (with options `Lead`
+and `Contacted`), `Lead Source` (option `Freelancermap`), `Customer Type`
+(`Direct`/`Recruiter`), `Contract Type`, `Link`, and `Notes` — the property names
+are centralized at the top of `src/project_pilot/notification/notion.py`. Leave
+the two variables unset to run without the Notion integration (the button then
+answers with a configuration hint).
 
 ## Running on the home server (Docker)
 

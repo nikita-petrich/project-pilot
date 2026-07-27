@@ -29,6 +29,10 @@ class ApplicationStateError(ProjectPilotError):
     """An application action is not allowed in its current state (guarded flow)."""
 
 
+class NotionError(ProjectPilotError):
+    """Creating a Notion sales-pipeline entry failed."""
+
+
 def assert_defined[T](value: T | None, msg: str) -> T:
     """Return ``value`` when it is not ``None``, else raise ``ProjectPilotError``.
 

@@ -365,7 +365,7 @@ class Pipeline:
             return
         failed = 0
         for listing in pending:  # one message per match, marked notified only on a successful send
-            message = _to_match_message(listing, now)
+            message = to_match_message(listing, now)
             if message.onsite_only:
                 logger.info("skipping on-site-only match: %s", listing.external_url)
                 continue
@@ -484,7 +484,8 @@ def _expires_label(value: str | None) -> str | None:
         return None
 
 
-def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
+def to_match_message(listing: Listing, now: datetime) -> MatchMessage:
+    """Build the display data for ``listing`` (notifier messages and Notion leads)."""
     evaluation = _latest_match_evaluation(listing)
     score = evaluation.score if evaluation is not None and evaluation.score is not None else 0
     raw = _RawFields.model_validate(listing.raw or {})
