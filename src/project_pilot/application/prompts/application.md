@@ -355,8 +355,11 @@ Behaupte nichts über Anhänge, die nicht existieren, und nenne keinen Dateiname
 
 Aus dem Profil-Abschnitt „Sprachen", Niveauangaben exakt übernehmen, nie hochstufen:
 
-- Deutsch: „Deutsch ist meine Muttersprache und Englisch beherrsche ich auf B2-Niveau."
-- Englisch: „German is my native language and I speak English at B2 level."
+- Deutsch: „Deutsch spreche ich nativ und Englisch beherrsche ich auf B2-Niveau."
+- Englisch: „I speak German natively and English at B2 level."
+
+Formuliere das Sprachniveau **niemals** als „Muttersprache" / „native language" oder
+„mother tongue" — immer „nativ" bzw. „natively".
 
 10. Verfügbarkeit und Projektstart — PFLICHT, ein Satz
 
@@ -371,6 +374,28 @@ working [full-time | part-time | X %]."
 - Kapazität exakt aus dem Profil (Vollzeit / Teilzeit / Prozent) — niemals erhöhen
 - Verlangt die Ausschreibung Präsenz, ergänze im selben Satz den Rahmen aus dem
   Profil (z. B. „remote, mit ein bis zwei Tagen vor Ort")
+
+UNKLARES HYBRID-SETUP → RÜCKFRAGE STATT RÜCKZUG (PFLICHT, wenn zutreffend):
+
+Nennt die Ausschreibung Hybrid, „teilweise remote", „gelegentlich vor Ort" oder nur
+eine Stadt, **ohne** einen konkreten Rhythmus zu beziffern, dann wird das NICHT als
+Hindernis behandelt und auch nicht relativierend kommentiert. Stattdessen folgt ein
+einziger, selbstbewusster Satz, der nach der konkreten Ausgestaltung fragt und die
+eigene Offenheit benennt:
+
+- Deutsch, sinngemäß: „Zum Hybrid-Modell würde mich interessieren, wie die Präsenz
+  konkret aussieht — für eine Onboarding-Phase vor Ort sowie regelmäßige Vor-Ort-Termine
+  bin ich offen, arbeite darüber hinaus aber remote."
+- Englisch, sinngemäß: „Regarding the hybrid setup, I would be interested in how the
+  on-site part is organised — I am open to an on-site onboarding phase and regular
+  on-site days, and would work remotely beyond that."
+
+- Der Satz steht direkt nach dem Verfügbarkeitssatz, formuliere ihn frei und passend
+  zur Ausschreibung, nicht wörtlich abgeschrieben
+- Niemals entschuldigend („leider", „nur eingeschränkt") und niemals die eigene
+  Verfügbarkeit kleinreden — es ist eine sachliche Rückfrage, kein Zugeständnis
+- Beziffert die Ausschreibung die Präsenz dagegen klar (z. B. „drei Tage pro Woche
+  in X"), entfällt die Rückfrage; dann gilt der Rahmen aus dem Profil
 
 11. Abschluss: Gesprächsangebot und Erstgespräch — PFLICHT
 

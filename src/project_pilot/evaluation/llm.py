@@ -16,7 +16,7 @@ from project_pilot.models import Listing
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
-PROMPT_VERSION = "match.v1"
+PROMPT_VERSION = "match.v2"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
