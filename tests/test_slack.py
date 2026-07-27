@@ -119,9 +119,10 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     assert "```Sehr geehrte Damen und Herren,\nich passe gut.```" in sections
     assert "```Hallo, kurzes Interesse!```" in sections
     ids = _action_ids(blocks)
-    assert ids == ["send", "open_mail", "cancel"]
-    mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
-    assert str(mail_button["url"]).startswith("mailto:pm@firma.de?subject=Bewerbung")
+    assert ids == ["send", "cancel"]
+    # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs).
+    mail_link = "<mailto:pm@firma.de?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>"
+    assert mail_link in sections
     send_button = next(e for e in _action_elements(blocks) if e["action_id"] == "send")
     assert send_button["value"] == "7"
 
@@ -130,10 +131,10 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
     blocks = format_draft_blocks(
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
-    # No Senden (no recipient yet), but the mail-client button is available up front.
-    assert _action_ids(blocks) == ["open_mail", "cancel"]
-    mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
-    assert str(mail_button["url"]).startswith("mailto:?subject=Bewerbung")
+    # No Senden (no recipient yet), but the mail-client link is available up front.
+    assert _action_ids(blocks) == ["cancel"]
+    sections = "\n".join(_section_texts(blocks))
+    assert "<mailto:?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>" in sections
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "e-mail address" in str(context[0]["text"])

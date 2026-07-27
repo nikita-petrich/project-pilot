@@ -2,7 +2,8 @@
 
 One message carries everything: a match posts its full listing plus an apply
 button; a draft posts the complete e-mail (split across ``section`` blocks so it is
-never truncated), the LinkedIn text, and Send/Discard/Open-in-mail buttons.
+never truncated), the LinkedIn text, an open-in-mail-client link, and Send/Discard
+buttons.
 
 All bot chrome (labels, buttons, hints, status) is English; only the generated
 application text follows the project's language.
@@ -202,13 +203,15 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     )
 
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
+        # "Open in mail client" is a mrkdwn mailto link, not a URL button: Slack
+        # clients only open http(s) button URLs and silently drop a mailto click,
+        # while mailto links in text open the OS mail client. It is always offered —
+        # a missing recipient is simply left blank and filled in the mail client.
+        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
+        blocks.append(_section(_link(mailto, "📧 Open in mail client")))
         actions: list[Block] = []
         if view.recipient:
             actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
-        # "Open in mail client" is always offered — a missing recipient is simply
-        # left blank in the mailto and filled in the mail client.
-        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
-        actions.append(_button("📧 Open in mail client", action_id="open_mail", url=mailto))
         actions.append(_button("❌ Discard", action_id="cancel", value=str(view.application_id)))
         blocks.append({"type": "actions", "elements": actions})
 
