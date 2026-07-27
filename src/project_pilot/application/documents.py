@@ -20,8 +20,8 @@ def extract_document_text(filename: str, data: bytes) -> str:
     text = raw.strip()
     if not text or "\x00" in text:
         raise ApplicationStateError(
-            "Aus dieser Datei konnte ich keinen Text lesen — bitte ein PDF oder eine "
-            "Textdatei mit der Projektbeschreibung anhängen."
+            "Could not read any text from this file — please attach a PDF or a text "
+            "file with the project description."
         )
     return text
 
@@ -34,4 +34,4 @@ def _extract_pdf(data: bytes) -> str:
         reader = PdfReader(BytesIO(data))
         return "\n".join((page.extract_text() or "") for page in reader.pages)
     except (PyPdfError, ValueError) as err:
-        raise ApplicationStateError(f"PDF konnte nicht gelesen werden: {err}") from err
+        raise ApplicationStateError(f"PDF could not be read: {err}") from err

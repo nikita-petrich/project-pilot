@@ -76,7 +76,7 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
     assert isinstance(header, dict)
     assert "AI Engineer" in str(header["text"]) and "90/100" in str(header["text"])
     joined = "\n".join(_section_texts(blocks))
-    assert "*🏢 Firma:* Talent Co" in joined
+    assert "*🏢 Company:* Talent Co" in joined
     assert "LLM/RAG core" in joined
     apply_button = _action_elements(blocks)[0]
     assert apply_button["action_id"] == "apply"
@@ -95,9 +95,9 @@ def test_match_blocks_preview_long_description_and_keep_link() -> None:
     long_text = "wort " * 400  # ~2000 chars, far over the preview budget
     message = MatchMessage(title="t", url="https://x/proj", score=1, description=long_text)
     blocks = format_match_blocks(message, listing_id=1)
-    desc = next(t for t in _section_texts(blocks) if "Beschreibung" in t)
+    desc = next(t for t in _section_texts(blocks) if "Description" in t)
     assert len(desc) < 900  # compact preview, not the whole description
-    assert "Gekürzt" in desc and "…" in desc
+    assert "Shortened" in desc and "…" in desc
     assert "open_project" in _action_ids(blocks)  # full text stays behind the link
 
 
@@ -114,8 +114,8 @@ def test_match_blocks_escape_slack_specials() -> None:
 def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     blocks = format_draft_blocks(_draft_view())
     sections = "\n".join(_section_texts(blocks))
-    assert "*An:* pm@firma.de" in sections
-    assert "*Betreff:* `Bewerbung: KI-Projekt`" in sections
+    assert "*To:* pm@firma.de" in sections
+    assert "*Subject:* `Bewerbung: KI-Projekt`" in sections
     assert "```Sehr geehrte Damen und Herren,\nich passe gut.```" in sections
     assert "```Hallo, kurzes Interesse!```" in sections
     ids = _action_ids(blocks)
@@ -136,7 +136,7 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
     assert str(mail_button["url"]).startswith("mailto:?subject=Bewerbung")
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
-    assert "E-Mail-Adresse" in str(context[0]["text"])
+    assert "e-mail address" in str(context[0]["text"])
 
 
 def test_draft_blocks_split_long_email_without_truncation() -> None:

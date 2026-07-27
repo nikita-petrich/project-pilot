@@ -25,7 +25,7 @@ from project_pilot.notification.slack import (
 
 logger = logging.getLogger(__name__)
 
-USAGE = "Nutzung: `/apply <freelancermap-link oder Projektbeschreibung>`"
+USAGE = "Usage: `/apply <freelancermap link or project description>`"
 
 
 class SlackPoster(Protocol):
@@ -174,7 +174,7 @@ class SlackBot:
             await self._post_new_draft(
                 lambda: self._service.draft_for_listing(target),
                 root,
-                progress="⏳ Erstelle Bewerbungsentwurf …",
+                progress="⏳ Creating application draft …",
             )
         elif action_id == "send":
             await self._send_application(target, draft_ts=message_ts, thread_root=root)
@@ -190,10 +190,10 @@ class SlackBot:
         factory = await self._resolve_apply(argument)
         if factory is None:
             return  # a hint was already posted
-        parent = await self._client.post_text(f"📥 Bewerbung: {argument[:150]}")
+        parent = await self._client.post_text(f"📥 Application: {argument[:150]}")
         if parent is None:
             return
-        await self._post_new_draft(factory, parent.ts, progress="⏳ Erstelle Bewerbungsentwurf …")
+        await self._post_new_draft(factory, parent.ts, progress="⏳ Creating application draft …")
 
     async def _resolve_apply(self, argument: str) -> Callable[[], Awaitable[DraftView]] | None:
         if not argument.lower().startswith(("http://", "https://")):
@@ -203,8 +203,7 @@ class SlackBot:
             return lambda: self._service.draft_for_listing(listing_id)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
-                "⚠️ Diesen Link kenne ich nicht. Nutze `/apply` mit der "
-                "Projektbeschreibung als Text."
+                "⚠️ I don't recognize this link. Use `/apply` with the project description as text."
             )
             return None
         fetcher = self._fetcher
@@ -226,7 +225,7 @@ class SlackBot:
             return
         file, url = picked
         name = _text(file.get("name")) or "upload"
-        parent = await self._client.post_text(f"📥 Bewerbung aus Datei: {name[:150]}")
+        parent = await self._client.post_text(f"📥 Application from file: {name[:150]}")
         if parent is None:
             return
         reader = self._file_reader
@@ -237,7 +236,7 @@ class SlackBot:
             return await self._service.draft_from_text(text)
 
         await self._post_new_draft(
-            factory, parent.ts, progress="⏳ Lese Datei und erstelle Entwurf …"
+            factory, parent.ts, progress="⏳ Reading file and creating draft …"
         )
 
     async def on_thread_message(
@@ -253,13 +252,13 @@ class SlackBot:
             await self._post_new_draft(
                 lambda: self._service.set_recipient(view.application_id, message),
                 thread_ts,
-                progress="✅ Setze Empfänger …",
+                progress="✅ Setting recipient …",
             )
         else:
             await self._post_new_draft(
                 lambda: self._service.revise(view.application_id, message),
                 thread_ts,
-                progress="✏️ Überarbeite den Entwurf …",
+                progress="✏️ Revising the draft …",
             )
 
     async def _post_new_draft(
@@ -279,7 +278,7 @@ class SlackBot:
             return
         except Exception as err:
             logger.exception("drafting failed")
-            await self._replace(placeholder, thread_ts, f"⚠️ Unerwarteter Fehler: {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
         blocks = format_draft_blocks(view)
         fallback = draft_fallback_text(view)
@@ -293,7 +292,7 @@ class SlackBot:
     async def _send_application(
         self, application_id: int, *, draft_ts: str, thread_root: str
     ) -> None:
-        progress = await self._client.post_text("⏳ Sende E-Mail …", thread_ts=thread_root)
+        progress = await self._client.post_text("⏳ Sending e-mail …", thread_ts=thread_root)
         try:
             view = await self._service.send(application_id)
         except (ApplicationStateError, EmailSendError) as err:
@@ -301,7 +300,7 @@ class SlackBot:
             return
         except Exception as err:
             logger.exception("sending application %d failed", application_id)
-            await self._replace(progress, thread_root, f"⚠️ Unerwarteter Fehler: {err}")
+            await self._replace(progress, thread_root, f"⚠️ Unexpected error: {err}")
             return
         await self._client.update_blocks(
             self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
@@ -309,8 +308,8 @@ class SlackBot:
         await self._replace(
             progress,
             thread_root,
-            f"✅ Bewerbung verschickt an *{view.recipient}*\n"
-            f"💬 LinkedIn-Nachricht zum Kopieren:\n```{view.linkedin_message}```",
+            f"✅ Application sent to *{view.recipient}*\n"
+            f"💬 LinkedIn message to copy:\n```{view.linkedin_message}```",
         )
 
     async def _cancel_application(
@@ -323,12 +322,12 @@ class SlackBot:
             return
         except Exception as err:
             logger.exception("cancelling application %d failed", application_id)
-            await self._client.post_text(f"⚠️ Unerwarteter Fehler: {err}", thread_ts=thread_root)
+            await self._client.post_text(f"⚠️ Unexpected error: {err}", thread_ts=thread_root)
             return
         await self._client.update_blocks(
             self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
         )
-        await self._client.post_text("❌ Entwurf verworfen.", thread_ts=thread_root)
+        await self._client.post_text("❌ Draft discarded.", thread_ts=thread_root)
 
     async def _replace(self, posted: PostedMessage | None, thread_ts: str, text: str) -> None:
         """Turn a progress placeholder into its final text, or post it fresh."""

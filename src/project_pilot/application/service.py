@@ -137,7 +137,7 @@ class ApplicationService:
             repo = Repository(session)
             listing = await repo.get_listing(listing_id)
             if listing is None:
-                raise ApplicationStateError(f"Projekt {listing_id} nicht gefunden")
+                raise ApplicationStateError(f"Project {listing_id} not found")
             listing_text = render_listing_entity(listing)
             recipient = extract_email(
                 "\n".join((listing.description or "", *_iter_strings(listing.raw or {})))
@@ -219,7 +219,7 @@ class ApplicationService:
         """Set/replace the recipient address (reply containing a bare e-mail)."""
         address = email.strip()
         if not is_email(address):
-            raise ApplicationStateError(f"{address!r} ist keine gültige E-Mail-Adresse")
+            raise ApplicationStateError(f"{address!r} is not a valid e-mail address")
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             application = await self._editable(repo, application_id)
@@ -233,18 +233,18 @@ class ApplicationService:
         """Deliver the e-mail via SMTP; committed status steps guard against double sends."""
         if self._mailer is None:
             raise ApplicationStateError(
-                "SMTP ist nicht konfiguriert (SMTP_HOST/SMTP_USER/SMTP_PASSWORD setzen)"
+                "SMTP is not configured (set SMTP_HOST/SMTP_USER/SMTP_PASSWORD)"
             )
         async with session_scope(self._session_factory) as session:
             application = await self._editable(Repository(session), application_id)
             if application.status is ApplicationStatus.SENDING:
                 raise ApplicationStateError(
-                    "Ein Sendeversuch wurde unterbrochen - prüfe den Gesendet-Ordner. "
-                    "Verwirf den Entwurf oder erstelle einen neuen."
+                    "A send attempt was interrupted - check your Sent folder. "
+                    "Discard this draft or create a new one."
                 )
             if not application.recipient_email:
                 raise ApplicationStateError(
-                    "Empfänger fehlt - antworte auf den Entwurf mit der E-Mail-Adresse"
+                    "Recipient missing - reply to the draft with the e-mail address"
                 )
             # Committed before the SMTP call: a crash mid-send leaves 'sending'
             # behind, which blocks a blind retry instead of double-sending.
@@ -345,9 +345,9 @@ class ApplicationService:
     async def _editable(self, repo: Repository, application_id: int) -> Application:
         application = await repo.get_application(application_id)
         if application is None:
-            raise ApplicationStateError(f"Entwurf {application_id} nicht gefunden")
+            raise ApplicationStateError(f"Draft {application_id} not found")
         if application.status is ApplicationStatus.SENT:
-            raise ApplicationStateError("Diese Bewerbung wurde bereits verschickt")
+            raise ApplicationStateError("This application has already been sent")
         if application.status is ApplicationStatus.CANCELLED:
-            raise ApplicationStateError("Dieser Entwurf wurde verworfen")
+            raise ApplicationStateError("This draft has been discarded")
         return application

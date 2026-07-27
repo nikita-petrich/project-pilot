@@ -416,14 +416,14 @@ def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
 
 
 _CONTRACT_LABELS = {
-    "contracting": "Freiberuflich",
-    "contractor": "Freiberuflich",
-    "freelance": "Freiberuflich",
-    "employee_leasing": "Arbeitnehmerüberlassung",
-    "permanent_position": "Festanstellung",
-    "temporary_employment": "Zeitarbeit",
+    "contracting": "Freelance",
+    "contractor": "Freelance",
+    "freelance": "Freelance",
+    "employee_leasing": "Employee leasing",
+    "permanent_position": "Permanent position",
+    "temporary_employment": "Temporary employment",
 }
-_LANGUAGE_LABELS = {"de": "Deutsch", "en": "Englisch"}
+_LANGUAGE_LABELS = {"de": "German", "en": "English"}
 
 
 class _RawContract(BaseModel):
@@ -464,15 +464,15 @@ def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
-def _relative_de(posted_at: datetime, now: datetime) -> str | None:
+def _relative_ago(posted_at: datetime, now: datetime) -> str | None:
     minutes = int((now - posted_at).total_seconds() // 60)
     if minutes < 0:
         return None
     if minutes < 60:
-        return f"vor {minutes} Min"
+        return f"{minutes} min ago"
     if minutes < 1440:
-        return f"vor {minutes // 60} Std"
-    return f"vor {minutes // 1440} Tg"
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} d ago"
 
 
 def _expires_label(value: str | None) -> str | None:
@@ -490,7 +490,7 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     raw = _RawFields.model_validate(listing.raw or {})
 
     if listing.start_asap:
-        start: str | None = "ab sofort"
+        start: str | None = "ASAP"
     elif listing.start_date is not None:
         start = listing.start_date.strftime("%d.%m.%Y")
     else:
@@ -505,17 +505,17 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     elif remote_pct >= 100:
         remote_label = "100%"
     else:
-        remote_label = f"{remote_pct}% ({100 - remote_pct}% vor Ort)"
+        remote_label = f"{remote_pct}% ({100 - remote_pct}% on-site)"
 
     contract_type = None
     if raw.contract and raw.contract.contract_type:
         contract_type = _CONTRACT_LABELS.get(raw.contract.contract_type, raw.contract.contract_type)
 
     duration_label = raw.duration_text or (
-        f"{raw.duration_in_months} Mon" if raw.duration_in_months else None
+        f"{raw.duration_in_months} mo" if raw.duration_in_months else None
     )
     if duration_label and raw.extension_possible:
-        duration_label += " (+ Verlängerung)"
+        duration_label += " (+ extension)"
 
     # The structured contact is the real person for direct posts, but the agency name for
     # brokered ones; in that case pull the person out of the description text instead.
@@ -540,7 +540,7 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
         workload_label=f"{raw.workload}%" if raw.workload else None,
         duration_label=duration_label,
         start=start,
-        posted_ago=_relative_de(listing.posted_at, now) if listing.posted_at else None,
+        posted_ago=_relative_ago(listing.posted_at, now) if listing.posted_at else None,
         expires_label=_expires_label(raw.expires),
         industry=raw.industry.name_de if raw.industry else None,
         language=_LANGUAGE_LABELS.get(language) if language else None,

@@ -326,7 +326,7 @@ async def test_send_without_recipient_or_mailer_is_rejected(
     with pytest.raises(ApplicationStateError, match="SMTP"):
         await no_mailer.send(view.application_id)
     with_mailer = _service(session_factory, mailer=_mailer(_FakeSend()))
-    with pytest.raises(ApplicationStateError, match="Empfänger"):
+    with pytest.raises(ApplicationStateError, match="Recipient"):
         await with_mailer.send(view.application_id)
 
 
@@ -426,6 +426,6 @@ async def test_send_blocks_interrupted_sending_state(
         assert row is not None
         row.status = ApplicationStatus.SENDING  # simulate a crash mid-send
         await session.commit()
-    with pytest.raises(ApplicationStateError, match="unterbrochen"):
+    with pytest.raises(ApplicationStateError, match="interrupted"):
         await service.send(view.application_id)
     assert send.sent == []

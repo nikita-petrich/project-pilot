@@ -81,14 +81,12 @@ uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
 
 ## Slack setup
 
-Create a Slack app at [api.slack.com/apps](https://api.slack.com/apps) → **From a
-manifest** (paste the manifest below) → **Create**. Then:
-
-1. **App-Level Token** (Socket Mode): *Basic Information → App-Level Tokens →
-   Generate Token and Scopes* with scope `connections:write` → `SLACK_APP_TOKEN`.
-2. **Install App** → *Bot User OAuth Token* (`xoxb-…`) → `SLACK_BOT_TOKEN`.
-3. Create a channel, invite the bot (`/invite @project-pilot`), copy its channel
-   id → `SLACK_CHANNEL`. The bot must be a member to post and to read thread replies.
+The full, reproducible setup — creating (or re-creating) the app from a manifest,
+tokens, channel, and scopes — lives in [`docs/slack-app-setup.md`](docs/slack-app-setup.md).
+In short: create the app at [api.slack.com/apps](https://api.slack.com/apps) →
+**From a manifest**, paste the manifest below, then generate the app-level token
+(`connections:write` → `SLACK_APP_TOKEN`), install the app (`xoxb-…` →
+`SLACK_BOT_TOKEN`), and set `SLACK_CHANNEL` to the channel id the bot is invited to.
 
 ```yaml
 display_information:
@@ -96,7 +94,7 @@ display_information:
 features:
   bot_user: { display_name: project-pilot, always_online: true }
   slash_commands:
-    - { command: /apply, description: Bewerbung erstellen, usage_hint: "<link oder text>", should_escape: false }
+    - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
 oauth_config:
   scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:

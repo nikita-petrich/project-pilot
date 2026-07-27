@@ -215,7 +215,7 @@ async def _build_report(settings: Settings) -> str:
 
 async def _send_test_notification(settings: Settings) -> bool:
     posted = await _slack_client(settings).post_text(
-        "project-pilot test ✅ — wenn du das siehst, ist Slack verbunden."
+        "project-pilot test ✅ — if you can see this, Slack is connected."
     )
     return posted is not None
 
@@ -253,7 +253,7 @@ def daemon() -> None:
 
 @app.command("bot")
 def bot() -> None:
-    """Run only the Slack bot (Bewerben buttons, /apply command, thread review)."""
+    """Run only the Slack bot (Apply buttons, /apply command, thread review)."""
     settings = load_settings()
     settings.require_slack()
     asyncio.run(_run_bot(settings))

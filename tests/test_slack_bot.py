@@ -56,7 +56,7 @@ def _block_text(block: Block) -> str:
 
 
 def _is_draft(blocks: list[Block]) -> bool:
-    return any(b.get("type") == "header" and "Bewerbungsentwurf" in _block_text(b) for b in blocks)
+    return any(b.get("type") == "header" and "Application draft" in _block_text(b) for b in blocks)
 
 
 class _FakePoster:
@@ -233,7 +233,7 @@ async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:
     )
     assert ("send", 1) in service.calls
     assert "222.2" in poster.draft_update_ids()  # the draft message is updated in place
-    assert any("verschickt an" in t and "Hallo!" in t for t in poster.visible_texts())
+    assert any("sent to" in t and "Hallo!" in t for t in poster.visible_texts())
 
 
 async def test_send_action_surfaces_error() -> None:
@@ -287,7 +287,7 @@ async def test_slash_apply_foreign_url_hints() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
     assert service.calls == []
-    assert any("Projektbeschreibung" in t for t in poster.visible_texts())
+    assert any("project description" in t for t in poster.visible_texts())
 
 
 async def test_slash_apply_empty_shows_usage() -> None:
@@ -318,7 +318,7 @@ async def test_thread_reply_with_instruction_revises() -> None:
     service.by_ref["C1:111.1"] = _view()
     await _bot(poster, service).dispatch("events_api", _event("Bitte kürzer"))
     assert ("revise", (1, "Bitte kürzer")) in service.calls
-    assert any("⏳" in t or "Überarbeite" in t for t in poster.visible_texts())
+    assert any("⏳" in t or "Revising" in t for t in poster.visible_texts())
 
 
 async def test_thread_reply_error_is_shown() -> None:

@@ -15,7 +15,7 @@ def test_extract_file_without_suffix_is_treated_as_text() -> None:
 
 
 def test_binary_without_readable_text_is_rejected() -> None:
-    with pytest.raises(ApplicationStateError, match="PDF oder"):
+    with pytest.raises(ApplicationStateError, match="PDF or"):
         extract_document_text("logo.png", b"\x89PNG\x00\x00binary")
 
 

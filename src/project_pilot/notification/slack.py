@@ -2,7 +2,10 @@
 
 One message carries everything: a match posts its full listing plus an apply
 button; a draft posts the complete e-mail (split across ``section`` blocks so it is
-never truncated), the LinkedIn text, and Senden/Verwerfen/Mail-öffnen buttons.
+never truncated), the LinkedIn text, and Send/Discard/Open-in-mail buttons.
+
+All bot chrome (labels, buttons, hints, status) is English; only the generated
+application text follows the project's language.
 """
 
 import logging
@@ -118,10 +121,10 @@ def _description_block(description: str) -> Block:
     if len(text) > _DESCRIPTION_PREVIEW:
         cut = text.rfind(" ", _DESCRIPTION_PREVIEW // 2, _DESCRIPTION_PREVIEW)
         text = text[: cut if cut != -1 else _DESCRIPTION_PREVIEW].rstrip() + " …"
-        suffix = "\n_Gekürzt — vollständige Beschreibung über 🔗 Zum Projekt._"
+        suffix = "\n_Shortened — full description via 🔗 View project._"
     else:
         suffix = ""
-    return _section(f"*📄 Beschreibung*\n```{_esc(text)}```{suffix}")
+    return _section(f"*📄 Description*\n```{_esc(text)}```{suffix}")
 
 
 def _labeled(label: str, value: str | None) -> str | None:
@@ -139,21 +142,21 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
 
     who = None
     if message.is_endcustomer is not None:
-        who = "Endkunde" if message.is_endcustomer else "Vermittler"
+        who = "Direct client" if message.is_endcustomer else "Agency"
     facts = [
-        _labeled("🏢 Firma", message.company),
-        _labeled("👤 Ansprechpartner", message.contact_name),
-        _labeled("🤝 Auftraggeber", who),
-        _labeled("📍 Einsatzort", message.location),
+        _labeled("🏢 Company", message.company),
+        _labeled("👤 Contact", message.contact_name),
+        _labeled("🤝 Client type", who),
+        _labeled("📍 Location", message.location),
         _labeled("🏠 Remote", message.remote_label),
-        _labeled("💼 Beschäftigungsart", message.contract_type),
-        _labeled("📊 Auslastung", message.workload_label),
-        _labeled("⏳ Dauer", message.duration_label),
+        _labeled("💼 Contract", message.contract_type),
+        _labeled("📊 Workload", message.workload_label),
+        _labeled("⏳ Duration", message.duration_label),
         _labeled("📅 Start", message.start),
-        _labeled("🕒 Eingestellt", message.posted_ago),
-        _labeled("✍️ Bewerbung bis", message.expires_label),
-        _labeled("🏭 Branche", message.industry or "unbekannt"),  # always shown
-        _labeled("🗣 Sprache", message.language),
+        _labeled("🕒 Posted", message.posted_ago),
+        _labeled("✍️ Apply by", message.expires_label),
+        _labeled("🏭 Industry", message.industry or "unknown"),  # always shown
+        _labeled("🗣 Language", message.language),
         _labeled_list("🛠 Skills", message.skills, limit=12),
     ]
     facts_text = "\n".join(fact for fact in facts if fact)
@@ -161,10 +164,10 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
         blocks.append(_section(facts_text))
 
     verdict = [
-        _labeled_list("✅ Passt", message.reasons, limit=3),
-        _labeled_list("🎯 Deine Skills", message.matching_skills, limit=8),
-        _labeled_list("⚠️ Lücken", message.missing_requirements, limit=4),
-        _labeled_list("🚩 Risiken", message.risk_flags, limit=3),
+        _labeled_list("✅ Fits", message.reasons, limit=3),
+        _labeled_list("🎯 Your skills", message.matching_skills, limit=8),
+        _labeled_list("⚠️ Gaps", message.missing_requirements, limit=4),
+        _labeled_list("🚩 Risks", message.risk_flags, limit=3),
     ]
     verdict_text = "\n".join(item for item in verdict if item)
     if verdict_text:
@@ -173,24 +176,24 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
     if message.description:
         blocks.append(_description_block(message.description))
 
-    actions: list[Block] = [_button("📝 Bewerben", action_id="apply", value=str(listing_id))]
+    actions: list[Block] = [_button("📝 Apply", action_id="apply", value=str(listing_id))]
     if message.url:
-        actions.append(_button("🔗 Zum Projekt", action_id="open_project", url=message.url))
+        actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
     return blocks
 
 
 def format_draft_blocks(view: DraftView) -> list[Block]:
     """Build the Block Kit draft: full e-mail, LinkedIn, and the review buttons."""
-    header_line = f"📨 Bewerbungsentwurf: {view.title}"
+    header_line = f"📨 Application draft: {view.title}"
     blocks: list[Block] = [_header(header_line)]
 
-    meta = [_link(view.url, "Zum Projekt")] if view.url else []
-    meta.append(f"*An:* {_esc(view.recipient) if view.recipient else '❓ unbekannt'}")
-    meta.append(f"*Betreff:* `{_esc(view.subject)}`")
+    meta = [_link(view.url, "View project")] if view.url else []
+    meta.append(f"*To:* {_esc(view.recipient) if view.recipient else '❓ unknown'}")
+    meta.append(f"*Subject:* `{_esc(view.subject)}`")
     blocks.append(_section("\n".join(meta)))
 
-    blocks.extend(_code_sections(view.body, label="📄 E-Mail (zum Kopieren)"))
+    blocks.extend(_code_sections(view.body, label="📄 E-mail (copy)"))
     blocks.extend(
         _code_sections(
             view.linkedin_message,
@@ -201,34 +204,33 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
         actions: list[Block] = []
         if view.recipient:
-            actions.append(_button("📤 Senden", action_id="send", value=str(view.application_id)))
-        # "Im Mail-Client öffnen" is always offered — a missing recipient is simply
+            actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
+        # "Open in mail client" is always offered — a missing recipient is simply
         # left blank in the mailto and filled in the mail client.
         mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
-        actions.append(_button("📧 Im Mail-Client öffnen", action_id="open_mail", url=mailto))
-        actions.append(_button("❌ Verwerfen", action_id="cancel", value=str(view.application_id)))
+        actions.append(_button("📧 Open in mail client", action_id="open_mail", url=mailto))
+        actions.append(_button("❌ Discard", action_id="cancel", value=str(view.application_id)))
         blocks.append({"type": "actions", "elements": actions})
 
     hints: list[str] = []
     if view.status is ApplicationStatus.AWAITING_EMAIL:
-        hints.append("❗ Kein Empfänger erkannt — antworte im Thread mit der E-Mail-Adresse.")
+        hints.append("❗ No recipient detected — reply in the thread with the e-mail address.")
     if view.revision_count:
-        hints.append(f"🔁 Überarbeitung #{view.revision_count}")
+        hints.append(f"🔁 Revision #{view.revision_count}")
     hints.append(
-        "✏️ Im Thread antworten: freier Text = Änderung am Entwurf · nur eine "
-        "E-Mail-Adresse = Empfänger setzen (dann erscheint 📤 Senden). "
-        "Zum Kopieren über einen Code-Block fahren."
+        "✏️ Reply in the thread: free text = revise the draft · a lone e-mail "
+        "address = set the recipient (then 📤 Send appears). Hover a code block to copy."
     )
     blocks.append(_context(" · ".join(hints)))
     return blocks
 
 
 def match_fallback_text(message: MatchMessage) -> str:
-    return f"🎯 Neuer Match: {message.title} ({message.score}/100)"
+    return f"🎯 New match: {message.title} ({message.score}/100)"
 
 
 def draft_fallback_text(view: DraftView) -> str:
-    return f"📨 Bewerbungsentwurf: {view.title}"
+    return f"📨 Application draft: {view.title}"
 
 
 @dataclass(frozen=True, slots=True)
