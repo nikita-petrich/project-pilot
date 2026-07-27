@@ -6,6 +6,7 @@ every state change is guarded in the service layer.
 """
 
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
@@ -57,6 +58,16 @@ class ApplicationFlow(Protocol):
 
 
 type ListingFetcher = Callable[[str], Awaitable[ParsedListing]]
+
+
+# Slack auto-links addresses and URLs in message text: an e-mail becomes
+# ``<mailto:a@b|a@b>`` and a link ``<https://x|label>``. Reduce those to their
+# plain target so recipient detection and revision text see clean input.
+_SLACK_LINK_RE = re.compile(r"<(?:mailto:)?([^|>]+)(?:\|[^>]*)?>")
+
+
+def _unwrap_slack_links(text: str) -> str:
+    return _SLACK_LINK_RE.sub(lambda match: match.group(1), text)
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -194,7 +205,7 @@ class SlackBot:
         view = await self._service.find_by_draft_ref(f"{channel}:{thread_ts}")
         if view is None:
             return  # a reply in some other thread, not a draft
-        message = text.strip()
+        message = _unwrap_slack_links(text).strip()
         if is_email(message):
             await self._post_new_draft(
                 lambda: self._service.set_recipient(view.application_id, message),

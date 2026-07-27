@@ -289,6 +289,14 @@ async def test_thread_reply_with_email_sets_recipient() -> None:
     assert poster.draft_rendered()
 
 
+async def test_thread_reply_with_slack_autolinked_email_sets_recipient() -> None:
+    # Slack rewrites a bare address into <mailto:a@b|a@b>; it must still set the recipient.
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service).dispatch("events_api", _event("<mailto:neu@firma.de|neu@firma.de>"))
+    assert ("set_recipient", (1, "neu@firma.de")) in service.calls
+
+
 async def test_thread_reply_with_instruction_revises() -> None:
     poster, service = _FakePoster(), _FakeService()
     service.by_ref["C1:111.1"] = _view()
