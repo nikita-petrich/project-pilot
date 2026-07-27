@@ -157,6 +157,20 @@ def extract_contact_person(text: str) -> str | None:
     return None if looks_like_company(name) else name
 
 
+def resolve_contact_name(
+    first_name: str | None, last_name: str | None, company: str | None, text: str
+) -> str | None:
+    """Prefer the structured contact when it names a person, else pull one from ``text``.
+
+    freelancermap's structured contact holds the real person on direct posts but the
+    agency name on brokered ones; company-like values fall back to the text label.
+    """
+    structured = " ".join(part for part in (first_name, last_name) if part) or None
+    if structured and not looks_like_company(structured) and structured != company:
+        return structured
+    return extract_contact_person(text)
+
+
 def is_onsite_only(remote_percent: int | None, location: str | None, description: str) -> bool:
     """True only for clearly on-site roles: structured 0% remote and no remote hint anywhere."""
     if _REMOTE_HINT_RE.search(f"{location or ''} {description}"):

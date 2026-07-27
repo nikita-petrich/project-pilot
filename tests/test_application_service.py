@@ -177,6 +177,40 @@ async def test_draft_for_listing_finds_email_in_raw_payload(
     assert view.recipient == "pm@endkunde.de"
 
 
+async def test_draft_for_listing_resolves_and_persists_contact_name(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing = _listing(raw={"company": "Firma GmbH", "firstName": "Anna", "lastName": "Kleinen"})
+    listing_id = await _store(session_factory, listing)
+    view = await _service(session_factory).draft_for_listing(listing_id)
+    assert view.contact_name == "Anna Kleinen"
+    stored = await _load_application(session_factory, view.application_id)
+    assert stored.contact_name == "Anna Kleinen"
+
+
+async def test_draft_for_listing_agency_contact_falls_back_to_description(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing = _listing(
+        "Ihr Ansprechpartner: Max Mustermann bei uns",
+        raw={"company": "Hays AG", "firstName": "Hays", "lastName": "AG"},
+    )
+    listing_id = await _store(session_factory, listing)
+    view = await _service(session_factory).draft_for_listing(listing_id)
+    assert view.contact_name == "Max Mustermann"
+
+
+async def test_draft_from_text_extracts_contact_name(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    view = await _service(session_factory).draft_from_text(
+        "Python Projekt\nAnsprechpartner: Max Mustermann\nkontakt@kanzlei.de"
+    )
+    assert view.contact_name == "Max Mustermann"
+    plain = await _service(session_factory).draft_from_text("Projekt ohne Kontaktangabe")
+    assert plain.contact_name is None
+
+
 async def test_draft_for_listing_without_email_awaits_recipient(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -223,10 +257,11 @@ async def test_draft_from_parsed_links_stored_listing(
         remote_status=Remote.REMOTE,
         posted_at=None,
         posted_at_precision=PostedPrecision.UNKNOWN,
-        raw={},
+        raw={"firstName": "Anna", "lastName": "Kleinen"},
     )
     view = await _service(session_factory).draft_from_parsed(parsed)
     assert view.recipient == "hr@firma.de"
+    assert view.contact_name == "Anna Kleinen"
     stored = await _load_application(session_factory, view.application_id)
     assert stored.listing_id == listing_id
 

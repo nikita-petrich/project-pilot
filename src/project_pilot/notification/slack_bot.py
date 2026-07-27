@@ -28,6 +28,8 @@ from project_pilot.notification.slack import (
     draft_fallback_text,
     format_check_blocks,
     format_draft_blocks,
+    sent_confirmation_blocks,
+    sent_fallback_text,
     status_blocks,
 )
 
@@ -472,12 +474,12 @@ class SlackBot:
         await self._client.update_blocks(
             self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
         )
-        await self._replace(
-            progress,
-            thread_root,
-            f"✅ Application sent to *{view.recipient}*\n"
-            f"💬 LinkedIn message to copy:\n```{view.linkedin_message}```",
-        )
+        confirmation = sent_confirmation_blocks(view)
+        fallback = sent_fallback_text(view)
+        if progress is not None:
+            await self._client.update_blocks(progress.channel, progress.ts, confirmation, fallback)
+        else:
+            await self._client.post_blocks(confirmation, fallback, thread_ts=thread_root)
 
     async def _cancel_application(
         self, application_id: int, *, draft_ts: str, thread_root: str

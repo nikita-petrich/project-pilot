@@ -115,7 +115,10 @@ prompt (style rules, reference projects, skills, signature) — edit it directly
 change how applications are written. The draft posts as **one** message:
 
 - **Full e-mail** in copyable code blocks (split across Block Kit sections when
-  long, never truncated), plus the subject and the LinkedIn message.
+  long, never truncated), plus the subject and the LinkedIn message. Whenever a
+  contact person is known, a **🔍 … on LinkedIn** button under the LinkedIn text
+  opens a LinkedIn people search for that name (also on the post-send
+  confirmation in the thread).
 - **Recipient** — auto-extracted from the listing when an e-mail address is
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
