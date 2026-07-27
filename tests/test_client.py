@@ -5,7 +5,7 @@ import pytest
 import respx
 from tenacity import wait_none
 
-from project_pilot.errors import ConfigError, SourceBlockedError
+from project_pilot.errors import ConfigError, SourceBlockedError, SourceUnavailableError
 from project_pilot.ingestion.client import PolitenessClient
 
 BASE = "https://www.freelancermap.de"
@@ -54,6 +54,42 @@ async def test_check_robots_honors_crawl_delay() -> None:
     async with PolitenessClient(user_agent=UA, min_delay=2.0, sleeper=_noop) as client:
         await client.check_robots([f"{BASE}/x"])
         assert client.effective_delay == 10.0
+
+
+@respx.mock
+async def test_check_robots_retries_on_transport_error() -> None:
+    route = respx.get(f"{BASE}/robots.txt").mock(
+        side_effect=[
+            httpx.ConnectError("All connection attempts failed"),
+            httpx.Response(200, text="User-agent: *\nAllow: /\n"),
+        ]
+    )
+    async with PolitenessClient(user_agent=UA, sleeper=_noop, retry_wait=wait_none()) as client:
+        await client.check_robots([f"{BASE}/projektboerse"])
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_check_robots_unreachable_raises_source_unavailable() -> None:
+    route = respx.get(f"{BASE}/robots.txt").mock(
+        side_effect=httpx.ConnectError("All connection attempts failed")
+    )
+    async with PolitenessClient(
+        user_agent=UA, sleeper=_noop, retry_wait=wait_none(), max_attempts=2
+    ) as client:
+        with pytest.raises(SourceUnavailableError, match="unreachable after 2 attempts"):
+            await client.check_robots([f"{BASE}/projektboerse"])
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_get_unreachable_raises_source_unavailable() -> None:
+    respx.get(f"{BASE}/net").mock(side_effect=httpx.ConnectTimeout("timed out"))
+    async with PolitenessClient(
+        user_agent=UA, sleeper=_noop, retry_wait=wait_none(), max_attempts=2
+    ) as client:
+        with pytest.raises(SourceUnavailableError, match="ConnectTimeout"):
+            await client.get(f"{BASE}/net")
 
 
 @respx.mock

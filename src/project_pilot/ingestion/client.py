@@ -15,7 +15,7 @@ from tenacity import (
 )
 from tenacity.wait import wait_base
 
-from project_pilot.errors import ConfigError, SourceBlockedError
+from project_pilot.errors import ConfigError, SourceBlockedError, SourceUnavailableError
 
 BASE_URL = "https://www.freelancermap.de"
 
@@ -45,8 +45,9 @@ def _is_retryable_status(status_code: int) -> bool:
 class PolitenessClient:
     """A compliance-first HTTP client: identifying UA, robots gate, spaced requests.
 
-    Transient failures (network errors, 5xx, 429) are retried with backoff; a 403
-    or captcha is never retried and raises ``SourceBlockedError`` immediately.
+    Transient failures (network errors, 5xx, 429) are retried with backoff and, once
+    the attempts are exhausted, surface as ``SourceUnavailableError``; a 403 or
+    captcha is never retried and raises ``SourceBlockedError`` immediately.
     """
 
     def __init__(
@@ -95,7 +96,7 @@ class PolitenessClient:
     async def check_robots(self, urls: list[str]) -> None:
         """Fetch robots.txt and abort (ConfigError) if any URL is disallowed."""
         parser = RobotFileParser()
-        response = await self._client.get(f"{self._base_url}/robots.txt")
+        response = await self._request(f"{self._base_url}/robots.txt")
         if response.status_code >= 400:
             parser.parse([])
         else:
@@ -112,28 +113,38 @@ class PolitenessClient:
         if self._delay_pending:
             await self._sleeper(self._next_delay())
         self._delay_pending = True
-        try:
-            response = await self._fetch(url)
-        except _RetryableResponseError as exhausted:
-            response = exhausted.response
+        response = await self._request(url)
         if response.status_code == 403:
             raise SourceBlockedError(f"HTTP 403 for {url}")
         if _looks_like_captcha(response):
             raise SourceBlockedError(f"captcha/bot wall for {url}")
         return response
 
+    async def _request(self, url: str) -> httpx.Response:
+        """Fetch with retries; on exhausted 429/5xx retries return the last response."""
+        try:
+            return await self._fetch(url)
+        except _RetryableResponseError as exhausted:
+            return exhausted.response
+
     async def _fetch(self, url: str) -> httpx.Response:
-        async for attempt in AsyncRetrying(
-            retry=retry_if_exception_type((httpx.TransportError, _RetryableResponseError)),
-            wait=self._retry_wait,
-            stop=stop_after_attempt(self._max_attempts),
-            reraise=True,
-        ):
-            with attempt:
-                response = await self._client.get(url)
-                if _is_retryable_status(response.status_code):
-                    raise _RetryableResponseError(response)
-                return response
+        try:
+            async for attempt in AsyncRetrying(
+                retry=retry_if_exception_type((httpx.TransportError, _RetryableResponseError)),
+                wait=self._retry_wait,
+                stop=stop_after_attempt(self._max_attempts),
+                reraise=True,
+            ):
+                with attempt:
+                    response = await self._client.get(url)
+                    if _is_retryable_status(response.status_code):
+                        raise _RetryableResponseError(response)
+                    return response
+        except httpx.TransportError as err:
+            raise SourceUnavailableError(
+                f"{url} unreachable after {self._max_attempts} attempts "
+                f"({type(err).__name__}: {err})"
+            ) from err
         raise AssertionError("unreachable")  # pragma: no cover
 
     def _next_delay(self) -> float:

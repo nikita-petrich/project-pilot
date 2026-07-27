@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.config import SOURCE_NAME, Settings
 from project_pilot.db import session_scope
-from project_pilot.errors import SourceBlockedError
+from project_pilot.errors import SourceBlockedError, SourceUnavailableError
 from project_pilot.evaluation.freshness import evaluate_freshness
 from project_pilot.evaluation.llm import LlmEvaluation, is_match_notifiable, render_listing
 from project_pilot.evaluation.rules import apply_hard_rules
@@ -137,6 +137,12 @@ class Pipeline:
                 outcome.status = RunStatus.ERROR
                 outcome.error = f"source blocked: {err}"
                 logger.warning("run aborted: %s", outcome.error)
+            except SourceUnavailableError as err:
+                # Expected on a home connection: no traceback, the watermark stays
+                # put and the next run closes the gap.
+                outcome.status = RunStatus.ERROR
+                outcome.error = f"source unreachable: {err}"
+                logger.warning("run aborted: %s; retrying next run", outcome.error)
             except Exception as err:
                 outcome.status = RunStatus.ERROR
                 outcome.error = f"run failed: {err}"
