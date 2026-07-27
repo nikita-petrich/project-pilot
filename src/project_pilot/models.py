@@ -210,6 +210,7 @@ class ContactLead(Base):
     persons: Mapped[list[str]] = mapped_column(JSONB, default=list)
     sources: Mapped[list[str]] = mapped_column(JSONB, default=list)
     links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
+    linkedin_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

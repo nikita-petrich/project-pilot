@@ -84,6 +84,7 @@ class ListingEnrichmentService:
                     persons=result.persons,
                     sources=result.sources,
                     links=asdict(result.links),
+                    linkedin_message=result.linkedin_message,
                 )
             )
         return result

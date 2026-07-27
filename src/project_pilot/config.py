@@ -91,6 +91,9 @@ class Settings(BaseSettings):
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
     enrichment_max_pages: int = 6
+    enrichment_render: bool = False
+    enrichment_render_browser_path: str = ""
+    applicant_name: str = ""
 
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"

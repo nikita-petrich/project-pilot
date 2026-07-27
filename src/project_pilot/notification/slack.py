@@ -262,6 +262,14 @@ def format_contact_blocks(enrichment: ContactEnrichment) -> list[Block]:
             )
         )
 
+    if enrichment.linkedin_message:
+        blocks.extend(
+            _code_sections(
+                enrichment.linkedin_message,
+                label=f"💬 LinkedIn connection message ({len(enrichment.linkedin_message)}/300)",
+            )
+        )
+
     links = enrichment.links
     link_buttons = [
         _button("🔗 Company on LinkedIn", action_id="open_li_company", url=links.linkedin_company),

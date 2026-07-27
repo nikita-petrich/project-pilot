@@ -10,10 +10,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, Self
-from urllib.robotparser import RobotFileParser
 
 import httpx
 
+from project_pilot.enrichment.robots import RobotsGate
 from project_pilot.errors import SourceBlockedError
 
 type Sleeper = Callable[[float], Awaitable[None]]
@@ -47,7 +47,6 @@ class WebFetcher:
         sleeper: Sleeper = asyncio.sleep,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self._user_agent = user_agent
         self._delay = delay
         self._respect_robots = respect_robots
         self._sleeper = sleeper
@@ -55,7 +54,7 @@ class WebFetcher:
         self._client = client or httpx.AsyncClient(
             headers={"User-Agent": user_agent}, timeout=timeout, follow_redirects=True
         )
-        self._robots: dict[str, RobotFileParser] = {}
+        self._robots = RobotsGate(user_agent, self._fetch_robots)
         self._delay_pending = False
 
     async def __aenter__(self) -> Self:
@@ -73,7 +72,7 @@ class WebFetcher:
         if self._delay_pending:
             await self._sleeper(self._delay)
         self._delay_pending = True
-        if self._respect_robots and not await self._allowed(url):
+        if self._respect_robots and not await self._robots.allowed(url):
             raise SourceBlockedError(f"robots.txt disallows {url}")
         response = await self._client.get(url)
         if response.status_code == 403:
@@ -81,20 +80,9 @@ class WebFetcher:
         response.raise_for_status()
         return FetchedPage(url=str(response.url), text=response.text)
 
-    async def _allowed(self, url: str) -> bool:
-        parser = await self._robots_for(httpx.URL(url))
-        return parser.can_fetch(self._user_agent, url)
-
-    async def _robots_for(self, url: httpx.URL) -> RobotFileParser:
-        host = url.netloc.decode("ascii")
-        cached = self._robots.get(host)
-        if cached is not None:
-            return cached
-        parser = RobotFileParser()
+    async def _fetch_robots(self, robots_url: str) -> str | None:
         try:
-            response = await self._client.get(f"{url.scheme}://{host}/robots.txt")
-            parser.parse(response.text.splitlines() if response.status_code < 400 else [])
+            response = await self._client.get(robots_url)
         except httpx.HTTPError:
-            parser.parse([])  # unreachable robots.txt: fail open (best effort)
-        self._robots[host] = parser
-        return parser
+            return None  # unreachable robots.txt: fail open (best effort)
+        return response.text if response.status_code < 400 else None

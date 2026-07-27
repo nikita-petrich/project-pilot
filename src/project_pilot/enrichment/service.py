@@ -12,6 +12,7 @@ from urllib.parse import urlsplit, urlunsplit
 from project_pilot.enrichment.extract import find_contact_links, rank_emails, scan_html
 from project_pilot.enrichment.fetch import FetchedPage, Fetcher
 from project_pilot.enrichment.links import build_links
+from project_pilot.enrichment.message import build_connection_message
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.enrichment.search import SearchProvider
 from project_pilot.errors import EnrichmentError
@@ -59,11 +60,13 @@ class EnrichmentService:
         search: SearchProvider,
         max_pages: int = 6,
         search_limit: int = 5,
+        sender: str | None = None,
     ) -> None:
         self._fetcher = fetcher
         self._search = search
         self._max_pages = max(1, max_pages)
         self._search_limit = search_limit
+        self._sender = sender
 
     async def enrich(
         self,
@@ -95,6 +98,9 @@ class EnrichmentService:
             person=person,
             website=website,
             links=build_links(company=company, person=person, title=title),
+            linkedin_message=build_connection_message(
+                person=person, company=company, title=title, sender=self._sender
+            ),
             emails=rank_emails(_dedupe(emails), person),
             phones=_dedupe(phones),
             persons=_dedupe(persons),

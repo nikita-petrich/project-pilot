@@ -61,6 +61,22 @@ never makes surprise outbound calls.
 - [x] 9. Docs: README enrichment section + compliance note, AGENTS.md command,
   build-plan entry 18.
 
+### Follow-up (requested)
+
+- [ ] 10. LinkedIn **Vernetzungsnachricht**: `enrichment/message.py` pure builder
+  (personalized from person/company/title, ≤300 chars, optional `APPLICANT_NAME`
+  signature); add `linkedin_message` to `ContactEnrichment` + `ContactLead`,
+  populate in `EnrichmentService`, render as a copyable block in Slack, print in the
+  CLI. Guaranteed present so Nik can send the connection request himself. Unit tests.
+- [ ] 11. Optional **rendered fetching** for JS-heavy sites: `enrichment/robots.py`
+  shared `RobotsGate` (reused by both fetchers); `enrichment/render.py`
+  `PlaywrightFetcher` (headless Chromium, identifying UA, timeout, polite delay,
+  robots-aware, never-retry-403, lazy import). Config `ENRICHMENT_RENDER` (default
+  off) + optional `ENRICHMENT_RENDER_BROWSER_PATH`; `playwright` as an **optional**
+  extra so the default install/Docker/CI stay unchanged. Wire selection in the CLI.
+  Tests for the robots gate + fetcher selection (browser calls stay a covered-out
+  boundary, like Socket Mode).
+
 ### Done when
 
 - With `ENRICHMENT_ENABLED=true`, `project-pilot enrich "<company>"` prints found
@@ -71,5 +87,9 @@ never makes surprise outbound calls.
 - No LinkedIn or Google page is ever fetched; only company websites are crawled, and
   robots.txt is respected (disallowed pages skipped, 403 never retried).
 - `contact_leads` records each lookup for traceability.
+- Every enrichment result carries a ready-to-copy LinkedIn connection message
+  (shown in Slack and printed by the CLI), so Nik can reach the person directly.
+- With `ENRICHMENT_RENDER=true`, contact pages are fetched with a headless browser
+  so JS-rendered e-mail/phone data is found too; default stays the httpx fetcher.
 - Quality gate green: `uv run ruff check`, `uv run ruff format --check`,
   `uv run mypy`, `uv run pytest`.

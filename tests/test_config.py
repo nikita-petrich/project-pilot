@@ -166,6 +166,23 @@ def test_unknown_search_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> No
         Settings()
 
 
+def test_enrichment_render_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("ENRICHMENT_RENDER", "ENRICHMENT_RENDER_BROWSER_PATH", "APPLICANT_NAME"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert settings.enrichment_render is False
+    assert settings.enrichment_render_browser_path == ""
+    assert settings.applicant_name == ""
+
+
+def test_enrichment_render_and_applicant_name_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_RENDER", "true")
+    monkeypatch.setenv("APPLICANT_NAME", "Nik")
+    settings = Settings()
+    assert settings.enrichment_render is True
+    assert settings.applicant_name == "Nik"
+
+
 def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENRICHMENT_MAX_PAGES", "99")
     with pytest.raises(ValidationError):

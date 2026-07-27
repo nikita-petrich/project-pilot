@@ -173,6 +173,7 @@ def _enrichment(*, emails: list[str], phones: list[str]) -> ContactEnrichment:
             google_company="https://www.google.com/search?q=Muster",
             google_contact="https://www.google.com/search?q=Muster+Impressum",
         ),
+        linkedin_message="Hallo Max, ich würde mich gerne vernetzen. Beste Grüße!",
         emails=emails,
         phones=phones,
         persons=["Max Mustermann"],
@@ -180,7 +181,7 @@ def _enrichment(*, emails: list[str], phones: list[str]) -> ContactEnrichment:
     )
 
 
-def test_contact_blocks_render_emails_phones_and_links() -> None:
+def test_contact_blocks_render_emails_phones_message_and_links() -> None:
     blocks = format_contact_blocks(
         _enrichment(emails=["bewerbung@muster-gmbh.de"], phones=["+49 30 1234567"])
     )
@@ -188,6 +189,7 @@ def test_contact_blocks_render_emails_phones_and_links() -> None:
     assert "bewerbung@muster-gmbh.de" in joined
     assert "+49 30 1234567" in joined
     assert "Muster GmbH" in joined
+    assert "Hallo Max," in joined  # the copyable LinkedIn connection message
     ids = _action_ids(blocks)
     assert ids == ["open_li_company", "open_li_people", "open_google"]
 

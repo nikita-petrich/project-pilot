@@ -36,6 +36,7 @@ def upgrade() -> None:
         sa.Column("persons", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("sources", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("links", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column("linkedin_message", sa.Text(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["listing_id"], ["listings.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),

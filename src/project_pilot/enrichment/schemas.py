@@ -35,6 +35,7 @@ class ContactEnrichment:
     person: str | None
     website: str | None
     links: DiscoveryLinks
+    linkedin_message: str = ""
     emails: list[str] = field(default_factory=list)
     phones: list[str] = field(default_factory=list)
     persons: list[str] = field(default_factory=list)

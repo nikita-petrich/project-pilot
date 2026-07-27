@@ -150,15 +150,29 @@ recipient-less draft) and project-pilot looks the company's contact channel up:
    people search, Google contact search). These open in your own browser; **nothing on
    LinkedIn or Google is ever scraped** — that would breach their terms, and LinkedIn
    never exposes phone/e-mail publicly anyway.
+3. **LinkedIn connection message** — every result includes a short, personalized German
+   **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
+   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it.
 
 The result posts in the message's thread (e-mails best-first, phone, named people, the
-links) and is stored in `contact_leads`. Reply to a draft's thread with a found address
-to set it as the recipient. From the shell:
+connection message, the links) and is stored in `contact_leads`. Reply to a draft's
+thread with a found address to set it as the recipient. From the shell:
 
 ```sh
 uv run project-pilot enrich "Muster GmbH" --person "Max Mustermann"
 uv run project-pilot enrich --listing-id 42     # uses the listing's company + records a lead
 ```
+
+**JS-rendered sites (optional).** Some sites inject their contact data via JavaScript,
+which the default httpx fetcher can't see. Set `ENRICHMENT_RENDER=true` to fetch company
+pages with a headless Chromium instead — install the extra once:
+
+```sh
+uv sync --extra render && uv run playwright install chromium
+```
+
+Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
+retry); only company pages are rendered, never LinkedIn or Google.
 
 ## Running on the home server (Docker)
 

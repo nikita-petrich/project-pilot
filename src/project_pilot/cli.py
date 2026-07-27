@@ -25,8 +25,9 @@ from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
 from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
-from project_pilot.enrichment.fetch import WebFetcher
+from project_pilot.enrichment.fetch import Fetcher, WebFetcher
 from project_pilot.enrichment.listing import ListingEnrichmentService
+from project_pilot.enrichment.render import PlaywrightFetcher
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
 from project_pilot.enrichment.service import EnrichmentService
@@ -66,18 +67,46 @@ def _slack_client(settings: Settings) -> SlackClient:
     return SlackClient(channel=config.channel, web_client=web)
 
 
-def _enrichment_service(settings: Settings) -> tuple[EnrichmentService, WebFetcher]:
-    """Build the enrichment service and the fetcher whose HTTP client it owns."""
-    fetcher = WebFetcher(user_agent=settings.user_agent())
+def _enrichment_service(
+    settings: Settings,
+) -> tuple[EnrichmentService, Callable[[], Awaitable[None]]]:
+    """Build the enrichment service plus a closer for the fetcher(s) it owns.
+
+    Page fetching honors ``ENRICHMENT_RENDER`` (headless Chromium for JS-rendered
+    sites, else httpx). The DuckDuckGo result page is static, so search always uses a
+    lightweight httpx fetcher — the browser is reserved for company pages.
+    """
+    ua = settings.user_agent()
+    closeables: list[Fetcher] = []
+
+    if settings.enrichment_render:
+        page_fetcher: Fetcher = PlaywrightFetcher(
+            user_agent=ua, executable_path=settings.enrichment_render_browser_path or None
+        )
+        search_fetcher: Fetcher = WebFetcher(user_agent=ua)
+        closeables.extend((page_fetcher, search_fetcher))
+    else:
+        page_fetcher = WebFetcher(user_agent=ua)
+        search_fetcher = page_fetcher
+        closeables.append(page_fetcher)
+
     provider: SearchProvider = (
-        DuckDuckGoSearch(fetcher)
+        DuckDuckGoSearch(search_fetcher)
         if settings.enrichment_search == "duckduckgo"
         else NullSearchProvider()
     )
     service = EnrichmentService(
-        fetcher=fetcher, search=provider, max_pages=settings.enrichment_max_pages
+        fetcher=page_fetcher,
+        search=provider,
+        max_pages=settings.enrichment_max_pages,
+        sender=settings.applicant_name or None,
     )
-    return service, fetcher
+
+    async def closer() -> None:
+        for fetcher in closeables:
+            await fetcher.aclose()
+
+    return service, closer
 
 
 def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
@@ -133,9 +162,9 @@ def _build_bot(settings: Settings) -> BotRuntime:
     client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
 
     enrichment: ListingEnrichmentService | None = None
-    enrichment_fetcher: WebFetcher | None = None
+    enrichment_closer: Callable[[], Awaitable[None]] | None = None
     if settings.has_enrichment():
-        enrichment_service, enrichment_fetcher = _enrichment_service(settings)
+        enrichment_service, enrichment_closer = _enrichment_service(settings)
         enrichment = ListingEnrichmentService(
             session_factory=session_factory, service=enrichment_service
         )
@@ -171,8 +200,8 @@ def _build_bot(settings: Settings) -> BotRuntime:
     )
 
     async def closer() -> None:
-        if enrichment_fetcher is not None:
-            await enrichment_fetcher.aclose()
+        if enrichment_closer is not None:
+            await enrichment_closer()
         await engine.dispose()
 
     return slack_bot, web, config.app_token, closer
@@ -259,7 +288,7 @@ async def _run_enrich(
     person: str | None,
     url: str | None,
 ) -> ContactEnrichment:
-    service, fetcher = _enrichment_service(settings)
+    service, closer = _enrichment_service(settings)
     engine = None
     try:
         if listing_id is not None:
@@ -273,7 +302,7 @@ async def _run_enrich(
             raise EnrichmentError("provide a company name or --listing-id")
         return await service.enrich(company=company, person=person, known_url=url)
     finally:
-        await fetcher.aclose()
+        await closer()
         if engine is not None:
             await engine.dispose()
 
@@ -286,6 +315,7 @@ def _format_enrichment(result: ContactEnrichment) -> str:
     lines.append("Phones:  " + (", ".join(result.phones) if result.phones else "none found"))
     if result.persons:
         lines.append("Named on site: " + ", ".join(result.persons))
+    lines += ["", "LinkedIn connection message (copy):", f"  {result.linkedin_message}"]
     links = result.links
     lines += [
         "",
