@@ -10,8 +10,11 @@ import logging
 import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import cast
 
+import httpx
 import typer
+from slack_sdk.web.async_client import AsyncWebClient
 
 from project_pilot.application.generator import (
     ApplicationGenerator,
@@ -26,8 +29,8 @@ from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, loa
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
 from project_pilot.ingestion.normalize import canonicalize_url
 from project_pilot.ingestion.parser import ParsedListing, parse_detail_page
-from project_pilot.notification.bot import TelegramBot
-from project_pilot.notification.telegram import TelegramClient
+from project_pilot.notification.slack import SlackClient, SlackNotifier, SlackWebClient
+from project_pilot.notification.slack_bot import SlackBot, run_socket_mode
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import ProfileService
 from project_pilot.reporting import ReportingService, format_report
@@ -40,6 +43,8 @@ app = typer.Typer(
     add_completion=False,
 )
 
+type BotRuntime = tuple[SlackBot, AsyncWebClient, str, Callable[[], Awaitable[None]]]
+
 
 @app.callback()
 def main() -> None:
@@ -47,6 +52,12 @@ def main() -> None:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+
+
+def _slack_client(settings: Settings) -> SlackClient:
+    config = settings.require_slack()
+    web = cast("SlackWebClient", AsyncWebClient(token=config.bot_token))
+    return SlackClient(channel=config.channel, web_client=web)
 
 
 def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
@@ -62,11 +73,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
     )
 
-    telegram: TelegramClient | None = None
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        telegram = TelegramClient(
-            bot_token=settings.telegram_bot_token, chat_id=settings.telegram_chat_id
-        )
+    notifier = SlackNotifier(_slack_client(settings)) if settings.has_slack() else None
 
     pipeline = Pipeline(
         settings=settings,
@@ -74,22 +81,20 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         session_factory=session_factory,
         client_factory=client_factory,
         matcher=matcher,
-        telegram=telegram,
+        notifier=notifier,
     )
 
     async def closer() -> None:
-        if telegram is not None:
-            await telegram.aclose()
         await engine.dispose()
 
     return pipeline, closer
 
 
-def _build_bot(settings: Settings) -> tuple[TelegramBot, Callable[[], Awaitable[None]]]:
-    """Wire the Telegram bot: draft generator, mailer, application service, fetcher."""
+def _build_bot(settings: Settings) -> BotRuntime:
+    """Wire the Slack bot: draft generator, mailer, application service, fetcher."""
     profile = ProfileService(Path("profile")).load()
     api_key, model = settings.require_openai()
-    bot_token, chat_id = settings.require_telegram()
+    config = settings.require_slack()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
 
@@ -102,14 +107,16 @@ def _build_bot(settings: Settings) -> tuple[TelegramBot, Callable[[], Awaitable[
         generator=generator,
         profile=profile,
         mailer=mailer,
+        cv_attachments=settings.cv_attachments(),
     )
-    telegram = TelegramClient(bot_token=bot_token, chat_id=chat_id)
+    web = AsyncWebClient(token=config.bot_token)
+    client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
 
     async def fetch_listing(url: str) -> ParsedListing:
-        client = PolitenessClient(user_agent=settings.user_agent())
+        politeness = PolitenessClient(user_agent=settings.user_agent())
         try:
-            await client.check_robots([url])
-            response = await client.get(url)
+            await politeness.check_robots([url])
+            response = await politeness.get(url)
             return parse_detail_page(
                 response.text,
                 BASE_URL,
@@ -117,17 +124,27 @@ def _build_bot(settings: Settings) -> tuple[TelegramBot, Callable[[], Awaitable[
                 external_url=canonicalize_url(url, BASE_URL),
             )
         finally:
-            await client.aclose()
+            await politeness.aclose()
 
-    telegram_bot = TelegramBot(
-        client=telegram, chat_id=chat_id, service=service, fetcher=fetch_listing
+    async def read_slack_file(url: str) -> bytes:
+        headers = {"Authorization": f"Bearer {config.bot_token}"}
+        async with httpx.AsyncClient(timeout=30.0) as http:
+            response = await http.get(url, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+            return response.content
+
+    slack_bot = SlackBot(
+        client=client,
+        channel=config.channel,
+        service=service,
+        fetcher=fetch_listing,
+        file_reader=read_slack_file,
     )
 
     async def closer() -> None:
-        await telegram.aclose()
         await engine.dispose()
 
-    return telegram_bot, closer
+    return slack_bot, web, config.app_token, closer
 
 
 async def _run_once(settings: Settings) -> RunOutcome:
@@ -141,33 +158,34 @@ async def _run_once(settings: Settings) -> RunOutcome:
 async def _run_daemon(settings: Settings) -> None:
     pipeline, closer = _build_pipeline(settings)
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
-    bot_runtime: tuple[TelegramBot, Callable[[], Awaitable[None]]] | None = None
-    if settings.telegram_bot_token and settings.telegram_chat_id:
-        bot_runtime = _build_bot(settings)
+    bot_runtime: BotRuntime | None = _build_bot(settings) if settings.has_slack() else None
     try:
         await pipeline.run_once()  # initial run so the healthcheck has a baseline
         if bot_runtime is None:
             await runner.run_forever()
         else:
+            bot, web, app_token, _ = bot_runtime
             await asyncio.gather(
                 runner.run_forever(),
-                bot_runtime[0].run_forever(stop=runner.stop_event),
+                run_socket_mode(
+                    bot=bot, app_token=app_token, web_client=web, stop=runner.stop_event
+                ),
             )
     finally:
         if bot_runtime is not None:
-            await bot_runtime[1]()
+            await bot_runtime[3]()
         await closer()
 
 
 async def _run_bot(settings: Settings) -> None:
-    telegram_bot, closer = _build_bot(settings)
+    bot, web, app_token, closer = _build_bot(settings)
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         with contextlib.suppress(NotImplementedError):
             loop.add_signal_handler(sig, stop.set)
     try:
-        await telegram_bot.run_forever(stop=stop)
+        await run_socket_mode(bot=bot, app_token=app_token, web_client=web, stop=stop)
     finally:
         await closer()
 
@@ -195,11 +213,11 @@ async def _build_report(settings: Settings) -> str:
         await engine.dispose()
 
 
-async def _send_test_notification(bot_token: str, chat_id: str) -> bool:
-    async with TelegramClient(bot_token=bot_token, chat_id=chat_id) as client:
-        return await client.send_message(
-            "<b>project-pilot</b> test notification ✅\nIf you can read this, Telegram is wired up."
-        )
+async def _send_test_notification(settings: Settings) -> bool:
+    posted = await _slack_client(settings).post_text(
+        "project-pilot test ✅ — if you can see this, Slack is connected."
+    )
+    return posted is not None
 
 
 @app.command("init-db")
@@ -228,16 +246,16 @@ def run_once() -> None:
 
 @app.command("daemon")
 def daemon() -> None:
-    """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) plus the bot until SIGTERM."""
+    """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) plus the Slack bot until SIGTERM."""
     settings = load_settings()
     asyncio.run(_run_daemon(settings))
 
 
 @app.command("bot")
 def bot() -> None:
-    """Run only the Telegram bot (Apply buttons, /apply command, draft review)."""
+    """Run only the Slack bot (Apply buttons, /apply command, thread review)."""
     settings = load_settings()
-    settings.require_telegram()
+    settings.require_slack()
     asyncio.run(_run_bot(settings))
 
 
@@ -259,10 +277,10 @@ def stats() -> None:
 
 @app.command("test-notify")
 def test_notify() -> None:
-    """Send a test message to the configured Telegram chat."""
+    """Post a test message to the configured Slack channel."""
     settings = load_settings()
-    bot_token, chat_id = settings.require_telegram()
-    sent = asyncio.run(_send_test_notification(bot_token, chat_id))
+    settings.require_slack()
+    sent = asyncio.run(_send_test_notification(settings))
     typer.echo("test notification sent" if sent else "test notification failed")
     if not sent:
         raise typer.Exit(code=1)

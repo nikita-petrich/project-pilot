@@ -13,6 +13,7 @@ from project_pilot.evaluation.llm import LlmEvaluation
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.ingestion.normalize import compute_url_hash
 from project_pilot.models import Listing, ListingStatus, RunStatus
+from project_pilot.notification.messages import MatchMessage
 from project_pilot.pipeline import Pipeline
 from project_pilot.profile_loader import Profile, ProfileConstraints
 from project_pilot.repository import Repository
@@ -99,16 +100,17 @@ class _FakeMatcher:
 class _FakeNotifier:
     def __init__(self, *, ok: bool = True) -> None:
         self.ok = ok
-        self.sent: list[str] = []
+        self.matches: list[MatchMessage] = []
         self.match_listing_ids: list[int] = []
+        self.warnings: list[str] = []
 
-    async def send_message(self, text: str, *, disable_preview: bool = True) -> bool:
-        self.sent.append(text)
+    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
+        self.matches.append(message)
+        self.match_listing_ids.append(listing_id)
         return self.ok
 
-    async def send_match(self, text: str, *, listing_id: int) -> bool:
-        self.sent.append(text)
-        self.match_listing_ids.append(listing_id)
+    async def send_warning(self, text: str) -> bool:
+        self.warnings.append(text)
         return self.ok
 
 
@@ -133,7 +135,7 @@ def _pipeline(
     *,
     client: _FakeClient,
     matcher: _FakeMatcher | None = None,
-    telegram: _FakeNotifier | None = None,
+    notifier: _FakeNotifier | None = None,
     profile: Profile | None = None,
 ) -> Pipeline:
     return Pipeline(
@@ -142,7 +144,7 @@ def _pipeline(
         session_factory=session_factory,
         client_factory=lambda: client,
         matcher=matcher or _FakeMatcher(),
-        telegram=telegram,
+        notifier=notifier,
     )
 
 
@@ -167,12 +169,12 @@ async def test_seed_run_persists_without_analysis(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=notifier)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_seed is True
     assert outcome.new == 2
     assert outcome.notified == 0
-    assert notifier.sent == []
+    assert notifier.matches == []
     async with session_factory() as db_session:
         listings = (await db_session.scalars(select(Listing))).all()
         assert len(listings) == 2
@@ -184,15 +186,15 @@ async def test_full_run_notifies_match(
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     notifier = _FakeNotifier(ok=True)
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=notifier)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_seed is False
     assert outcome.new == 2
     assert outcome.evaluated == 2
     assert outcome.matched == 1
     assert outcome.notified == 1
-    assert len(notifier.sent) == 1
-    assert "Senior Python" in notifier.sent[0]
+    assert len(notifier.matches) == 1
+    assert "Senior Python" in notifier.matches[0].title
     async with session_factory() as db_session:
         repo = Repository(db_session)
         card1 = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
@@ -232,18 +234,18 @@ async def test_notification_retry_on_next_run(
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     failing = _FakeNotifier(ok=False)
-    first = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=failing)
+    first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing)
     outcome1 = await first.run_once(now=NOW)
     assert outcome1.matched == 1
     assert outcome1.notified == 0
-    assert len(failing.sent) == 1
+    assert len(failing.matches) == 1
 
     ok_notifier = _FakeNotifier(ok=True)
-    second = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=ok_notifier)
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok_notifier)
     outcome2 = await second.run_once(now=NOW + timedelta(minutes=15))
     assert outcome2.new == 0
     assert outcome2.notified == 1
-    assert len(ok_notifier.sent) == 1
+    assert len(ok_notifier.matches) == 1
 
 
 async def test_second_run_finds_no_new(
@@ -262,11 +264,11 @@ async def test_stale_listings_are_skipped_not_analysed(
     late = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)  # far past card1's posted time
     await _seed_state(session_factory, watermark=late - timedelta(minutes=120))
     notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=notifier)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
     outcome = await pipeline.run_once(now=late)
     assert outcome.matched == 0
     assert outcome.notified == 0
-    assert notifier.sent == []
+    assert notifier.matches == []
     async with session_factory() as db_session:
         repo = Repository(db_session)
         card1 = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
@@ -282,19 +284,19 @@ async def test_blacklist_rejects_before_llm(
     pipeline = _pipeline(
         session_factory,
         client=_FakeClient(PAGES),
-        telegram=notifier,
+        notifier=notifier,
         profile=_profile(blacklist=["asyncio"]),
     )
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.matched == 0
-    assert notifier.sent == []
+    assert notifier.matches == []
 
 
-async def test_dry_run_without_telegram_does_not_notify(
+async def test_dry_run_without_notifier_does_not_notify(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=None)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=None)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.matched == 1
     assert outcome.notified == 0
@@ -320,10 +322,10 @@ async def test_source_blocked_sets_cooldown_and_warns(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     warns = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES, block=True), telegram=warns)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES, block=True), notifier=warns)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_error is True
-    assert any("Cooling down" in message for message in warns.sent)
+    assert any("Cooling down" in message for message in warns.warnings)
     async with session_factory() as db_session:
         state = await Repository(db_session).get_source_state(SOURCE_NAME)
         assert state is not None
@@ -335,11 +337,11 @@ async def test_cooldown_skips_next_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     first = _pipeline(
-        session_factory, client=_FakeClient(PAGES, block=True), telegram=_FakeNotifier()
+        session_factory, client=_FakeClient(PAGES, block=True), notifier=_FakeNotifier()
     )
     await first.run_once(now=NOW)
 
-    second = _pipeline(session_factory, client=_FakeClient(PAGES), telegram=_FakeNotifier())
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier())
     outcome = await second.run_once(now=NOW + timedelta(minutes=15))
     assert outcome.error == "skipped: in cooldown"
     async with session_factory() as db_session:
@@ -357,10 +359,10 @@ async def test_three_consecutive_failures_warn_once(
             session_factory=session_factory,
             client_factory=_BrokenClient,
             matcher=_FakeMatcher(),
-            telegram=warns,
+            notifier=warns,
         )
         outcome = await pipeline.run_once(now=NOW + timedelta(minutes=15 * index))
         assert outcome.is_error is True
 
-    failure_warnings = [m for m in warns.sent if "consecutive failed runs" in m]
+    failure_warnings = [m for m in warns.warnings if "consecutive failed runs" in m]
     assert len(failure_warnings) == 1

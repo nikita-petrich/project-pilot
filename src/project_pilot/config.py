@@ -1,6 +1,7 @@
 """Application configuration via pydantic-settings (parsed and validated at boot)."""
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field, ValidationError, field_validator
@@ -24,6 +25,28 @@ class SmtpConfig:
     use_starttls: bool
 
 
+@dataclass(frozen=True, slots=True)
+class SlackConfig:
+    """Validated Slack settings: bot token (Web API), app token (Socket Mode), channel."""
+
+    bot_token: str
+    app_token: str
+    channel: str
+
+
+@dataclass(frozen=True, slots=True)
+class CvAttachments:
+    """Optional CV files attached to application e-mails, chosen by draft language."""
+
+    de: Path | None
+    en: Path | None
+
+    def for_language(self, language: str | None) -> Path | None:
+        """The CV matching the draft language (English → EN, otherwise the German CV)."""
+        chosen = self.en if language == "en" else self.de
+        return chosen if chosen is not None and chosen.is_file() else None
+
+
 class Settings(BaseSettings):
     """Typed view of the environment. Built once at CLI entry (fail fast).
 
@@ -43,8 +66,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot"
     contact_mail: str = "you@example.com"
 
-    telegram_bot_token: str = ""
-    telegram_chat_id: str = ""
+    slack_bot_token: str = ""
+    slack_app_token: str = ""
+    slack_channel: str = ""
 
     openai_api_key: str = ""
     llm_model: str = ""
@@ -55,6 +79,9 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from: str = ""
     smtp_starttls: bool = True
+
+    cv_de_path: str = ""
+    cv_en_path: str = ""
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -110,10 +137,21 @@ class Settings(BaseSettings):
             raise ConfigError("SEARCH_URLS is empty; set at least one search URL")
         return self.search_urls
 
-    def require_telegram(self) -> tuple[str, str]:
-        if not self.telegram_bot_token or not self.telegram_chat_id:
-            raise ConfigError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must both be set")
-        return self.telegram_bot_token, self.telegram_chat_id
+    def has_slack(self) -> bool:
+        return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)
+
+    def require_slack(self) -> SlackConfig:
+        if not self.slack_bot_token:
+            raise ConfigError("SLACK_BOT_TOKEN must be set (xoxb-… bot token)")
+        if not self.slack_app_token:
+            raise ConfigError("SLACK_APP_TOKEN must be set (xapp-… token for Socket Mode)")
+        if not self.slack_channel:
+            raise ConfigError("SLACK_CHANNEL must be set (channel id or name to post to)")
+        return SlackConfig(
+            bot_token=self.slack_bot_token,
+            app_token=self.slack_app_token,
+            channel=self.slack_channel,
+        )
 
     def require_openai(self) -> tuple[str, str]:
         if not self.openai_api_key:
@@ -135,6 +173,13 @@ class Settings(BaseSettings):
             password=self.smtp_password,
             sender=self.smtp_from or self.smtp_user,
             use_starttls=self.smtp_starttls,
+        )
+
+    def cv_attachments(self) -> CvAttachments:
+        """Resolve the configured CV files (either may be unset)."""
+        return CvAttachments(
+            de=Path(self.cv_de_path) if self.cv_de_path else None,
+            en=Path(self.cv_en_path) if self.cv_en_path else None,
         )
 
 

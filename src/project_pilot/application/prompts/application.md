@@ -18,11 +18,23 @@ SPRACHE
 
 =======
 
-- Wenn die Projektbeschreibung auf Deutsch ist → Bewerbung auf Deutsch
-- Wenn die Projektbeschreibung auf Englisch ist → Bewerbung auf Englisch
-- Wenn Sprache explizit vorgegeben ist → diese verwenden
-- Niemals Sprachen mischen
-- Sprache muss vollständig konsistent sein
+Bestimme zuerst die **Bewerbungssprache** aus der Projektbeschreibung. Diese eine
+Entscheidung gilt dann für ALLES: Betreff, Body, LinkedIn-Nachricht UND die Auswahl
+des Erstgespräch-Links.
+
+- Projektbeschreibung überwiegend auf Deutsch → Bewerbungssprache = Deutsch
+- Projektbeschreibung überwiegend auf Englisch → Bewerbungssprache = Englisch
+- Sprache explizit vorgegeben → diese verwenden (schlägt die Erkennung)
+- Bei gemischter Beschreibung: die dominante Sprache des Fließtexts entscheidet
+  (einzelne englische Fachbegriffe in einem deutschen Text machen sie nicht englisch)
+- Niemals Sprachen mischen; die Bewerbung ist vollständig in der Bewerbungssprache
+
+LINK-KOPPLUNG (HARTE REGEL):
+
+- Bewerbungssprache Deutsch → verwende die Zeile `Erstgespräch (DE)` aus dem Profil
+- Bewerbungssprache Englisch → verwende die Zeile `Erstgespräch (EN)` aus dem Profil
+- Der Link muss immer zur gewählten Bewerbungssprache passen — nie den deutschen
+  Link in einer englischen Bewerbung (oder umgekehrt)
 
 =================================================================
 
@@ -271,18 +283,28 @@ Format je Projekt:
 6. Abschluss
 
 - Interesse am Projekt
-- Call-to-Action
-- Hinweis auf Gesprächsmöglichkeit
-- IMMER ausdrücklich zu einem Termin über den Calendly-Link aus dem Profil einladen (HARTE REGEL):
-  Beispiel-Formulierung (natürlich anpassen, nicht 1:1 kopieren):
-  „Wenn das für Sie passt, können wir gerne unverbindlich sprechen –
-  einen Termin finden Sie direkt hier: <Calendly-Link aus dem Profil>"
-- Der Calendly-Link muss im Abschluss stehen, zusätzlich zur Signatur
+- Kurzer Ausblick / Gesprächsangebot
+- Lebenslauf im Anhang: Die E-Mail versendet automatisch den passenden CV als
+  PDF-Anhang. Verweise **genau einmal** natürlich darauf (HARTE REGEL), in der
+  Bewerbungssprache, z. B.:
+  - Deutsch: „Meinen Lebenslauf habe ich angehängt."
+  - Englisch: „I have attached my CV for your reference."
+  Behaupte nichts über Anhänge, die nicht existieren, und hänge keinen Dateinamen an.
+- IMMER zu einem kostenlosen Erstgespräch einladen (HARTE REGEL). Nimm den Link, der
+  zur oben bestimmten Bewerbungssprache gehört (Deutsch → `Erstgespräch (DE)`,
+  Englisch → `Erstgespräch (EN)`), und schreibe genau einen fertigen Satz:
+  - Deutsch: „Kostenloses Erstgespräch buchen: <Link aus Erstgespräch (DE)>"
+  - Englisch: „Book a free intro call: <Link aus Erstgespräch (EN)>"
+- Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
+  oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
+  fertigen Einladungssatz mit dem passenden Link aus.
 
 7. Signatur (HARTE REGEL – IMMER AUSGEBEN)
 
-Gib die Signatur exakt so aus, wie sie im Kandidatenprofil unter „Kontakt & Signatur"
-steht (Name, Titel, E-Mail, Telefon, LinkedIn, GitHub, Calendly).
+Gib die Signatur aus dem Profil-Abschnitt „Kontakt & Signatur" aus: Name, Titel,
+E-Mail, Telefon, Web, LinkedIn, GitHub. Übernimm dabei **keine** Meta-/Auswahl-Texte
+(z. B. Zeilen mit „CTA", „Hier musst … entscheiden", Klammer-Alternativen) — der
+Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 6), nicht roh in die Signatur.
 
 =================================================================
 
@@ -302,12 +324,14 @@ Ansprechpartner der Ausschreibung:
      kein ganzer Satz – z. B. „zu Ihrem Projekt <Kurztitel>" / „Ihre
      <Rolle>-Ausschreibung")
   3. Ein Halbsatz, warum der Kandidat zum Kern passt
-  4. Der **CTA des Kandidaten aus dem Profil** (der Erstgespräch-/Calendly-Hinweis
-     inkl. Link), sinngemäß und knapp übernommen
-- Der CTA-Link aus dem Profil ist der einzige erlaubte Link. Keine Hashtags, keine
-  Signatur.
-- Wird es mit CTA zu lang: den Passt-Halbsatz kürzen, aber Projektbezug **und** CTA
-  behalten. Alles zusammen strikt ≤ 250 Zeichen (der Link darf nicht abgeschnitten
+  4. Einladung zum kostenlosen Erstgespräch mit dem Link zur gewählten
+     Bewerbungssprache (Deutsch → `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`),
+     z. B. „Kostenloses Erstgespräch: <Link>" / „Free intro call: <Link>". Schreibe
+     NIEMALS „CTA" oder Klammer-Alternativen.
+- Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
+  Hashtags, keine Signatur.
+- Wird es mit dem Link zu lang: den Passt-Halbsatz kürzen, aber Projektbezug **und**
+  Erstgespräch-Link behalten. Alles zusammen strikt ≤ 250 Zeichen (der Link darf nicht abgeschnitten
   werden).
 
 =================================================================

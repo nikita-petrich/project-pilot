@@ -39,7 +39,7 @@ from project_pilot.models import (
     SourceState,
     Verdict,
 )
-from project_pilot.notification.telegram import MatchMessage, format_match
+from project_pilot.notification.messages import MatchMessage
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -70,8 +70,8 @@ class Matcher(Protocol):
 
 
 class Notifier(Protocol):
-    async def send_message(self, text: str, *, disable_preview: bool = True) -> bool: ...
-    async def send_match(self, text: str, *, listing_id: int) -> bool: ...
+    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool: ...
+    async def send_warning(self, text: str) -> bool: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -105,7 +105,7 @@ class Pipeline:
         session_factory: async_sessionmaker[AsyncSession],
         client_factory: ClientFactory,
         matcher: Matcher,
-        telegram: Notifier | None,
+        notifier: Notifier | None,
         base_url: str = BASE_URL,
     ) -> None:
         self._settings = settings
@@ -113,7 +113,7 @@ class Pipeline:
         self._session_factory = session_factory
         self._client_factory = client_factory
         self._matcher = matcher
-        self._telegram = telegram
+        self._notifier = notifier
         self._base_url = base_url
         self._source = SOURCE_NAME
 
@@ -178,10 +178,10 @@ class Pipeline:
             state.cooldown_until = None
 
     async def _warn(self, text: str) -> None:
-        if self._telegram is not None:
-            await self._telegram.send_message(f"⚠️ {text}")
+        if self._notifier is not None:
+            await self._notifier.send_warning(f"⚠️ {text}")
         else:
-            logger.warning("warning (no telegram): %s", text)
+            logger.warning("warning (no notifier): %s", text)
 
     async def _execute(
         self,
@@ -360,8 +360,8 @@ class Pipeline:
         pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
         if not pending:
             return
-        if self._telegram is None:
-            logger.info("dry-run: %d match(es) not sent (no Telegram configured)", len(pending))
+        if self._notifier is None:
+            logger.info("dry-run: %d match(es) not sent (no notifier configured)", len(pending))
             return
         failed = 0
         for listing in pending:  # one message per match, marked notified only on a successful send
@@ -369,13 +369,13 @@ class Pipeline:
             if message.onsite_only:
                 logger.info("skipping on-site-only match: %s", listing.external_url)
                 continue
-            if await self._telegram.send_match(format_match(message), listing_id=listing.id):
+            if await self._notifier.send_match(message, listing_id=listing.id):
                 await repo.mark_notified([listing], now)
                 outcome.notified += 1
             else:
                 failed += 1
         if failed:
-            logger.warning("telegram send failed; %d match(es) will retry next run", failed)
+            logger.warning("notifier send failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:
@@ -416,14 +416,14 @@ def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
 
 
 _CONTRACT_LABELS = {
-    "contracting": "Freiberuflich",
-    "contractor": "Freiberuflich",
-    "freelance": "Freiberuflich",
-    "employee_leasing": "Arbeitnehmerüberlassung",
-    "permanent_position": "Festanstellung",
-    "temporary_employment": "Zeitarbeit",
+    "contracting": "Freelance",
+    "contractor": "Freelance",
+    "freelance": "Freelance",
+    "employee_leasing": "Employee leasing",
+    "permanent_position": "Permanent position",
+    "temporary_employment": "Temporary employment",
 }
-_LANGUAGE_LABELS = {"de": "Deutsch", "en": "Englisch"}
+_LANGUAGE_LABELS = {"de": "German", "en": "English"}
 
 
 class _RawContract(BaseModel):
@@ -464,15 +464,15 @@ def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
-def _relative_de(posted_at: datetime, now: datetime) -> str | None:
+def _relative_ago(posted_at: datetime, now: datetime) -> str | None:
     minutes = int((now - posted_at).total_seconds() // 60)
     if minutes < 0:
         return None
     if minutes < 60:
-        return f"vor {minutes} Min"
+        return f"{minutes} min ago"
     if minutes < 1440:
-        return f"vor {minutes // 60} Std"
-    return f"vor {minutes // 1440} Tg"
+        return f"{minutes // 60} h ago"
+    return f"{minutes // 1440} d ago"
 
 
 def _expires_label(value: str | None) -> str | None:
@@ -490,7 +490,7 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     raw = _RawFields.model_validate(listing.raw or {})
 
     if listing.start_asap:
-        start: str | None = "ab sofort"
+        start: str | None = "ASAP"
     elif listing.start_date is not None:
         start = listing.start_date.strftime("%d.%m.%Y")
     else:
@@ -505,17 +505,17 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
     elif remote_pct >= 100:
         remote_label = "100%"
     else:
-        remote_label = f"{remote_pct}% ({100 - remote_pct}% vor Ort)"
+        remote_label = f"{remote_pct}% ({100 - remote_pct}% on-site)"
 
     contract_type = None
     if raw.contract and raw.contract.contract_type:
         contract_type = _CONTRACT_LABELS.get(raw.contract.contract_type, raw.contract.contract_type)
 
     duration_label = raw.duration_text or (
-        f"{raw.duration_in_months} Mon" if raw.duration_in_months else None
+        f"{raw.duration_in_months} mo" if raw.duration_in_months else None
     )
     if duration_label and raw.extension_possible:
-        duration_label += " (+ Verlängerung)"
+        duration_label += " (+ extension)"
 
     # The structured contact is the real person for direct posts, but the agency name for
     # brokered ones; in that case pull the person out of the description text instead.
@@ -540,7 +540,7 @@ def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
         workload_label=f"{raw.workload}%" if raw.workload else None,
         duration_label=duration_label,
         start=start,
-        posted_ago=_relative_de(listing.posted_at, now) if listing.posted_at else None,
+        posted_ago=_relative_ago(listing.posted_at, now) if listing.posted_at else None,
         expires_label=_expires_label(raw.expires),
         industry=raw.industry.name_de if raw.industry else None,
         language=_LANGUAGE_LABELS.get(language) if language else None,

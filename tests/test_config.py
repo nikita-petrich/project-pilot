@@ -67,14 +67,22 @@ def test_require_search_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_search_urls() == ["https://a.example/x"]
 
 
-def test_require_telegram(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
-    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+def test_require_slack(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_CHANNEL"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert not settings.has_slack()
     with pytest.raises(ConfigError):
-        Settings().require_telegram()
-    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "tok")
-    monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
-    assert Settings().require_telegram() == ("tok", "123")
+        settings.require_slack()
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-1")
+    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1")
+    monkeypatch.setenv("SLACK_CHANNEL", "C0123")
+    settings = Settings()
+    assert settings.has_slack()
+    slack = settings.require_slack()
+    assert slack.bot_token == "xoxb-1"
+    assert slack.app_token == "xapp-1"
+    assert slack.channel == "C0123"
 
 
 def test_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,3 +140,26 @@ def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> N
     assert smtp.sender == "bewerbung@nik.dev"
     assert smtp.port == 465
     assert smtp.use_starttls is False
+
+
+def test_cv_attachments_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CV_DE_PATH", raising=False)
+    monkeypatch.delenv("CV_EN_PATH", raising=False)
+    cvs = Settings().cv_attachments()
+    assert cvs.de is None and cvs.en is None
+    assert cvs.for_language("en") is None  # nothing configured → no attachment
+
+
+def test_cv_attachments_pick_language_and_require_existing_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+) -> None:
+    from pathlib import Path
+
+    de = Path(str(tmp_path)) / "CV-DE.pdf"
+    de.write_bytes(b"%PDF")
+    monkeypatch.setenv("CV_DE_PATH", str(de))
+    monkeypatch.setenv("CV_EN_PATH", str(Path(str(tmp_path)) / "missing.pdf"))
+    cvs = Settings().cv_attachments()
+    assert cvs.for_language("de") == de
+    assert cvs.for_language(None) == de  # default is the German CV
+    assert cvs.for_language("en") is None  # configured but file absent → skipped

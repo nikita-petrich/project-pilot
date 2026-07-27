@@ -2,7 +2,7 @@
 
 Fetches new project listings on a fixed interval, persists them losslessly,
 evaluates fresh ones against a profile (hard rules then LLM), and reports
-real matches via Telegram.
+real matches via Slack.
 """
 
 __version__ = "0.1.0"

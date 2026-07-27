@@ -10,7 +10,7 @@ there is a single source of truth.
 project-pilot is a personal, single-user worker that watches freelancermap.de for
 new project listings, persists every listing losslessly in PostgreSQL, evaluates
 fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
-and pushes real matches to Telegram within minutes. Backend only, no web UI. The
+and pushes real matches to Slack within minutes. Backend only, no web UI. The
 binding detail specification lives in `SPEC.md` at the repo root.
 
 This project is built with the **AI Coding Blueprint**, a workflow layer, not an
@@ -91,9 +91,9 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
-- Scheduler daemon (scan loop + Telegram bot): `uv run project-pilot daemon`
-- Telegram bot only (Apply buttons, `/apply`, draft review): `uv run project-pilot bot`
-- Send a test Telegram message: `uv run project-pilot test-notify`
+- Scheduler daemon (scan loop + Slack bot): `uv run project-pilot daemon`
+- Slack bot only (Apply buttons, `/apply`, thread review): `uv run project-pilot bot`
+- Post a test Slack message: `uv run project-pilot test-notify`
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
 - Reporting summary: `uv run project-pilot stats`
 
