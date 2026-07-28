@@ -145,13 +145,19 @@ freshly fetched), and `/apply <pasted project description>` works without a link
 
 **Uploading a file** (PDF, text, or **image**) does the same. Slack cannot attach a
 file to a slash command, so the bot asks instead: drop the file in the channel and
-it replies with two buttons — **📝 Apply** drafts the application, **🔍 Check**
-scores the listing first. Nothing is downloaded and no token is spent until you
-press one, and the buttons disappear once used, so an upload can never fire twice.
+it replies **in the upload's thread** with two buttons — **📝 Apply** drafts the
+application, **🔍 Check** scores the listing first. Nothing is downloaded and no
+token is spent until you press one, and the buttons disappear once used, so an
+upload can never fire twice.
 
 Any comment you add to the upload is kept as extra project context (there is no
 keyword to remember), and screenshots (PNG/JPEG/WebP/GIF) go to the vision LLM
 directly. Nothing is ever sent without the explicit Send tap.
+
+**Everything answers in a thread.** A slash command posts a single channel line
+(`📥 Application: …`) and puts the draft, progress, and any hint in its thread; an
+upload is answered in the **upload's own thread**, with no extra channel message. So
+the channel keeps one line per request and the back-and-forth stays out of the way.
 
 ## Finding a contact (enrichment)
 
@@ -208,6 +214,9 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   **🔍 Check** on the prompt (see above). A screenshot goes to the vision LLM
   directly, and a passing check still offers the **📝 Bewerben** button, which drafts
   from the same screenshot.
+
+Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
+lands in its thread; a checked upload is answered in the upload's own thread.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
 scanner's watermark stays untouched. One caveat for screenshots: the hard rules read

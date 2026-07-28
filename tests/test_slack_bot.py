@@ -91,6 +91,7 @@ def _button_elements(blocks: list[Block]) -> list[dict[str, object]]:
 class _FakePoster:
     def __init__(self) -> None:
         self.texts: list[tuple[str, str | None]] = []
+        self.text_ids: list[str] = []  # the ts each plain post got, for threading assertions
         self.posted_blocks: list[tuple[list[Block], str | None]] = []
         self.updates: list[tuple[str, str, list[Block]]] = []
         self._ts = 100
@@ -98,6 +99,7 @@ class _FakePoster:
     async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
         self._ts += 1
         self.texts.append((text, thread_ts))
+        self.text_ids.append(str(self._ts))
         return PostedMessage(channel=CHANNEL, ts=str(self._ts))
 
     async def post_blocks(
@@ -361,8 +363,18 @@ async def _upload_and_press(
     await bot.dispatch("events_api", event)
     key = _prompt_buttons(poster)[action]
     assert key is not None, f"prompt has no {action} button"
-    # the prompt message itself carries the button, so its ts is the click target
-    await bot.dispatch("interactive", _interactive(action, key, ts="900.1"))
+    # The prompt carries the button, so its ts is the click target; it is a reply to
+    # the upload, so Slack sends the upload's ts as the payload's thread_ts.
+    envelope = event["event"]
+    assert isinstance(envelope, dict)
+    await bot.dispatch(
+        "interactive",
+        _interactive(action, key, ts="900.1", thread_ts=_text_of(envelope.get("ts"))),
+    )
+
+
+def _text_of(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 async def test_apply_action_threads_draft_and_records_root_ref() -> None:
@@ -603,6 +615,15 @@ async def _png_reader(url: str) -> bytes:
     return b"\x89PNG"
 
 
+def _reader(payload: bytes) -> Callable[[str], Awaitable[bytes]]:
+    """A file reader returning fixed bytes, for uploads whose content matters."""
+
+    async def read(url: str) -> bytes:
+        return payload
+
+    return read
+
+
 async def test_image_upload_drafts_with_vision_after_pressing_apply() -> None:
     poster, service = _FakePoster(), _FakeService()
     bot = _bot(poster, service, file_reader=_png_reader)
@@ -768,6 +789,77 @@ async def test_slash_check_error_is_surfaced() -> None:
         "slash_commands", _slash(url, command="/check")
     )
     assert any("Project 7 not found" in t for t in poster.visible_texts())
+
+
+async def test_slash_apply_anchors_once_and_answers_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("Python Projekt gesucht"))
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("📥 Application: Python Projekt gesucht", None)
+    # exactly one channel line; everything after it hangs in that anchor's thread
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # replies in that thread route back to the draft
+    assert service.recorded == [(1, f"{CHANNEL}:{anchor_ts}")]
+
+
+async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == poster.text_ids[0]
+
+
+async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("Python RAG Projekt", command="/check")
+    )
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
+    # the progress line is the only follow-up, and it lives in the anchor's thread
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # the verdict replaces that threaded progress line — nothing lands in the channel
+    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
+    assert poster.posted_blocks == []
+
+
+async def test_slash_check_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("https://example.com/job", command="/check")
+    )
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == poster.text_ids[0]
+
+
+async def test_upload_prompt_is_posted_in_the_uploads_own_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", ts="500.5")
+    )
+    # the upload is the only channel line; the prompt replies to it
+    assert [thread for _, thread in poster.posted_blocks] == ["500.5"]
+    assert poster.texts == []
+
+
+async def test_upload_apply_threads_the_draft_under_the_upload() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_reader(b"Projektbeschreibung"), checker=checker)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt", ts="500.5"), "upload_apply")
+    assert poster.draft_rendered()
+    # progress and draft-ref hang off the upload, not off the prompt reply (900.1)
+    assert [thread for _, thread in poster.texts] == ["500.5"]
+    assert service.recorded == [(1, f"{CHANNEL}:500.5")]
+
+
+async def test_upload_check_verdict_stays_in_the_uploads_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_reader(b"Projektbeschreibung"), checker=checker)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt", ts="500.5"), "upload_check")
+    assert checker.calls  # the check ran
+    # the verdict reuses the prompt message (already a thread reply); no new channel post
+    assert len(poster.posted_blocks) == 1 and poster.posted_blocks[0][1] == "500.5"
+    assert all(thread == "500.5" for _, thread in poster.texts)
 
 
 async def test_upload_alone_only_offers_buttons_and_spends_nothing() -> None:

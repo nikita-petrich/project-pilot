@@ -4,6 +4,9 @@ Uploads work everywhere text does: a PDF/text/image dropped in the channel start
 a draft (the image path of ``/apply``, since slash commands cannot carry files),
 and an image posted in a draft's thread feeds the next revision as vision input.
 
+Every request costs the channel exactly one line: a slash command posts an anchor
+and answers in its thread, an upload is answered in its own thread.
+
 The routing is pure and unit-tested; the Socket Mode connection that feeds it is
 wired in ``cli.py`` (network boundary). Only the configured channel is served, and
 every state change is guarded in the service layer.
@@ -323,7 +326,7 @@ class SlackBot:
             return
         root = thread_ts or message_ts  # the thread everything for this draft lives in
         if action_id == "apply_url":  # a passing /check on a not-yet-stored listing URL
-            factory = await self._resolve_apply(value)
+            factory = await self._resolve_apply(value, thread_ts=root)
             if factory is not None:
                 await self._post_new_draft(
                     factory, root, progress="⏳ Creating application draft …"
@@ -333,10 +336,10 @@ class SlackBot:
             await self._apply_checked_text(value, root)
             return
         if action_id == "upload_apply":  # 📝 on an upload prompt
-            await self._apply_upload(value, prompt_ts=message_ts)
+            await self._apply_upload(value, prompt_ts=message_ts, thread_root=root)
             return
         if action_id == "upload_check":  # 🔍 on an upload prompt
-            await self._check_upload(value, prompt_ts=message_ts)
+            await self._check_upload(value, prompt_ts=message_ts, thread_root=root)
             return
         if not value.isdigit():
             return
@@ -360,15 +363,19 @@ class SlackBot:
         if not argument:
             await self._client.post_text(USAGE)
             return
-        factory = await self._resolve_apply(argument)
-        if factory is None:
-            return  # a hint was already posted
+        # A slash command leaves no message in the channel: post one anchor for it and
+        # keep every answer (hints, progress, draft) in that anchor's thread.
         parent = await self._client.post_text(f"📥 Application: {argument[:150]}")
         if parent is None:
             return
+        factory = await self._resolve_apply(argument, thread_ts=parent.ts)
+        if factory is None:
+            return  # a hint was already posted in the thread
         await self._post_new_draft(factory, parent.ts, progress="⏳ Creating application draft …")
 
-    async def _resolve_apply(self, argument: str) -> Callable[[], Awaitable[DraftView]] | None:
+    async def _resolve_apply(
+        self, argument: str, *, thread_ts: str | None
+    ) -> Callable[[], Awaitable[DraftView]] | None:
         if not argument.lower().startswith(("http://", "https://")):
             return lambda: self._service.draft_from_text(argument)
         listing_id = await self._service.find_listing_id_by_url(argument)
@@ -376,7 +383,8 @@ class SlackBot:
             return lambda: self._service.draft_for_listing(listing_id)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
-                "⚠️ I don't recognize this link. Use `/apply` with the project description as text."
+                "⚠️ I don't recognize this link. Use `/apply` with the project description as text.",
+                thread_ts=thread_ts,
             )
             return None
         fetcher = self._fetcher
@@ -394,16 +402,24 @@ class SlackBot:
         if not argument:
             await self._client.post_text(CHECK_USAGE)
             return
-        resolved = await self._resolve_check(argument)
+        # Same as ``/apply``: one anchor line in the channel, the verdict in its thread.
+        parent = await self._client.post_text(f"🔍 Check: {argument[:150]}")
+        if parent is None:
+            return
+        resolved = await self._resolve_check(argument, thread_ts=parent.ts)
         if resolved is None:
-            return  # a hint was already posted
+            return  # a hint was already posted in the thread
         factory, apply_action, apply_value = resolved
         await self._run_check(
-            factory, label=argument[:150], apply_action=apply_action, apply_value=apply_value
+            factory,
+            label=argument[:150],
+            apply_action=apply_action,
+            apply_value=apply_value,
+            thread_ts=parent.ts,
         )
 
     async def _resolve_check(
-        self, argument: str
+        self, argument: str, *, thread_ts: str | None
     ) -> tuple[CheckFactory, str | None, str | None] | None:
         """Turn the ``/check`` argument into a factory plus the apply-button routing."""
         checker = self._checker
@@ -425,7 +441,8 @@ class SlackBot:
             return from_stored, "apply", str(target)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
-                "⚠️ I don't recognize this link. Use `/check` with the project description as text."
+                "⚠️ I don't recognize this link. Use `/check` with the project description as text.",
+                thread_ts=thread_ts,
             )
             return None
         fetcher = self._fetcher
@@ -444,15 +461,17 @@ class SlackBot:
         apply_action: str | None,
         apply_value: str | None,
         target_ts: str | None = None,
+        thread_ts: str | None = None,
     ) -> None:
         """Run the check and render the verdict in place.
 
         ``target_ts`` reuses an existing message (an upload prompt) as the progress
-        placeholder instead of posting a new one.
+        placeholder instead of posting a new one; ``thread_ts`` is the thread a fresh
+        placeholder is posted into, so a verdict never lands loose in the channel.
         """
         progress = f"🔍 Checking against your profile: {label} …"
         if target_ts is None:
-            placeholder = await self._client.post_text(progress)
+            placeholder = await self._client.post_text(progress, thread_ts=thread_ts)
         else:
             await self._client.update_blocks(
                 self._channel, target_ts, status_blocks(progress), progress
@@ -461,11 +480,11 @@ class SlackBot:
         try:
             result, pending = await factory()
         except (ApplicationStateError, SelectorMismatchError, LlmSchemaError) as err:
-            await self._replace(placeholder, None, f"⚠️ {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ {err}")
             return
         except Exception as err:
             logger.exception("check failed")
-            await self._replace(placeholder, None, f"⚠️ Unexpected error: {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
         if result.passed and pending is not None and placeholder is not None:
             self._remember_check(placeholder.ts, pending)
@@ -475,7 +494,7 @@ class SlackBot:
         if placeholder is not None:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
-            await self._client.post_blocks(blocks, fallback)
+            await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
 
     def _remember_check(self, key: str, pending: _PendingCheck) -> None:
         """Keep a checked input so the result's apply button can draft from it later."""
@@ -512,7 +531,8 @@ class SlackBot:
         Inside a draft's thread the upload feeds that draft's revision — the thread
         already says which draft is meant. In the channel the intent is unknown, so
         the bot asks with 📝 Apply / 🔍 Check buttons; nothing runs (and no token is
-        spent) until one is pressed.
+        spent) until one is pressed. The prompt is posted as a reply to the upload, so
+        the whole exchange stays in the upload's thread and the channel keeps one line.
         """
         if channel != self._channel or self._file_reader is None:
             return
@@ -544,27 +564,32 @@ class SlackBot:
                 pending.label, key=message_ts, can_check=self._checker is not None
             ),
             upload_prompt_fallback_text(pending.label),
+            thread_ts=message_ts,
         )
 
-    async def _apply_upload(self, key: str, *, prompt_ts: str) -> None:
-        """📝 Apply on an upload prompt: draft from the screenshot(s) or document."""
+    async def _apply_upload(self, key: str, *, prompt_ts: str, thread_root: str) -> None:
+        """📝 Apply on an upload prompt: draft from the screenshot(s) or document.
+
+        The draft hangs off ``thread_root`` (the upload itself), not off the prompt —
+        the prompt is a reply, and the routing key must match the thread replies carry.
+        """
         pending = self._pending_uploads.pop(key, None)
         if pending is None:
-            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=prompt_ts)
+            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=thread_root)
             return
         await self._consume_prompt(prompt_ts, f"📥 Application from {pending.label}")
         await self._post_new_draft(
-            self._draft_factory(pending), prompt_ts, progress="⏳ Reading upload and drafting …"
+            self._draft_factory(pending), thread_root, progress="⏳ Reading upload and drafting …"
         )
 
-    async def _check_upload(self, key: str, *, prompt_ts: str) -> None:
+    async def _check_upload(self, key: str, *, prompt_ts: str, thread_root: str) -> None:
         """🔍 Check on an upload prompt: score it like the scanner would."""
         checker = self._checker
         if checker is None:
             return
         pending = self._pending_uploads.pop(key, None)
         if pending is None:
-            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=prompt_ts)
+            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=thread_root)
             return
 
         async def factory() -> tuple[CheckResult, _PendingCheck | None]:
@@ -578,6 +603,7 @@ class SlackBot:
             apply_action=None,
             apply_value=None,
             target_ts=prompt_ts,
+            thread_ts=thread_root,
         )
 
     def _draft_factory(self, pending: _PendingUpload) -> Callable[[], Awaitable[DraftView]]:
