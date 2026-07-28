@@ -68,21 +68,29 @@
 
 ## Kontakt & Signatur
 
-> In Bewerbungen exakt als Abschluss-Signatur ausgeben.
+> Werte-Quelle für den Signaturblock der Bewerbung. Das Layout selbst (Reihenfolge,
+> Leerzeilen, Beschriftungen, DE/EN) steht im Prompt unter „Grußformel und
+> Signatur" — hier stehen nur die Werte, in beliebiger Reihenfolge.
+>
+> `Ort` wird in deutschen, `Location` in englischen Bewerbungen ausgegeben; fehlt
+> eine Zeile (z. B. `Ort` oder `USt-IdNr.`), entfällt sie im Signaturblock
+> ersatzlos.
 >
 > Die beiden letzten Zeilen sind die Notion-Calendar-Buchungslinks für das
 > kostenlose Erstgespräch — je einer für deutsche und englische Bewerbungen. Der
 > Bewerbungs-Generator wählt den Link passend zur Bewerbungssprache und setzt ihn
-> in den Abschlusssatz sowie in die LinkedIn-Nachricht; sie sind kein Bestandteil
-> der Signaturzeilen. (`Erstgespräch (DE)` / `Erstgespräch (EN)` funktionieren als
-> Beschriftung ebenso.)
+> in den Abschlusssatz, in den Signaturblock und in die LinkedIn-Nachricht.
+> (`Erstgespräch (DE)` / `Erstgespräch (EN)` funktionieren als Beschriftung ebenso.)
 
 <Vorname Nachname>
 <Titel>
 E-Mail: <mail@example.com>
 Telefon: <+49 ...>
-Web: <example.com>
-LinkedIn: <https://www.linkedin.com/in/...>
+Web: <https://example.com>
+LinkedIn: <https://linkedin.com/in/...>
 GitHub: <https://github.com/...>
+Ort: <Stadt, Land>
+Location: <City, Country>
+USt-IdNr.: <DE123456789>
 CTA German: <https://calendar.notion.so/meet/<handle>/erstgespraech-30-min>
 CTA English: <https://calendar.notion.so/meet/<handle>/initial-consultation-30-min>

@@ -48,9 +48,12 @@ application drafts):
   no-gos, reference projects, and the application signature. **This file is
   gitignored and stays local** (it holds personal CV/contact data) — a sanitized
   `profile/profile.example.md` template is tracked instead, like `.env.example`.
-  Its contact block ends with the two Notion Calendar booking links
-  (`CTA German` / `CTA English`); the application generator picks the one matching
-  the application language for the closing sentence and the LinkedIn message.
+  Its `Kontakt & Signatur` block holds the values for the e-mail signature (name,
+  title, `Telefon`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, plus `Ort` / `Location`
+  and `USt-IdNr.`); the layout itself lives in the prompt. It ends with the two
+  Notion Calendar booking links (`CTA German` / `CTA English`); the application
+  generator picks the one matching the application language for the closing
+  sentence, the signature, and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
@@ -139,6 +142,11 @@ change how applications are written. The draft posts as **one** message:
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.
+- **Signature** — every draft closes with a signature block in the draft's language:
+  the `-- ` separator (RFC 3676), the greeting inside the block, name and title,
+  `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link,
+  then location and VAT ID — values from `profile.md`, layout from the prompt. The
+  confidentiality notice follows as the last block.
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
