@@ -69,6 +69,13 @@
 ## Kontakt & Signatur
 
 > In Bewerbungen exakt als Abschluss-Signatur ausgeben.
+>
+> Die beiden letzten Zeilen sind die Notion-Calendar-Buchungslinks für das
+> kostenlose Erstgespräch — je einer für deutsche und englische Bewerbungen. Der
+> Bewerbungs-Generator wählt den Link passend zur Bewerbungssprache und setzt ihn
+> in den Abschlusssatz sowie in die LinkedIn-Nachricht; sie sind kein Bestandteil
+> der Signaturzeilen. (`Erstgespräch (DE)` / `Erstgespräch (EN)` funktionieren als
+> Beschriftung ebenso.)
 
 <Vorname Nachname>
 <Titel>
@@ -77,4 +84,5 @@ Telefon: <+49 ...>
 Web: <example.com>
 LinkedIn: <https://www.linkedin.com/in/...>
 GitHub: <https://github.com/...>
-Calendly: <https://calendly.com/...>
+CTA German: <https://calendar.notion.so/meet/<handle>/erstgespraech-30-min>
+CTA English: <https://calendar.notion.so/meet/<handle>/initial-consultation-30-min>

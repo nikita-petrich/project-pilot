@@ -48,6 +48,9 @@ application drafts):
   no-gos, reference projects, and the application signature. **This file is
   gitignored and stays local** (it holds personal CV/contact data) — a sanitized
   `profile/profile.example.md` template is tracked instead, like `.env.example`.
+  Its contact block ends with the two Notion Calendar booking links
+  (`CTA German` / `CTA English`); the application generator picks the one matching
+  the application language for the closing sentence and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
