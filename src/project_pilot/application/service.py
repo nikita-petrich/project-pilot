@@ -14,11 +14,16 @@ from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.config import CvAttachments
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
-from project_pilot.evaluation.llm import render_listing
+from project_pilot.evaluation.llm import render_listing, render_listing_entity
 from project_pilot.ingestion.client import BASE_URL
-from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash, detect_language
+from project_pilot.ingestion.normalize import (
+    canonicalize_url,
+    compute_url_hash,
+    detect_language,
+    resolve_contact_name,
+)
 from project_pilot.ingestion.parser import ParsedListing
-from project_pilot.models import Application, ApplicationStatus, Listing
+from project_pilot.models import Application, ApplicationStatus
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -47,6 +52,18 @@ def extract_email(text: str) -> str | None:
     return None
 
 
+def _raw_str(raw: dict[str, object], key: str) -> str | None:
+    value = raw.get(key)
+    return value if isinstance(value, str) else None
+
+
+def _contact_from_raw(raw: dict[str, object], description: str) -> str | None:
+    """Resolve the contact person from a raw source record plus the description text."""
+    return resolve_contact_name(
+        _raw_str(raw, "firstName"), _raw_str(raw, "lastName"), _raw_str(raw, "company"), description
+    )
+
+
 def _iter_strings(value: object) -> Iterator[str]:
     if isinstance(value, str):
         yield value
@@ -58,32 +75,6 @@ def _iter_strings(value: object) -> Iterator[str]:
             yield from _iter_strings(item)
 
 
-def render_listing_entity(listing: Listing) -> str:
-    """Format a stored listing into the text block handed to the draft LLM."""
-    raw = listing.raw or {}
-    parts = [f"Title: {listing.title}"]
-    company = raw.get("company")
-    if isinstance(company, str) and company:
-        parts.append(f"Company: {company}")
-    contact = " ".join(
-        part for part in (raw.get("firstName"), raw.get("lastName")) if isinstance(part, str)
-    ).strip()
-    if contact:
-        parts.append(f"Contact: {contact}")
-    parts.append(f"Remote: {listing.remote_status.value}")
-    if listing.location:
-        parts.append(f"Location: {listing.location}")
-    if listing.start_asap:
-        parts.append("Start: ab sofort")
-    elif listing.start_date is not None:
-        parts.append(f"Start: {listing.start_date.isoformat()}")
-    if listing.skills:
-        parts.append("Skills: " + ", ".join(listing.skills))
-    parts.append("")
-    parts.append(listing.description)
-    return "\n".join(parts)
-
-
 @dataclass(frozen=True, slots=True)
 class DraftView:
     """Display-ready snapshot of an application (what the bot renders)."""
@@ -91,6 +82,7 @@ class DraftView:
     application_id: int
     title: str
     url: str | None
+    contact_name: str | None
     recipient: str | None
     subject: str
     body: str
@@ -104,6 +96,7 @@ def _to_view(application: Application) -> DraftView:
         application_id=application.id,
         title=application.listing_title,
         url=application.listing_url,
+        contact_name=application.contact_name,
         recipient=application.recipient_email,
         subject=application.subject,
         body=application.body,
@@ -150,6 +143,7 @@ class ApplicationService:
                 url=listing.external_url,
                 listing_id=listing.id,
                 recipient=recipient,
+                contact_name=_contact_from_raw(listing.raw or {}, listing.description or ""),
             )
             await repo.add_application(application)
             return _to_view(application)
@@ -169,6 +163,7 @@ class ApplicationService:
                 url=parsed.external_url,
                 listing_id=stored.id if stored is not None else None,
                 recipient=recipient,
+                contact_name=_contact_from_raw(parsed.raw, parsed.description),
             )
             await repo.add_application(application)
             return _to_view(application)
@@ -186,6 +181,7 @@ class ApplicationService:
                 url=None,
                 listing_id=None,
                 recipient=extract_email(text),
+                contact_name=resolve_contact_name(None, None, None, text),
             )
             await repo.add_application(application)
             return _to_view(application)
@@ -324,12 +320,14 @@ class ApplicationService:
         url: str | None,
         listing_id: int | None,
         recipient: str | None,
+        contact_name: str | None,
     ) -> Application:
         return Application(
             listing_id=listing_id,
             listing_url=url,
             listing_title=title,
             listing_text=listing_text,
+            contact_name=contact_name,
             recipient_email=recipient,
             subject=generated.draft.subject,
             body=generated.draft.body,

@@ -13,6 +13,14 @@ class SourceBlockedError(ProjectPilotError):
     """The source returned 403 or a captcha/bot wall; back off, never retry."""
 
 
+class SourceUnavailableError(ProjectPilotError):
+    """The source was unreachable (DNS, connect, timeout) after all retries.
+
+    Transient by nature: the run is abandoned, the watermark stays put, and the
+    next scan closes the gap.
+    """
+
+
 class SelectorMismatchError(ProjectPilotError):
     """A parser selector matched nothing; the source markup likely changed."""
 

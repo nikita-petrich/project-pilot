@@ -163,6 +163,7 @@ class Application(Base):
     listing_url: Mapped[str | None] = mapped_column(String(1024), default=None)
     listing_title: Mapped[str] = mapped_column(String(512))
     listing_text: Mapped[str] = mapped_column(Text, default="")
+    contact_name: Mapped[str | None] = mapped_column(String(256), default=None)
 
     recipient_email: Mapped[str | None] = mapped_column(String(320), default=None)
     subject: Mapped[str] = mapped_column(String(512), default="")

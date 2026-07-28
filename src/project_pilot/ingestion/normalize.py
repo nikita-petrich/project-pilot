@@ -146,6 +146,33 @@ def looks_like_company(name: str) -> bool:
     return bool(_COMPANY_SUFFIX_RE.search(name))
 
 
+# Deliberately narrow: only words that make a staffing/brokerage business explicit,
+# plus the large German IT agencies. Generic words a real end client also uses
+# ("GmbH", "Solutions", "Group") must not land here — a wrong guess is worse than
+# no guess, because freelancermap's own flag is the real signal.
+_RECRUITER_RE = re.compile(
+    r"\b(recruit\w*|staffing|resourcing|personaldienstleist\w*|personalberatung"
+    r"|personalvermittlung|projektvermittlung|zeitarbeit|interim[- ]?management"
+    r"|hays|gulp|etengo|solcom|questax|westhouse|michael page|robert half|randstad"
+    r"|hueter|allgeier experts|computer futures|darwin recruitment|freelance\.de)\b",
+    re.IGNORECASE,
+)
+
+
+def is_endcustomer(flag: bool | None, company: str | None) -> bool | None:
+    """Resolve direct client vs. recruiter: ``True`` direct, ``False`` agency, ``None`` unknown.
+
+    freelancermap's ``isEndcustomerProject`` is authoritative and always wins; only
+    when it is absent does the company name decide, and then only for names that
+    name a staffing business outright.
+    """
+    if flag is not None:
+        return flag
+    if company and _RECRUITER_RE.search(company):
+        return False
+    return None
+
+
 def extract_contact_person(text: str) -> str | None:
     """Pull a "First Last" contact name from a "contact person:"/"Ansprechpartner:" label."""
     if not text:
@@ -155,6 +182,20 @@ def extract_contact_person(text: str) -> str | None:
         return None
     name = match.group(1).strip()
     return None if looks_like_company(name) else name
+
+
+def resolve_contact_name(
+    first_name: str | None, last_name: str | None, company: str | None, text: str
+) -> str | None:
+    """Prefer the structured contact when it names a person, else pull one from ``text``.
+
+    freelancermap's structured contact holds the real person on direct posts but the
+    agency name on brokered ones; company-like values fall back to the text label.
+    """
+    structured = " ".join(part for part in (first_name, last_name) if part) or None
+    if structured and not looks_like_company(structured) and structured != company:
+        return structured
+    return extract_contact_person(text)
 
 
 def is_onsite_only(remote_percent: int | None, location: str | None, description: str) -> bool:

@@ -96,6 +96,7 @@ features:
   bot_user: { display_name: project-pilot, always_online: true }
   slash_commands:
     - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
+    - { command: /check, description: Check a listing against your profile, usage_hint: "<link or text>", should_escape: false }
 oauth_config:
   scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:
@@ -115,15 +116,19 @@ prompt (style rules, reference projects, skills, signature) — edit it directly
 change how applications are written. The draft posts as **one** message:
 
 - **Full e-mail** in copyable code blocks (split across Block Kit sections when
-  long, never truncated), plus the subject and the LinkedIn message.
+  long, never truncated), plus the subject and the LinkedIn message. Whenever a
+  contact person is known, a **🔍 … on LinkedIn** button under the LinkedIn text
+  opens a LinkedIn people search for that name (also on the post-send
+  confirmation in the thread).
 - **Recipient** — auto-extracted from the listing when an e-mail address is
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
-  (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
-  your mail client with subject (and recipient, once known) prefilled — available
-  from the start; **❌ Verwerfen** cancels.
+  (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
+  **📧 Open in mail client** link above the buttons opens your mail client with
+  subject (and recipient, once known) prefilled — available from the start. It is
+  a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.
@@ -136,11 +141,48 @@ without the explicit Send tap.
 
 ## Notion sales pipeline
 
-Match messages and application drafts carry an **📊 Add to Notion** button that
-files the project as a lead in the Notion **Sales Pipeline** database — with
-name (company when known), status (**Lead**, or **Contacted** for an already-sent
-application), lead source *Freelancermap*, customer type (Direct/Recruiter),
-link, and a notes summary (score, contact, location, start, skills).
+Every project you act on lands in the Notion **Sales Pipeline** database. Two ways
+in, and both write the same record:
+
+- **📤 Senden** files it automatically — a sent application *is* a contacted lead,
+  so no extra tap is needed. If Notion fails, the send is still confirmed and the
+  failure is reported separately; the e-mail is never held hostage by the CRM.
+- **📊 Add to Notion** on a match message or an application draft files it manually,
+  for projects you want tracked before (or without) applying.
+
+**Filing is an upsert, keyed on the listing link.** A project already in the
+pipeline is advanced in place instead of duplicated: the status only ever moves
+forward (a deal in *Negotiation* is never reset to *Contacted*), `Last Contact`
+and `Follow Up Date` are refreshed, and what happened is appended to the page body.
+Everything you edited by hand — notes, priority, estimated value — stays untouched.
+
+What a new entry carries:
+
+| Property | Filled with |
+|---|---|
+| `Name` | the client company, or the project title when freelancermap names no company |
+| `Status` | `Lead`, or `Contacted` once the application went out |
+| `Customer Type` | `Direct` / `Recruiter` (see below) |
+| `Lead Source` | `Freelancermap` |
+| `Contract Type` | `Freelance` / `ANÜ`, mapped from the listing's contract type |
+| `Priority` | from the match score: ≥85 High, ≥70 Medium, else Low |
+| `Link` | the listing URL (also the dedupe key) |
+| `Expected Close` | the project start date, when a concrete one is known |
+| `Last Contact` / `Follow Up Date` | the send date and a nudge one week later |
+| `Notes` | score, client type, contact, location, remote, contract, workload, duration, start, posted, apply-by, industry, language, skills, fit reasons, your skills, gaps, risks, recipient, subject |
+| page body | the full project description, the complete application e-mail, and the LinkedIn message |
+
+`Estimated Value` stays empty on purpose — freelancermap publishes no rate, and a
+made-up number in a sales pipeline is worse than a blank field. The `Contact`
+relation is left alone too; it points at a separate contacts database, so the
+contact name and address ride along in the notes instead.
+
+**Recruiter or direct client** comes from freelancermap itself: the listing's
+`isEndcustomerProject` flag is authoritative and always wins. Only when the flag is
+missing does the company name decide, and then only for names that state a staffing
+business outright (`Hays`, `SOLCOM`, `…Personalvermittlung`, `Recruiting…`).
+Generic names ("Acme GmbH", "Digital Solutions Group") leave the field empty rather
+than guessing — a wrong client type is worse than none.
 
 Setup:
 
@@ -148,16 +190,33 @@ Setup:
    [notion.so/my-integrations](https://www.notion.so/my-integrations) and copy its
    secret into `NOTION_TOKEN`.
 2. In Notion, open the Sales Pipeline database → **⋯ → Connections** and add the
-   integration so it may write to the database.
+   integration so it may read and write the database (reading is what makes the
+   duplicate check work).
 3. Set `NOTION_DATABASE_ID` to the database's id (the 32-hex-character part of its
    URL).
 
-The button expects the database properties `Name`, `Status` (with options `Lead`
-and `Contacted`), `Lead Source` (option `Freelancermap`), `Customer Type`
-(`Direct`/`Recruiter`), `Contract Type`, `Link`, and `Notes` — the property names
-are centralized at the top of `src/project_pilot/notification/notion.py`. Leave
-the two variables unset to run without the Notion integration (the button then
-answers with a configuration hint).
+The property names above are centralized at the top of
+`src/project_pilot/notification/notion.py` — rename a column in Notion and you
+change it in exactly one place. Leave the two variables unset to run without the
+integration: sending still works, and the button answers with a configuration hint.
+
+## Checking a listing from Slack
+
+`/check <freelancermap-link or pasted project description>` runs any listing through
+the same evaluation the scanner uses — hard rules from `constraints.yaml` first
+(0 tokens), then the LLM match against your profile:
+
+- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full match message you know from
+  the scanner (all listing facts, reasons, gaps, risks) including the **📝 Bewerben**
+  button, so the apply flow starts exactly as if the scanner had found it.
+- **No match** — posts the verdict with the failed hard rule (matched blacklist
+  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
+- **Files** — upload a PDF/text file with a comment containing `check` and the
+  extracted text is checked instead of drafted (a comment without `check` keeps the
+  usual upload-to-apply behavior).
+
+A check is read-only: nothing is stored, the freshness gate is skipped, and the
+scanner's watermark stays untouched.
 
 ## Running on the home server (Docker)
 

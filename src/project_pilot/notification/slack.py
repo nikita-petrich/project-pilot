@@ -2,7 +2,8 @@
 
 One message carries everything: a match posts its full listing plus an apply
 button; a draft posts the complete e-mail (split across ``section`` blocks so it is
-never truncated), the LinkedIn text, and Send/Discard/Open-in-mail buttons.
+never truncated), the LinkedIn text, an open-in-mail-client link, and Send/Discard
+buttons.
 
 All bot chrome (labels, buttons, hints, status) is English; only the generated
 application text follows the project's language.
@@ -15,7 +16,8 @@ from urllib.parse import quote
 
 from project_pilot.application.schemas import LINKEDIN_LIMIT
 from project_pilot.application.service import DraftView
-from project_pilot.models import ApplicationStatus
+from project_pilot.evaluation.check import CheckResult
+from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
 from project_pilot.notification.messages import MatchMessage
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,20 @@ def status_blocks(text: str) -> list[Block]:
     return [_section(text)]
 
 
+def linkedin_search_url(name: str) -> str:
+    """LinkedIn people search pre-filled with the contact's name."""
+    return f"https://www.linkedin.com/search/results/people/?keywords={quote(name)}"
+
+
+def _linkedin_search_actions(contact_name: str) -> Block:
+    button = _button(
+        f"🔍 {contact_name[:60]} on LinkedIn",
+        action_id="linkedin_search",
+        url=linkedin_search_url(contact_name),
+    )
+    return {"type": "actions", "elements": [button]}
+
+
 def _code_sections(text: str, *, label: str) -> list[Block]:
     """Render ``text`` as one or more copyable code-block sections under ``label``.
 
@@ -136,8 +152,8 @@ def _labeled_list(label: str, values: list[str], *, limit: int) -> str | None:
     return f"*{label}:* {_esc(', '.join(picked))}" if picked else None
 
 
-def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
-    """Build the Block Kit message for one matched listing (with an apply button)."""
+def _match_body(message: MatchMessage) -> list[Block]:
+    """The match message's content blocks (everything except the action buttons)."""
     blocks: list[Block] = [_header(f"🎯 {message.title} · {message.score}/100")]
 
     who = None
@@ -175,7 +191,12 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
 
     if message.description:
         blocks.append(_description_block(message.description))
+    return blocks
 
+
+def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
+    """Build the Block Kit message for one matched listing (with an apply button)."""
+    blocks = _match_body(message)
     actions: list[Block] = [
         _button("📝 Apply", action_id="apply", value=str(listing_id)),
         _button("📊 Add to Notion", action_id="notion_lead", value=str(listing_id)),
@@ -184,6 +205,78 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
     return blocks
+
+
+def _reason_list(reason: dict[str, object], key: str) -> list[str]:
+    value = reason.get(key)
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def _hard_rule_line(reason: dict[str, object]) -> str:
+    rule = str(reason.get("rule", "unknown"))
+    if rule == "blacklist":
+        term = str(reason.get("matched_term", ""))
+        return f"🚫 Hard rule *blacklist* hit: `{_esc(term)}` (0 tokens spent)."
+    required = ", ".join(_reason_list(reason, "required"))
+    return f"🚫 Hard rule *must-have* failed: none of the required terms found ({_esc(required)})."
+
+
+def format_check_blocks(
+    result: CheckResult, *, apply_action: str | None = None, apply_value: str | None = None
+) -> list[Block]:
+    """Render a manual ``/check`` verdict; a pass reuses the match-message body.
+
+    A passing check looks exactly like a scan match (full listing, apply button) so
+    the follow-up flow is identical; the apply button's action/value depend on how
+    the checked listing can be reached again (stored id, URL, or remembered text).
+    """
+    if result.passed and result.message is not None:
+        blocks = _match_body(result.message)
+        actions: list[Block] = []
+        if apply_action is not None and apply_value is not None:
+            actions.append(_button("📝 Apply", action_id=apply_action, value=apply_value))
+        if result.message.url:
+            actions.append(
+                _button("🔗 View project", action_id="open_project", url=result.message.url)
+            )
+        if actions:
+            blocks.append({"type": "actions", "elements": actions})
+        blocks.append(
+            _context(
+                f"🔍 Check verdict: ✅ match — score {result.score} ≥ "
+                f"threshold {result.threshold}. Nothing was stored."
+            )
+        )
+        return blocks
+
+    blocks = [_header(f"❌ No match: {result.title}")]
+    if result.stage is EvaluationStage.HARD_RULE:
+        blocks.append(_section(_hard_rule_line(result.reason)))
+    elif result.is_llm_error:
+        blocks.append(
+            _section("⚠️ The LLM returned no verdict (fallback: no match) — try again later.")
+        )
+    else:
+        lines = [f"*Score:* {result.score}/100 (threshold {result.threshold})"]
+        if result.verdict is Verdict.MATCH:
+            lines[0] += " — a match, but below your threshold"
+        for label, key, limit in (
+            ("📝 Reasons", "reasons", 4),
+            ("🎯 Your skills", "matching_skills", 8),
+            ("⚠️ Gaps", "missing_requirements", 4),
+            ("🚩 Risks", "risk_flags", 3),
+        ):
+            line = _labeled_list(label, _reason_list(result.reason, key), limit=limit)
+            if line:
+                lines.append(line)
+        blocks.append(_section("\n".join(lines)))
+    blocks.append(_context("🔍 Check verdict — nothing was stored or notified."))
+    return blocks
+
+
+def check_fallback_text(result: CheckResult) -> str:
+    verdict = "match" if result.passed else "no match"
+    return f"🔍 Check: {verdict} — {result.title}"
 
 
 def format_draft_blocks(view: DraftView) -> list[Block]:
@@ -203,15 +296,21 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
             label=f"💬 LinkedIn ({len(view.linkedin_message)}/{LINKEDIN_LIMIT})",
         )
     )
+    # The search button rides with the LinkedIn text in every state (also after
+    # sending, when the outreach actually happens).
+    if view.contact_name:
+        blocks.append(_linkedin_search_actions(view.contact_name))
 
     actions: list[Block] = []
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
+        # "Open in mail client" is a mrkdwn mailto link, not a URL button: Slack
+        # clients only open http(s) button URLs and silently drop a mailto click,
+        # while mailto links in text open the OS mail client. It is always offered —
+        # a missing recipient is simply left blank and filled in the mail client.
+        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
+        blocks.append(_section(_link(mailto, "📧 Open in mail client")))
         if view.recipient:
             actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
-        # "Open in mail client" is always offered — a missing recipient is simply
-        # left blank in the mailto and filled in the mail client.
-        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
-        actions.append(_button("📧 Open in mail client", action_id="open_mail", url=mailto))
         actions.append(_button("❌ Discard", action_id="cancel", value=str(view.application_id)))
     if view.status in (
         ApplicationStatus.READY,
@@ -236,6 +335,19 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     )
     blocks.append(_context(" · ".join(hints)))
     return blocks
+
+
+def sent_confirmation_blocks(view: DraftView) -> list[Block]:
+    """Thread confirmation after a send: the LinkedIn text to copy plus the search button."""
+    blocks = [_section(f"✅ Application sent to *{_esc(view.recipient or '')}*")]
+    blocks.extend(_code_sections(view.linkedin_message, label="💬 LinkedIn message (copy)"))
+    if view.contact_name:
+        blocks.append(_linkedin_search_actions(view.contact_name))
+    return blocks
+
+
+def sent_fallback_text(view: DraftView) -> str:
+    return f"✅ Application sent to {view.recipient or ''}"
 
 
 def match_fallback_text(message: MatchMessage) -> str:

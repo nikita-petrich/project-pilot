@@ -3,7 +3,8 @@
 from typing import cast
 
 from project_pilot.application.service import DraftView
-from project_pilot.models import ApplicationStatus
+from project_pilot.evaluation.check import CheckResult
+from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.slack import (
     Block,
@@ -11,8 +12,11 @@ from project_pilot.notification.slack import (
     SlackClient,
     SlackResponse,
     SlackWebClient,
+    check_fallback_text,
+    format_check_blocks,
     format_draft_blocks,
     format_match_blocks,
+    sent_confirmation_blocks,
 )
 
 
@@ -47,11 +51,13 @@ def _draft_view(
     status: ApplicationStatus = ApplicationStatus.READY,
     body: str = "Sehr geehrte Damen und Herren,\nich passe gut.",
     revision_count: int = 1,
+    contact_name: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=7,
         title="KI-Projekt",
         url="https://www.freelancermap.de/projekt/x",
+        contact_name=contact_name,
         recipient=recipient,
         subject="Bewerbung: KI-Projekt",
         body=body,
@@ -121,9 +127,10 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     assert "```Sehr geehrte Damen und Herren,\nich passe gut.```" in sections
     assert "```Hallo, kurzes Interesse!```" in sections
     ids = _action_ids(blocks)
-    assert ids == ["send", "open_mail", "cancel", "notion_lead_app"]
-    mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
-    assert str(mail_button["url"]).startswith("mailto:pm@firma.de?subject=Bewerbung")
+    assert ids == ["send", "cancel", "notion_lead_app"]
+    # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs).
+    mail_link = "<mailto:pm@firma.de?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>"
+    assert mail_link in sections
     send_button = next(e for e in _action_elements(blocks) if e["action_id"] == "send")
     assert send_button["value"] == "7"
 
@@ -132,10 +139,10 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
     blocks = format_draft_blocks(
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
-    # No Senden (no recipient yet), but the mail-client button is available up front.
-    assert _action_ids(blocks) == ["open_mail", "cancel", "notion_lead_app"]
-    mail_button = next(e for e in _action_elements(blocks) if e["action_id"] == "open_mail")
-    assert str(mail_button["url"]).startswith("mailto:?subject=Bewerbung")
+    # No Senden (no recipient yet), but the mail-client link is available up front.
+    assert _action_ids(blocks) == ["cancel", "notion_lead_app"]
+    sections = "\n".join(_section_texts(blocks))
+    assert "<mailto:?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>" in sections
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "e-mail address" in str(context[0]["text"])
@@ -151,6 +158,59 @@ def test_draft_blocks_cancelled_have_no_actions() -> None:
     assert not _blocks_of_type(blocks, "actions")
 
 
+def _all_action_elements(blocks: list[Block]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for actions in _blocks_of_type(blocks, "actions"):
+        block_elements = actions["elements"]
+        assert isinstance(block_elements, list)
+        elements.extend(cast("dict[str, object]", element) for element in block_elements)
+    return elements
+
+
+def test_draft_blocks_offer_linkedin_search_for_contact() -> None:
+    blocks = format_draft_blocks(_draft_view(contact_name="Anna Kleinen"))
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert button["url"] == (
+        "https://www.linkedin.com/search/results/people/?keywords=Anna%20Kleinen"
+    )
+    text = button["text"]
+    assert isinstance(text, dict)
+    assert "Anna Kleinen" in str(text["text"])
+    # the search button rides directly under the LinkedIn section, before the review row
+    assert _action_ids(blocks) == ["linkedin_search"]
+    assert len(_blocks_of_type(blocks, "actions")) == 2
+
+
+def test_draft_blocks_keep_linkedin_search_after_send() -> None:
+    blocks = format_draft_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
+    # review buttons gone; the search and the pipeline entry stay
+    assert ids == ["linkedin_search", "notion_lead_app"]
+
+
+def test_draft_blocks_without_contact_have_no_linkedin_search() -> None:
+    ids = [str(e["action_id"]) for e in _all_action_elements(format_draft_blocks(_draft_view()))]
+    assert "linkedin_search" not in ids
+
+
+def test_sent_confirmation_carries_linkedin_text_and_search_button() -> None:
+    blocks = sent_confirmation_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    joined = "\n".join(_section_texts(blocks))
+    assert "sent to *pm@firma.de*" in joined
+    assert "```Hallo, kurzes Interesse!```" in joined
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert "keywords=Anna%20Kleinen" in str(button["url"])
+
+
+def test_sent_confirmation_without_contact_has_no_button() -> None:
+    blocks = sent_confirmation_blocks(_draft_view(status=ApplicationStatus.SENT))
+    assert _blocks_of_type(blocks, "actions") == []
+
+
 def test_draft_blocks_split_long_email_without_truncation() -> None:
     body = "\n".join(f"Zeile {i}: " + "wort " * 40 for i in range(300))
     blocks = format_draft_blocks(_draft_view(body=body))
@@ -161,6 +221,89 @@ def test_draft_blocks_split_long_email_without_truncation() -> None:
     assert all("…" not in t for t in email_sections)  # nothing cut off
     joined = "".join(email_sections)
     assert "Zeile 0:" in joined and "Zeile 299:" in joined
+
+
+def _check_result(
+    *,
+    passed: bool = True,
+    stage: EvaluationStage = EvaluationStage.LLM,
+    verdict: Verdict = Verdict.MATCH,
+    score: int | None = 80,
+    reason: dict[str, object] | None = None,
+    message: MatchMessage | None = None,
+    is_llm_error: bool = False,
+) -> CheckResult:
+    return CheckResult(
+        title="KI-Projekt",
+        stage=stage,
+        verdict=verdict,
+        passed=passed,
+        score=score,
+        threshold=60,
+        reason=reason or {},
+        message=message,
+        is_llm_error=is_llm_error,
+    )
+
+
+def test_check_blocks_pass_reuse_match_body_with_custom_apply_button() -> None:
+    message = MatchMessage(
+        title="KI-Projekt", url="https://x/1", score=80, reasons=["RAG Erfahrung"]
+    )
+    blocks = format_check_blocks(
+        _check_result(message=message), apply_action="apply", apply_value="42"
+    )
+    header = next(b for b in blocks if b.get("type") == "header")["text"]
+    assert isinstance(header, dict)
+    assert "KI-Projekt" in str(header["text"]) and "80/100" in str(header["text"])
+    apply_button = _action_elements(blocks)[0]
+    assert apply_button["action_id"] == "apply" and apply_button["value"] == "42"
+    assert "open_project" in _action_ids(blocks)
+    context = next(b for b in blocks if b.get("type") == "context")["elements"]
+    assert isinstance(context, list)
+    assert "✅ match" in str(context[0]["text"]) and "threshold 60" in str(context[0]["text"])
+
+
+def test_check_blocks_pass_without_url_or_apply_ref_has_no_buttons() -> None:
+    message = MatchMessage(title="Text-Check", url="", score=70)
+    blocks = format_check_blocks(_check_result(message=message))
+    assert not [b for b in blocks if b.get("type") == "actions"]
+
+
+def test_check_blocks_hard_rule_shows_matched_term() -> None:
+    result = _check_result(
+        passed=False,
+        stage=EvaluationStage.HARD_RULE,
+        verdict=Verdict.NO_MATCH,
+        score=None,
+        reason={"rule": "blacklist", "matched_term": "sap"},
+    )
+    blocks = format_check_blocks(result)
+    joined = "\n".join(_section_texts(blocks))
+    assert "blacklist" in joined and "`sap`" in joined
+    assert "No match" in str(next(b for b in blocks if b.get("type") == "header")["text"])
+
+
+def test_check_blocks_match_below_threshold_says_so() -> None:
+    result = _check_result(
+        passed=False,
+        score=55,
+        reason={"reasons": ["passt teils"], "missing_requirements": ["kubernetes"]},
+    )
+    joined = "\n".join(_section_texts(format_check_blocks(result)))
+    assert "55/100" in joined and "below your threshold" in joined
+    assert "passt teils" in joined and "kubernetes" in joined
+
+
+def test_check_blocks_llm_error_warns() -> None:
+    result = _check_result(passed=False, verdict=Verdict.NO_MATCH, score=0, is_llm_error=True)
+    joined = "\n".join(_section_texts(format_check_blocks(result)))
+    assert "no verdict" in joined
+
+
+def test_check_fallback_text_states_verdict() -> None:
+    assert "match" in check_fallback_text(_check_result(message=None))
+    assert "no match" in check_fallback_text(_check_result(passed=False))
 
 
 class _Resp:
