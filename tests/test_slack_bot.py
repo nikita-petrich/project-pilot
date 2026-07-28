@@ -84,6 +84,7 @@ def _button_elements(blocks: list[Block]) -> list[dict[str, object]]:
 class _FakePoster:
     def __init__(self) -> None:
         self.texts: list[tuple[str, str | None]] = []
+        self.text_ids: list[str] = []  # the ts each plain post got, for threading assertions
         self.posted_blocks: list[tuple[list[Block], str | None]] = []
         self.updates: list[tuple[str, str, list[Block]]] = []
         self._ts = 100
@@ -91,6 +92,7 @@ class _FakePoster:
     async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
         self._ts += 1
         self.texts.append((text, thread_ts))
+        self.text_ids.append(str(self._ts))
         return PostedMessage(channel=CHANNEL, ts=str(self._ts))
 
     async def post_blocks(
@@ -251,17 +253,29 @@ def _bot(
     )
 
 
+UPLOAD_TS = "500.5"
+
+
 def _file_event(
     name: str,
     *,
     channel: str = CHANNEL,
     url: str | None = "https://files.slack/x",
     text: str = "",
+    ts: str | None = UPLOAD_TS,
 ) -> dict[str, object]:
     file: dict[str, object] = {"name": name}
     if url is not None:
         file["url_private_download"] = url
-    return {"event": {"type": "message", "channel": channel, "text": text, "files": [file]}}
+    event: dict[str, object] = {
+        "type": "message",
+        "channel": channel,
+        "text": text,
+        "files": [file],
+    }
+    if ts is not None:
+        event["ts"] = ts
+    return {"event": event}
 
 
 def _interactive(
@@ -417,8 +431,20 @@ async def test_slash_apply_text_drafts_from_text_in_thread() -> None:
     await _bot(poster, service).dispatch("slash_commands", _slash("Python Projekt gesucht"))
     assert ("draft_from_text", "Python Projekt gesucht") in service.calls
     assert poster.draft_rendered()
-    # a parent message is created and the draft lives in its thread
-    assert service.recorded and service.recorded[0][0] == 1
+    # exactly one channel-level anchor; every further post hangs in its thread
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("📥 Application: Python Projekt gesucht", None)
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # replies in that thread route back to the draft
+    assert service.recorded == [(1, f"{CHANNEL}:{anchor_ts}")]
+
+
+async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
+    anchor_ts = poster.text_ids[0]
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == anchor_ts
 
 
 async def test_slash_apply_known_url_uses_stored_listing() -> None:
@@ -504,7 +530,7 @@ async def test_reply_to_unknown_thread_is_ignored() -> None:
     assert poster.texts == []
 
 
-async def test_file_upload_drafts_from_extracted_text() -> None:
+async def test_file_upload_drafts_from_extracted_text_in_the_upload_thread() -> None:
     poster, service = _FakePoster(), _FakeService()
 
     async def reader(url: str) -> bytes:
@@ -517,6 +543,38 @@ async def test_file_upload_drafts_from_extracted_text() -> None:
     assert any(
         name == "draft_from_text" and "Python Backend" in str(arg) for name, arg in service.calls
     )
+    assert poster.draft_rendered()
+    # no extra channel message: the upload itself is the thread everything answers in
+    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
+    assert service.recorded == [(1, f"{CHANNEL}:{UPLOAD_TS}")]
+
+
+async def test_file_upload_inside_a_thread_answers_in_that_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        return b"Projektbeschreibung"
+
+    event = _file_event("projekt.txt")
+    envelope = event["event"]
+    assert isinstance(envelope, dict)
+    envelope["thread_ts"] = "111.1"  # dropped into an existing thread, not the channel
+    await _bot(poster, service, file_reader=reader).dispatch("events_api", event)
+    assert [thread for _, thread in poster.texts] == ["111.1"]
+
+
+async def test_file_upload_without_timestamp_falls_back_to_its_own_anchor() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        return b"Projektbeschreibung"
+
+    await _bot(poster, service, file_reader=reader).dispatch(
+        "events_api", _file_event("projekt.txt", ts=None)
+    )
+    anchor_text, anchor_thread = poster.texts[0]
+    assert anchor_text.startswith("📥 Application from file:") and anchor_thread is None
+    assert [thread for _, thread in poster.texts[1:]] == [poster.text_ids[0]]
     assert poster.draft_rendered()
 
 
@@ -564,6 +622,43 @@ async def test_slash_check_text_match_renders_apply_button_for_remembered_text()
     await bot.dispatch("interactive", _interactive("apply_check", key))
     assert ("draft_from_text", "Python RAG Projekt") in service.calls
     assert poster.draft_rendered()
+
+
+async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("Python RAG Projekt", command="/check")
+    )
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
+    # the progress line is the only follow-up, and it lives in the anchor's thread
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # the verdict replaces that threaded progress line — nothing lands in the channel
+    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
+    assert poster.posted_blocks == []
+
+
+async def test_slash_check_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("https://example.com/job", command="/check")
+    )
+    anchor_ts = poster.text_ids[0]
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == anchor_ts
+
+
+async def test_file_upload_check_answers_in_the_upload_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+
+    async def reader(url: str) -> bytes:
+        return b"Senior Python Backend Engineer gesucht"
+
+    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", text="check das bitte")
+    )
+    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
+    assert poster.posted_blocks == []  # the verdict replaces the threaded progress line
 
 
 async def test_slash_check_no_match_renders_verdict_without_apply_button() -> None:

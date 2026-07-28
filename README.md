@@ -140,6 +140,11 @@ freshly fetched), and `/apply <pasted project description>` works without a link
 way — drop in a project-description PDF and the draft appears. Nothing is ever sent
 without the explicit Send tap.
 
+**Everything answers in a thread.** A slash command posts a single channel line
+(`📥 Application: …`) and puts the draft, progress, and any hint in its thread; an
+upload is answered in the **upload's own thread**, with no extra channel message. So
+the channel keeps one line per request and the back-and-forth stays out of the way.
+
 ## Finding a contact (enrichment)
 
 Optional, **off by default** (`ENRICHMENT_ENABLED=true` to switch on). When a match
@@ -194,6 +199,9 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
 - **Files** — upload a PDF/text file with a comment containing `check` and the
   extracted text is checked instead of drafted (a comment without `check` keeps the
   usual upload-to-apply behavior).
+
+Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
+lands in its thread; a checked upload is answered in the upload's own thread.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
 scanner's watermark stays untouched.

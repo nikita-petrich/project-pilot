@@ -191,6 +191,9 @@ class SlackBot:
                 channel=_text(event.get("channel")),
                 files=[_mapping(item) for item in files],
                 text=_text(event.get("text")) or "",
+                # Answer inside the upload's own thread (or the thread it was dropped
+                # into), so the channel keeps exactly one line per upload.
+                thread_ts=_text(event.get("thread_ts")) or _text(event.get("ts")),
             )
             return
         # A file-share message also carries a subtype; only text replies flow on.
@@ -222,7 +225,7 @@ class SlackBot:
             return
         root = thread_ts or message_ts  # the thread everything for this draft lives in
         if action_id == "apply_url":  # a passing /check on a not-yet-stored listing URL
-            factory = await self._resolve_apply(value)
+            factory = await self._resolve_apply(value, thread_ts=root)
             if factory is not None:
                 await self._post_new_draft(
                     factory, root, progress="⏳ Creating application draft …"
@@ -253,15 +256,19 @@ class SlackBot:
         if not argument:
             await self._client.post_text(USAGE)
             return
-        factory = await self._resolve_apply(argument)
-        if factory is None:
-            return  # a hint was already posted
+        # A slash command leaves no message in the channel: post one anchor for it and
+        # keep every answer (hints, progress, draft) in that anchor's thread.
         parent = await self._client.post_text(f"📥 Application: {argument[:150]}")
         if parent is None:
             return
+        factory = await self._resolve_apply(argument, thread_ts=parent.ts)
+        if factory is None:
+            return  # a hint was already posted in the thread
         await self._post_new_draft(factory, parent.ts, progress="⏳ Creating application draft …")
 
-    async def _resolve_apply(self, argument: str) -> Callable[[], Awaitable[DraftView]] | None:
+    async def _resolve_apply(
+        self, argument: str, *, thread_ts: str | None
+    ) -> Callable[[], Awaitable[DraftView]] | None:
         if not argument.lower().startswith(("http://", "https://")):
             return lambda: self._service.draft_from_text(argument)
         listing_id = await self._service.find_listing_id_by_url(argument)
@@ -269,7 +276,8 @@ class SlackBot:
             return lambda: self._service.draft_for_listing(listing_id)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
-                "⚠️ I don't recognize this link. Use `/apply` with the project description as text."
+                "⚠️ I don't recognize this link. Use `/apply` with the project description as text.",
+                thread_ts=thread_ts,
             )
             return None
         fetcher = self._fetcher
@@ -287,16 +295,20 @@ class SlackBot:
         if not argument:
             await self._client.post_text(CHECK_USAGE)
             return
-        resolved = await self._resolve_check(argument)
+        # Same as ``/apply``: one anchor line in the channel, the verdict in its thread.
+        parent = await self._client.post_text(f"🔍 Check: {argument[:150]}")
+        if parent is None:
+            return
+        resolved = await self._resolve_check(argument, thread_ts=parent.ts)
         if resolved is None:
-            return  # a hint was already posted
+            return  # a hint was already posted in the thread
         factory, apply_action, apply_value = resolved
         await self._run_check(
-            factory, label=argument[:150], apply_action=apply_action, apply_value=apply_value
+            factory, apply_action=apply_action, apply_value=apply_value, thread_ts=parent.ts
         )
 
     async def _resolve_check(
-        self, argument: str
+        self, argument: str, *, thread_ts: str | None
     ) -> tuple[CheckFactory, str | None, str | None] | None:
         """Turn the ``/check`` argument into a factory plus the apply-button routing."""
         checker = self._checker
@@ -318,7 +330,8 @@ class SlackBot:
             return from_stored, "apply", str(target)
         if "freelancermap." not in argument or self._fetcher is None:
             await self._client.post_text(
-                "⚠️ I don't recognize this link. Use `/check` with the project description as text."
+                "⚠️ I don't recognize this link. Use `/check` with the project description as text.",
+                thread_ts=thread_ts,
             )
             return None
         fetcher = self._fetcher
@@ -333,20 +346,26 @@ class SlackBot:
         self,
         factory: CheckFactory,
         *,
-        label: str,
         apply_action: str | None,
         apply_value: str | None,
+        thread_ts: str | None,
     ) -> None:
-        """Post a progress placeholder, run the check, and render the verdict in place."""
-        placeholder = await self._client.post_text(f"🔍 Checking against your profile: {label} …")
+        """Run the check in ``thread_ts`` and render the verdict over its progress line.
+
+        The subject is already named by the anchor message (or the upload) the thread
+        hangs off, so the progress line stays short.
+        """
+        placeholder = await self._client.post_text(
+            "🔍 Checking against your profile …", thread_ts=thread_ts
+        )
         try:
             result, checked_text = await factory()
         except (ApplicationStateError, SelectorMismatchError, LlmSchemaError) as err:
-            await self._replace(placeholder, None, f"⚠️ {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ {err}")
             return
         except Exception as err:
             logger.exception("check failed")
-            await self._replace(placeholder, None, f"⚠️ Unexpected error: {err}")
+            await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
         if result.passed and checked_text is not None and placeholder is not None:
             self._remember_check(placeholder.ts, checked_text)
@@ -356,7 +375,7 @@ class SlackBot:
         if placeholder is not None:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
-            await self._client.post_blocks(blocks, fallback)
+            await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
 
     def _remember_check(self, key: str, text: str) -> None:
         """Keep a checked text so the result's apply button can draft from it later."""
@@ -380,12 +399,18 @@ class SlackBot:
         )
 
     async def on_file_share(
-        self, *, channel: str | None, files: list[dict[str, object]], text: str = ""
+        self,
+        *,
+        channel: str | None,
+        files: list[dict[str, object]],
+        text: str = "",
+        thread_ts: str | None = None,
     ) -> None:
         """Handle an uploaded file (PDF or text): draft from it, or check it.
 
-        The default mirrors ``/apply <text>``; a comment containing ``check`` routes
-        the extracted text through the ``/check`` flow instead.
+        Every answer goes into the upload's own thread, so the upload stays the single
+        channel line for the whole exchange. The default mirrors ``/apply <text>``; a
+        comment containing ``check`` routes the extracted text through ``/check``.
         """
         if channel != self._channel or self._file_reader is None:
             return
@@ -406,21 +431,22 @@ class SlackBot:
                 return await checker.check_text(extracted), extracted
 
             await self._run_check(
-                check_factory, label=f"file {name[:140]}", apply_action=None, apply_value=None
+                check_factory, apply_action=None, apply_value=None, thread_ts=thread_ts
             )
             return
-        parent = await self._client.post_text(f"📥 Application from file: {name[:150]}")
-        if parent is None:
-            return
+        root = thread_ts
+        if root is None:  # no timestamp to hang a thread off: fall back to an own anchor
+            parent = await self._client.post_text(f"📥 Application from file: {name[:150]}")
+            if parent is None:
+                return
+            root = parent.ts
 
         async def factory() -> DraftView:
             data = await reader(url)
             extracted = await asyncio.to_thread(extract_document_text, name, data)
             return await self._service.draft_from_text(extracted)
 
-        await self._post_new_draft(
-            factory, parent.ts, progress="⏳ Reading file and creating draft …"
-        )
+        await self._post_new_draft(factory, root, progress="⏳ Reading file and creating draft …")
 
     async def on_thread_message(
         self, *, channel: str | None, thread_ts: str | None, text: str, from_bot: bool
