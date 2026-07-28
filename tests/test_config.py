@@ -142,6 +142,60 @@ def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> N
     assert smtp.use_starttls is False
 
 
+def test_enrichment_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("ENRICHMENT_ENABLED", "ENRICHMENT_SEARCH", "ENRICHMENT_MAX_PAGES"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert settings.enrichment_enabled is False
+    assert settings.has_enrichment() is False
+    assert settings.enrichment_search == "duckduckgo"
+    assert settings.enrichment_max_pages == 6
+
+
+def test_enrichment_enabled_and_search_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_ENABLED", "true")
+    monkeypatch.setenv("ENRICHMENT_SEARCH", "NONE")
+    settings = Settings()
+    assert settings.has_enrichment() is True
+    assert settings.enrichment_search == "none"
+
+
+def test_unknown_search_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_SEARCH", "bing")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_enrichment_render_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("ENRICHMENT_RENDER", "ENRICHMENT_RENDER_BROWSER_PATH", "APPLICANT_NAME"):
+        monkeypatch.delenv(var, raising=False)
+    settings = Settings()
+    assert settings.enrichment_render is False
+    assert settings.enrichment_render_browser_path == ""
+    assert settings.applicant_name == ""
+
+
+def test_outreach_offer_du_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OUTREACH_OFFER_DU", raising=False)
+    assert Settings().outreach_offer_du is True
+    monkeypatch.setenv("OUTREACH_OFFER_DU", "false")
+    assert Settings().outreach_offer_du is False
+
+
+def test_enrichment_render_and_applicant_name_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_RENDER", "true")
+    monkeypatch.setenv("APPLICANT_NAME", "Nik")
+    settings = Settings()
+    assert settings.enrichment_render is True
+    assert settings.applicant_name == "Nik"
+
+
+def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ENRICHMENT_MAX_PAGES", "99")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
 def test_cv_attachments_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CV_DE_PATH", raising=False)
     monkeypatch.delenv("CV_EN_PATH", raising=False)

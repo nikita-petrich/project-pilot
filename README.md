@@ -77,6 +77,8 @@ uv run project-pilot bot            # only the Slack bot (no scanning)
 uv run project-pilot test-notify    # post a test message to the Slack channel
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
+uv run project-pilot enrich "<company>" [--person "First Last"] [--url https://…]
+uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, record the lead
 ```
 
 ## Slack setup
@@ -137,6 +139,46 @@ freshly fetched), and `/apply <pasted project description>` works without a link
 **Uploading a file** (PDF or text) to the channel drafts from its contents the same
 way — drop in a project-description PDF and the draft appears. Nothing is ever sent
 without the explicit Send tap.
+
+## Finding a contact (enrichment)
+
+Optional, **off by default** (`ENRICHMENT_ENABLED=true` to switch on). When a match
+lists a company but no reachable e-mail, tap **🔎 Find contact** on the match (or on a
+recipient-less draft) and project-pilot looks the company's contact channel up:
+
+1. **Company website** — a web search (`ENRICHMENT_SEARCH=duckduckgo`, or pass a known
+   `--url`) finds the official site, then its **Impressum / Kontakt / Team / Karriere**
+   pages are read for e-mails, phone numbers, and contact-person names. In Germany the
+   Impressum is legally-required public contact data, so this is the reliable source of
+   a phone/e-mail. Fetches are polite and robots-aware; a 403 is never retried.
+2. **LinkedIn & Google** — surfaced as **one-click research links** (company search,
+   people search, Google contact search). These open in your own browser; **nothing on
+   LinkedIn or Google is ever scraped** — that would breach their terms, and LinkedIn
+   never exposes phone/e-mail publicly anyway.
+3. **LinkedIn connection message** — every result includes a short, personalized German
+   **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
+   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it, and
+   `OUTREACH_OFFER_DU=true` (the default) to offer first-name terms ("Gerne auch per Du.").
+
+The result posts in the message's thread (e-mails best-first, phone, named people, the
+connection message, the links) and is stored in `contact_leads`. Reply to a draft's
+thread with a found address to set it as the recipient. From the shell:
+
+```sh
+uv run project-pilot enrich "Muster GmbH" --person "Max Mustermann"
+uv run project-pilot enrich --listing-id 42     # uses the listing's company + records a lead
+```
+
+**JS-rendered sites (optional).** Some sites inject their contact data via JavaScript,
+which the default httpx fetcher can't see. Set `ENRICHMENT_RENDER=true` to fetch company
+pages with a headless Chromium instead — install the extra once:
+
+```sh
+uv sync --extra render && uv run playwright install chromium
+```
+
+Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
+retry); only company pages are rendered, never LinkedIn or Google.
 
 ## Checking a listing from Slack
 
@@ -215,14 +257,24 @@ the first-run verification checklist are in
 [`docs/adr/0001-source-verification.md`](docs/adr/0001-source-verification.md). Do
 not resell or redistribute scraped data.
 
+The same posture governs **contact enrichment**: it reads only a company's own public
+website (the legally-required Impressum and its contact pages), with the identifying
+user agent, a per-host `robots.txt` gate, a spacing delay, and no 403 retry. It **does
+not scrape LinkedIn or Google** — those are only ever offered as search links you open
+yourself. Enrichment is off unless you set `ENRICHMENT_ENABLED=true`, and it processes
+personal contact data (names, e-mails, phone numbers) solely so you can apply to the
+project — use it accordingly and do not store or share the results beyond that purpose.
+
 ## Project layout
 
 ```
 src/project_pilot/
   config.py profile_loader.py errors.py db.py models.py repository.py
   ingestion/    client, parser, normalize, watermark
-  evaluation/   freshness, rules, llm, schemas, prompts/
+  evaluation/   freshness, rules, llm, schemas, check, prompts/
+  enrichment/   fetch, render, search, extract, links, message, service, listing
   notification/ slack
+  application/  generator, service, mailer, documents (apply flow)
   pipeline.py scheduler.py reporting.py cli.py
 alembic/        async migrations
 docs/           compliance.md, operations.md, adr/

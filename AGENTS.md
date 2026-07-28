@@ -95,6 +95,7 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 - Slack bot only (Apply buttons, `/apply`, `/check`, thread review): `uv run project-pilot bot`
 - Post a test Slack message: `uv run project-pilot test-notify`
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
+- Find a company's contact data (opt-in `ENRICHMENT_ENABLED`): `uv run project-pilot enrich "<company>"` or `enrich --listing-id <id>`
 - Reporting summary: `uv run project-pilot stats`
 
 Database migrations (Alembic, async template): `uv run alembic upgrade head`

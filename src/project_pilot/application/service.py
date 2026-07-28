@@ -89,6 +89,7 @@ class DraftView:
     linkedin_message: str
     status: ApplicationStatus
     revision_count: int
+    listing_id: int | None = None
 
 
 def _to_view(application: Application) -> DraftView:
@@ -103,6 +104,7 @@ def _to_view(application: Application) -> DraftView:
         linkedin_message=application.linkedin_message,
         status=application.status,
         revision_count=application.revision_count,
+        listing_id=application.listing_id,
     )
 
 
