@@ -101,6 +101,7 @@ def _enrichment_service(
         search=provider,
         max_pages=settings.enrichment_max_pages,
         sender=settings.applicant_name or None,
+        offer_du=settings.outreach_offer_du,
     )
 
     async def closer() -> None:

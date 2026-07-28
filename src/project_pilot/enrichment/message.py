@@ -34,11 +34,14 @@ def _hook(company: str | None, title: str | None) -> str:
     return "ich bin auf Ihre Projektausschreibung aufmerksam geworden"
 
 
-def _assemble(*, first: str | None, hook: str, sender: str | None) -> str:
+def _assemble(*, first: str | None, hook: str, sender: str | None, offer_du: bool) -> str:
     greeting = f"Hallo {first}," if first else "Hallo,"
     core = "und würde mich gerne mit Ihnen vernetzen, um mich kurz zum Projekt auszutauschen."
+    # Offer first-name terms while still addressing formally — the standard, polite
+    # German networking move ("gerne per Du").
+    du = " Gerne auch per Du." if offer_du else ""
     sign = f" Beste Grüße, {sender}" if sender else " Beste Grüße!"
-    return re.sub(r"\s+", " ", f"{greeting} {hook} {core}{sign}").strip()
+    return re.sub(r"\s+", " ", f"{greeting} {hook} {core}{du}{sign}").strip()
 
 
 def build_connection_message(
@@ -47,16 +50,22 @@ def build_connection_message(
     company: str | None = None,
     title: str | None = None,
     sender: str | None = None,
+    offer_du: bool = False,
 ) -> str:
-    """A ≤300-char LinkedIn connection note, personalized from what is known."""
+    """A ≤300-char LinkedIn connection note, personalized from what is known.
+
+    With ``offer_du`` the note offers the recipient to switch to the informal "Du".
+    """
     first = _first_name(person)
-    message = _assemble(first=first, hook=_hook(company, title), sender=sender)
+    message = _assemble(first=first, hook=_hook(company, title), sender=sender, offer_du=offer_du)
     if len(message) <= LINKEDIN_CONNECT_LIMIT or not title:
         return _cap(message)
     # The project title is the only unbounded part — shorten it to fit, don't cut the ask.
     overflow = len(message) - LINKEDIN_CONNECT_LIMIT
     trimmed = title[: max(8, len(title) - overflow - 1)].rstrip() + "…"
-    return _cap(_assemble(first=first, hook=_hook(company, trimmed), sender=sender))
+    return _cap(
+        _assemble(first=first, hook=_hook(company, trimmed), sender=sender, offer_du=offer_du)
+    )
 
 
 def _cap(message: str) -> str:

@@ -94,6 +94,7 @@ class Settings(BaseSettings):
     enrichment_render: bool = False
     enrichment_render_browser_path: str = ""
     applicant_name: str = ""
+    outreach_offer_du: bool = True
 
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"

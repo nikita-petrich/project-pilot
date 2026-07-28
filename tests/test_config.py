@@ -175,6 +175,13 @@ def test_enrichment_render_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.applicant_name == ""
 
 
+def test_outreach_offer_du_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OUTREACH_OFFER_DU", raising=False)
+    assert Settings().outreach_offer_du is True
+    monkeypatch.setenv("OUTREACH_OFFER_DU", "false")
+    assert Settings().outreach_offer_du is False
+
+
 def test_enrichment_render_and_applicant_name_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENRICHMENT_RENDER", "true")
     monkeypatch.setenv("APPLICANT_NAME", "Nik")

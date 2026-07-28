@@ -42,3 +42,13 @@ def test_message_caps_a_very_long_title_at_the_limit() -> None:
     )
     assert len(msg) <= LINKEDIN_CONNECT_LIMIT
     assert "vernetzen" in msg  # the ask survives; the title is what gets shortened
+
+
+def test_message_offers_du_when_requested() -> None:
+    msg = build_connection_message(person="Max Mustermann", company="Muster GmbH", offer_du=True)
+    assert "Gerne auch per Du." in msg
+    assert len(msg) <= LINKEDIN_CONNECT_LIMIT
+
+
+def test_message_omits_du_offer_by_default() -> None:
+    assert "per Du" not in build_connection_message(person="Max Mustermann", company="X")

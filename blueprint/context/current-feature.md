@@ -76,6 +76,9 @@ never makes surprise outbound calls.
   extra so the default install/Docker/CI stay unchanged. Wire selection in the CLI.
   Tests for the robots gate + fetcher selection (browser calls stay a covered-out
   boundary, like Socket Mode).
+- [ ] 12. "Gerne per Du": `OUTREACH_OFFER_DU` (default on) makes the connection
+  message offer the recipient first-name terms ("Gerne auch per Du."), threaded
+  through `EnrichmentService` → `build_connection_message`. Unit + config tests.
 
 ### Done when
 

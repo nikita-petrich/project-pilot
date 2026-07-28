@@ -154,7 +154,8 @@ recipient-less draft) and project-pilot looks the company's contact channel up:
    never exposes phone/e-mail publicly anyway.
 3. **LinkedIn connection message** — every result includes a short, personalized German
    **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
-   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it.
+   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it, and
+   `OUTREACH_OFFER_DU=true` (the default) to offer first-name terms ("Gerne auch per Du.").
 
 The result posts in the message's thread (e-mails best-first, phone, named people, the
 connection message, the links) and is stored in `contact_leads`. Reply to a draft's

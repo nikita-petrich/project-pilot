@@ -61,12 +61,14 @@ class EnrichmentService:
         max_pages: int = 6,
         search_limit: int = 5,
         sender: str | None = None,
+        offer_du: bool = False,
     ) -> None:
         self._fetcher = fetcher
         self._search = search
         self._max_pages = max(1, max_pages)
         self._search_limit = search_limit
         self._sender = sender
+        self._offer_du = offer_du
 
     async def enrich(
         self,
@@ -99,7 +101,11 @@ class EnrichmentService:
             website=website,
             links=build_links(company=company, person=person, title=title),
             linkedin_message=build_connection_message(
-                person=person, company=company, title=title, sender=self._sender
+                person=person,
+                company=company,
+                title=title,
+                sender=self._sender,
+                offer_du=self._offer_du,
             ),
             emails=rank_emails(_dedupe(emails), person),
             phones=_dedupe(phones),
