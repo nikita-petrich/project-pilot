@@ -59,6 +59,7 @@ gitignored and `.env.example` is the template):
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | Slack bot token (`xoxb-…`), app-level token for Socket Mode (`xapp-…`), and the channel id to post to |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
+| `VISION_MODEL` | optional — model used to transcribe uploaded screenshots; defaults to `LLM_MODEL`, set it only if that model has no image input |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
 | `ANALYSIS_WINDOW_MIN` | default 30 |
@@ -136,9 +137,11 @@ change how applications are written. The draft posts as **one** message:
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
-**Uploading a file** (PDF or text) to the channel drafts from its contents the same
-way — drop in a project-description PDF and the draft appears. Nothing is ever sent
-without the explicit Send tap.
+**Uploading a file** to the channel drafts from its contents the same way — drop in a
+project-description PDF and the draft appears. **Screenshots work too**: a `.png`,
+`.jpg`, `.gif` or `.webp` is transcribed by the vision model (`VISION_MODEL`, or
+`LLM_MODEL` when unset) and the transcript feeds the same flow, so forwarding a
+screenshot of a listing is enough. Nothing is ever sent without the explicit Send tap.
 
 **Everything answers in a thread.** A slash command posts a single channel line
 (`📥 Application: …`) and puts the draft, progress, and any hint in its thread; an
@@ -196,9 +199,9 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   button, so the apply flow starts exactly as if the scanner had found it.
 - **No match** — posts the verdict with the failed hard rule (matched blacklist
   term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
-- **Files** — upload a PDF/text file with a comment containing `check` and the
-  extracted text is checked instead of drafted (a comment without `check` keeps the
-  usual upload-to-apply behavior).
+- **Files** — upload a PDF, screenshot, or text file with a comment containing `check`
+  and the extracted text is checked instead of drafted (a comment without `check`
+  keeps the usual upload-to-apply behavior).
 
 Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
 lands in its thread; a checked upload is answered in the upload's own thread.

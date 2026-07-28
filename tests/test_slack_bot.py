@@ -2,6 +2,7 @@
 
 from collections.abc import Awaitable, Callable
 
+from project_pilot.application.documents import VisionClient
 from project_pilot.application.service import DraftView
 from project_pilot.enrichment.schemas import ContactEnrichment, DiscoveryLinks
 from project_pilot.errors import ApplicationStateError, EmailSendError, EnrichmentError
@@ -229,6 +230,18 @@ class _FakeEnrichment:
         )
 
 
+class _FakeVision:
+    """Stands in for the vision model that transcribes uploaded screenshots."""
+
+    def __init__(self, text: str = "Senior Python Engineer gesucht, Remote") -> None:
+        self.calls: list[str] = []
+        self.text = text
+
+    async def read_image(self, *, data: bytes, mime_type: str) -> str:
+        self.calls.append(mime_type)
+        return self.text
+
+
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
@@ -237,6 +250,7 @@ def _bot(
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
     checker: _FakeChecker | None = None,
     enrichment: EnrichmentFlow | None = None,
+    vision: VisionClient | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -250,6 +264,7 @@ def _bot(
         file_reader=file_reader,
         checker=checker,
         enrichment=enrichment,
+        vision=vision,
     )
 
 
@@ -547,6 +562,48 @@ async def test_file_upload_drafts_from_extracted_text_in_the_upload_thread() -> 
     # no extra channel message: the upload itself is the thread everything answers in
     assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
     assert service.recorded == [(1, f"{CHANNEL}:{UPLOAD_TS}")]
+
+
+async def test_screenshot_upload_drafts_from_the_transcribed_text() -> None:
+    poster, service, vision = _FakePoster(), _FakeService(), _FakeVision()
+
+    async def reader(url: str) -> bytes:
+        return b"\x89PNG fake image bytes"
+
+    await _bot(poster, service, file_reader=reader, vision=vision).dispatch(
+        "events_api", _file_event("screenshot.png")
+    )
+    assert vision.calls == ["image/png"]
+    assert ("draft_from_text", "Senior Python Engineer gesucht, Remote") in service.calls
+    assert poster.draft_rendered()
+    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
+
+
+async def test_screenshot_upload_with_check_comment_checks_the_transcribed_text() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    vision = _FakeVision()
+
+    async def reader(url: str) -> bytes:
+        return b"\x89PNG fake image bytes"
+
+    await _bot(poster, service, file_reader=reader, checker=checker, vision=vision).dispatch(
+        "events_api", _file_event("screenshot.png", text="check das bitte")
+    )
+    assert ("check_text", "Senior Python Engineer gesucht, Remote") in checker.calls
+    assert service.calls == []  # checking only, no draft
+
+
+async def test_screenshot_upload_without_a_vision_model_hints_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+
+    async def reader(url: str) -> bytes:
+        return b"\x89PNG fake image bytes"
+
+    await _bot(poster, service, file_reader=reader).dispatch(
+        "events_api", _file_event("screenshot.png")
+    )
+    assert service.calls == []
+    assert any("VISION_MODEL" in text for text in poster.visible_texts())
 
 
 async def test_file_upload_inside_a_thread_answers_in_that_thread() -> None:

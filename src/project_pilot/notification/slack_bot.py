@@ -5,13 +5,12 @@ wired in ``cli.py`` (network boundary). Only the configured channel is served, a
 every state change is guarded in the service layer.
 """
 
-import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
 from typing import Protocol
 
-from project_pilot.application.documents import extract_document_text
+from project_pilot.application.documents import VisionClient, extract_upload_text
 from project_pilot.application.service import DraftView, is_email
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import (
@@ -41,11 +40,11 @@ logger = logging.getLogger(__name__)
 
 USAGE = (
     "Usage: `/apply <freelancermap link or project description>` — or upload a "
-    "PDF/text file with the project description."
+    "PDF, screenshot, or text file with the project description."
 )
 CHECK_USAGE = (
     "Usage: `/check <freelancermap link or project description>` — or upload a "
-    "PDF/text file with a comment containing `check`."
+    "PDF, screenshot, or text file with a comment containing `check`."
 )
 
 # An uploaded file routes to /check instead of /apply when its comment says so.
@@ -144,6 +143,7 @@ class SlackBot:
         file_reader: FileReader | None = None,
         checker: CheckFlow | None = None,
         enrichment: EnrichmentFlow | None = None,
+        vision: VisionClient | None = None,
     ) -> None:
         self._client = client
         self._channel = channel
@@ -152,6 +152,7 @@ class SlackBot:
         self._file_reader = file_reader
         self._checker = checker
         self._enrichment = enrichment
+        self._vision = vision
         self._pending_checks: dict[str, str] = {}
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
@@ -406,7 +407,7 @@ class SlackBot:
         text: str = "",
         thread_ts: str | None = None,
     ) -> None:
-        """Handle an uploaded file (PDF or text): draft from it, or check it.
+        """Handle an uploaded file (PDF, screenshot, or text): draft from it, or check it.
 
         Every answer goes into the upload's own thread, so the upload stays the single
         channel line for the whole exchange. The default mirrors ``/apply <text>``; a
@@ -427,7 +428,7 @@ class SlackBot:
 
             async def check_factory() -> tuple[CheckResult, str | None]:
                 data = await reader(url)
-                extracted = await asyncio.to_thread(extract_document_text, name, data)
+                extracted = await extract_upload_text(name, data, vision=self._vision)
                 return await checker.check_text(extracted), extracted
 
             await self._run_check(
@@ -443,7 +444,7 @@ class SlackBot:
 
         async def factory() -> DraftView:
             data = await reader(url)
-            extracted = await asyncio.to_thread(extract_document_text, name, data)
+            extracted = await extract_upload_text(name, data, vision=self._vision)
             return await self._service.draft_from_text(extracted)
 
         await self._post_new_draft(factory, root, progress="⏳ Reading file and creating draft …")

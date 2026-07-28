@@ -73,6 +73,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     llm_model: str = ""
+    vision_model: str = ""  # optional override; falls back to LLM_MODEL
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -185,6 +186,14 @@ class Settings(BaseSettings):
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
+
+    def require_vision(self) -> tuple[str, str]:
+        """API key plus the model that transcribes uploaded screenshots.
+
+        ``VISION_MODEL`` only needs setting when ``LLM_MODEL`` has no image input.
+        """
+        api_key, model = self.require_openai()
+        return api_key, self.vision_model or model
 
     def has_enrichment(self) -> bool:
         return self.enrichment_enabled
