@@ -6,7 +6,12 @@
 >
 > `profile.md` ist die einzige Quelle für Matcher UND Bewerbungs-Generator:
 > - Matcher (Stage 3) beurteilt Fit anhand von Positionierung, Skills und No-gos.
-> - Bewerbungs-Generator zieht Referenzprojekte, Skills und die Signatur von hier.
+> - Bewerbungs-Generator zieht Referenzprojekte und Skills von hier.
+>
+> Der **Kontaktblock unter der Grußformel** kommt dagegen NICHT von hier, sondern
+> aus der E-Mail-Signatur (`SIGNATURE_DIR`, siehe README) — sie wird beim Versand
+> angehängt. Die Kontaktdaten unten dienen als Vorlage dafür und als Quelle für den
+> Erstgespräch-Link, den die Bewerbung im Abschluss-Satz nennt.
 
 ## Wer ich bin
 
@@ -68,7 +73,8 @@
 
 ## Kontakt & Signatur
 
-> In Bewerbungen exakt als Abschluss-Signatur ausgeben.
+> Vorlage für die E-Mail-Signatur (`SIGNATURE_DIR`) und Quelle für den
+> Erstgespräch-Link. Das Modell schreibt diesen Block **nicht** in die Bewerbung.
 
 <Vorname Nachname>
 <Titel>

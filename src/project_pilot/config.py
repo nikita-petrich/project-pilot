@@ -82,6 +82,7 @@ class Settings(BaseSettings):
 
     cv_de_path: str = ""
     cv_en_path: str = ""
+    signature_dir: str = ""
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -181,6 +182,10 @@ class Settings(BaseSettings):
             de=Path(self.cv_de_path) if self.cv_de_path else None,
             en=Path(self.cv_en_path) if self.cv_en_path else None,
         )
+
+    def signature_dir_path(self) -> Path | None:
+        """The signature directory, if configured; its contents are read at startup."""
+        return Path(self.signature_dir) if self.signature_dir else None
 
 
 def load_settings() -> Settings:

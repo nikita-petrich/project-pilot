@@ -7,6 +7,10 @@
 # Copy profile.example.md to profile.md and fill it in; the real file stays local.
 profile/profile.md
 !profile/profile.example.md
+# The real signature holds a photo, phone number and other personal data.
+profile/signature/
+!profile/signature.example.html
+!profile/signature.example.txt
 
 # Logs
 *.log
