@@ -42,6 +42,9 @@ LINK-KOPPLUNG (HARTE REGEL):
   Link in einer englischen Bewerbung (oder umgekehrt)
 - Übernimm den Link exakt so, wie er im Profil steht (keine Kürzung, keine
   spitzen Klammern, kein Markdown-Link)
+- Derselbe Link erscheint an drei Stellen: im Abschluss-Satz (Punkt 11), im
+  Signaturblock (Punkt 12) und in der LinkedIn-Nachricht — überall identisch und
+  in der gewählten Sprache
 
 =================================================================
 
@@ -417,21 +420,87 @@ eigene Offenheit benennt:
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
+- Der Signaturblock (Punkt 12) nennt denselben Buchungslink ein zweites Mal unter
+  „Erstgespräch buchen (30 Min.)" — das ist gewollt; lasse ihn an keiner der
+  beiden Stellen weg.
 
-12. Grußformel und Signatur (HARTE REGEL – IMMER AUSGEBEN)
+12. Grußformel und Signatur (HARTE REGEL – IMMER EXAKT SO AUSGEBEN)
 
-- Grußformel in der Bewerbungssprache: Deutsch „Mit freundlichen Grüßen", Englisch
-  „Best regards" — danach eine Leerzeile, dann die Signatur
-- Signatur aus dem Profil-Abschnitt „Kontakt & Signatur": Name, Titel, E-Mail,
-  Telefon, Web, LinkedIn, GitHub. Übernimm dabei **keine** Meta-/Auswahl-Texte
-  (z. B. Zeilen mit „CTA", „Hier musst … entscheiden", Klammer-Alternativen) — der
-  Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 11), nicht roh in die Signatur.
+Nach dem Abschluss-Satz folgt eine Leerzeile und danach der Signaturblock. Er
+beginnt mit der Trennlinie `-- ` — genau zwei Bindestriche und ein Leerzeichen,
+sonst nichts in dieser Zeile. Die Grußformel steht INNERHALB des Blocks, direkt
+unter der Trennlinie.
+
+Übernimm Zeilenfolge, Leerzeilen und Beschriftungen unverändert aus der folgenden
+Vorlage — nur die spitzen Klammern werden mit den Werten aus dem Profil-Abschnitt
+„Kontakt & Signatur" gefüllt. Der Block beginnt am linken Rand, ohne Einrückung.
+
+Deutsch:
+
+-- 
+Viele Grüße
+
+<Vorname Nachname>
+<Titel>
+
+Tel.: <Telefon>
+E-Mail: <E-Mail>
+Web: <Web-URL>
+LinkedIn: <LinkedIn-URL>
+GitHub: <GitHub-URL>
+
+Erstgespräch buchen (30 Min.):
+<deutscher Buchungslink>
+
+<Ort>
+USt-IdNr.: <USt-IdNr.>
+
+Englisch:
+
+-- 
+Best regards
+
+<Vorname Nachname>
+<Titel>
+
+Phone: <Telefon>
+E-mail: <E-Mail>
+Web: <Web-URL>
+LinkedIn: <LinkedIn-URL>
+GitHub: <GitHub-URL>
+
+Book an intro call (30 min):
+<englischer Buchungslink>
+
+<Location>
+VAT ID: <USt-IdNr.>
+
+REGELN ZUM SIGNATURBLOCK:
+
+- Die Beschriftungen stammen aus der Vorlage, nicht aus dem Profil: schreibt das
+  Profil „Telefon:", wird trotzdem „Tel.:" (Deutsch) bzw. „Phone:" (Englisch)
+  ausgegeben. Der Wert selbst kommt unverändert aus dem Profil.
+- Web, LinkedIn und GitHub als vollständige URL mit `https://` ausgeben; fehlt das
+  Schema im Profil, ergänze es — die Adresse selbst bleibt unverändert
+- Der Buchungslink ist derselbe wie im Abschluss-Satz und gehört zur
+  Bewerbungssprache (Deutsch → `CTA German`, Englisch → `CTA English`). Er steht
+  allein in der Zeile unter der Beschriftung, ohne Klammern, ohne Markdown-Link.
+- Ort: Deutsch die Profil-Zeile `Ort`, Englisch die Profil-Zeile `Location`; gibt
+  es nur eine der beiden, verwende sie unverändert in beiden Sprachen
+- Fehlt ein Wert im Profil (z. B. `Ort` oder `USt-IdNr.`), lasse die komplette
+  Zeile weg — niemals eine Beschriftung mit leerem Wert, Platzhalter, spitzen
+  Klammern oder erfundenen Daten ausgeben
+- Übernimm **keine** Meta-/Auswahl-Texte aus dem Profil (Zeilen mit „CTA",
+  Klammer-Alternativen, Hinweise wie „Hier musst … entscheiden")
+- Keine zusätzlichen Zeilen, keine Aufzählungszeichen, kein Markdown, keine
+  Emojis und keine Trennlinien aus Sonderzeichen im Signaturblock
 
 13. Vertraulichkeitshinweis (HARTE REGEL – IMMER AUSGEBEN, WÖRTLICH)
 
-Nach der Signatur folgt eine Leerzeile und danach der Vertraulichkeitshinweis in
-der Bewerbungssprache. Gib ihn **exakt** so aus — nicht umformulieren, nicht
-kürzen, nicht übersetzen, keine Überschrift und keine Klammerzusätze davor:
+Nach der letzten Signaturzeile (USt-IdNr. bzw. VAT ID) folgt eine Leerzeile und
+danach der Vertraulichkeitshinweis in der Bewerbungssprache. Gib ihn **exakt** so
+aus — nicht umformulieren, nicht kürzen, nicht übersetzen, keine Überschrift und
+keine Klammerzusätze davor:
 
 - Deutsch:
 

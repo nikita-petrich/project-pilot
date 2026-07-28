@@ -108,3 +108,25 @@ def test_load_application_prompt_reads_the_single_file() -> None:
     text = load_application_prompt()
     assert "linkedin_message" in text
     assert "BID-WRITING" in text
+
+
+def test_prompt_carries_the_signature_template_in_both_languages() -> None:
+    """Guards the signature block, incl. the ``-- `` separator's trailing space.
+
+    Editors and formatters that trim trailing whitespace would silently turn the
+    RFC 3676 separator into a bare ``--``, so it is asserted literally.
+    """
+    lines = load_application_prompt().splitlines()
+
+    assert lines.count("-- ") == 2  # one per language, trailing space intact
+    assert "--" not in lines
+
+    for greeting, phone, booking, vat in (
+        ("Viele Grüße", "Tel.: <Telefon>", "Erstgespräch buchen (30 Min.):", "USt-IdNr.: "),
+        ("Best regards", "Phone: <Telefon>", "Book an intro call (30 min):", "VAT ID: "),
+    ):
+        # The greeting sits inside the signature block, right under the separator.
+        assert lines[lines.index(greeting) - 1] == "-- "
+        for expected in (phone, booking):
+            assert expected in lines
+        assert any(line.startswith(vat) for line in lines)
