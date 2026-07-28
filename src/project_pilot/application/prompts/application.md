@@ -31,10 +31,17 @@ des Erstgespräch-Links.
 
 LINK-KOPPLUNG (HARTE REGEL):
 
-- Bewerbungssprache Deutsch → verwende die Zeile `Erstgespräch (DE)` aus dem Profil
-- Bewerbungssprache Englisch → verwende die Zeile `Erstgespräch (EN)` aus dem Profil
+- Der Erstgespräch-Link steht im Profil-Abschnitt „Kontakt & Signatur" als
+  Notion-Calendar-Buchungslink (`https://calendar.notion.so/…`) — je einer für
+  Deutsch und Englisch
+- Bewerbungssprache Deutsch → verwende die deutsche Zeile (`CTA German`, alternativ
+  `Erstgespräch (DE)`)
+- Bewerbungssprache Englisch → verwende die englische Zeile (`CTA English`,
+  alternativ `Erstgespräch (EN)`)
 - Der Link muss immer zur gewählten Bewerbungssprache passen — nie den deutschen
   Link in einer englischen Bewerbung (oder umgekehrt)
+- Übernimm den Link exakt so, wie er im Profil steht (keine Kürzung, keine
+  spitzen Klammern, kein Markdown-Link)
 
 =================================================================
 
@@ -403,10 +410,10 @@ eigene Offenheit benennt:
   über das Projekt zu sprechen!" / Englisch: „I would be glad to discuss the project
   with you."
 - Direkt danach IMMER die Einladung zum kostenlosen Erstgespräch (HARTE REGEL) mit
-  dem Link, der zur oben bestimmten Bewerbungssprache gehört (Deutsch →
-  `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`), als genau ein fertiger Satz:
-  - Deutsch: „Kostenloses Erstgespräch buchen: <Link aus Erstgespräch (DE)>"
-  - Englisch: „Book a free intro call: <Link aus Erstgespräch (EN)>"
+  dem Notion-Calendar-Link, der zur oben bestimmten Bewerbungssprache gehört
+  (Deutsch → `CTA German`, Englisch → `CTA English`), als genau ein fertiger Satz:
+  - Deutsch: „Kostenloses Erstgespräch buchen: <deutscher Buchungslink>"
+  - Englisch: „Book a free intro call: <englischer Buchungslink>"
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
@@ -468,8 +475,8 @@ Ansprechpartner der Ausschreibung:
      kein ganzer Satz – z. B. „zu Ihrem Projekt <Kurztitel>" / „Ihre
      <Rolle>-Ausschreibung")
   3. Ein Halbsatz, warum der Kandidat zum Kern passt
-  4. Einladung zum kostenlosen Erstgespräch mit dem Link zur gewählten
-     Bewerbungssprache (Deutsch → `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`),
+  4. Einladung zum kostenlosen Erstgespräch mit dem Notion-Calendar-Link zur
+     gewählten Bewerbungssprache (Deutsch → `CTA German`, Englisch → `CTA English`),
      z. B. „Kostenloses Erstgespräch: <Link>" / „Free intro call: <Link>". Schreibe
      NIEMALS „CTA" oder Klammer-Alternativen.
 - Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
