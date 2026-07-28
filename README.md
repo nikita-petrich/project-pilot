@@ -97,6 +97,7 @@ features:
   bot_user: { display_name: project-pilot, always_online: true }
   slash_commands:
     - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
+    - { command: /check, description: Check a listing against your profile, usage_hint: "<link or text>", should_escape: false }
 oauth_config:
   scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:
@@ -122,9 +123,10 @@ change how applications are written. The draft posts as **one** message:
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
-  (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
-  your mail client with subject (and recipient, once known) prefilled — available
-  from the start; **❌ Verwerfen** cancels.
+  (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
+  **📧 Open in mail client** link above the buttons opens your mail client with
+  subject (and recipient, once known) prefilled — available from the start. It is
+  a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.
@@ -173,6 +175,24 @@ uv sync --extra render && uv run playwright install chromium
 
 Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
 retry); only company pages are rendered, never LinkedIn or Google.
+
+## Checking a listing from Slack
+
+`/check <freelancermap-link or pasted project description>` runs any listing through
+the same evaluation the scanner uses — hard rules from `constraints.yaml` first
+(0 tokens), then the LLM match against your profile:
+
+- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full match message you know from
+  the scanner (all listing facts, reasons, gaps, risks) including the **📝 Bewerben**
+  button, so the apply flow starts exactly as if the scanner had found it.
+- **No match** — posts the verdict with the failed hard rule (matched blacklist
+  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
+- **Files** — upload a PDF/text file with a comment containing `check` and the
+  extracted text is checked instead of drafted (a comment without `check` keeps the
+  usual upload-to-apply behavior).
+
+A check is read-only: nothing is stored, the freshness gate is skipped, and the
+scanner's watermark stays untouched.
 
 ## Running on the home server (Docker)
 
@@ -247,8 +267,8 @@ project — use it accordingly and do not store or share the results beyond that
 src/project_pilot/
   config.py profile_loader.py errors.py db.py models.py repository.py
   ingestion/    client, parser, normalize, watermark
-  evaluation/   freshness, rules, llm, schemas, prompts/
-  enrichment/   fetch, search, extract, links, service, listing (contact enrichment)
+  evaluation/   freshness, rules, llm, schemas, check, prompts/
+  enrichment/   fetch, render, search, extract, links, message, service, listing
   notification/ slack
   application/  generator, service, mailer, documents (apply flow)
   pipeline.py scheduler.py reporting.py cli.py

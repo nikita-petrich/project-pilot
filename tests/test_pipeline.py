@@ -1,20 +1,22 @@
 """Integration tests for the pipeline (real Postgres, fixtures, fake clients)."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.config import SOURCE_NAME, Settings
-from project_pilot.errors import SourceBlockedError
+from project_pilot.errors import SourceBlockedError, SourceUnavailableError
 from project_pilot.evaluation.llm import LlmEvaluation
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.ingestion.normalize import compute_url_hash
 from project_pilot.models import Listing, ListingStatus, RunStatus
 from project_pilot.notification.messages import MatchMessage
-from project_pilot.pipeline import Pipeline
+from project_pilot.pipeline import Pipeline, SourceClient
 from project_pilot.profile_loader import Profile, ProfileConstraints
 from project_pilot.repository import Repository
 
@@ -133,7 +135,7 @@ def _profile(blacklist: list[str] | None = None) -> Profile:
 def _pipeline(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    client: _FakeClient,
+    client: SourceClient,
     matcher: _FakeMatcher | None = None,
     notifier: _FakeNotifier | None = None,
     profile: Profile | None = None,
@@ -316,6 +318,48 @@ class _BrokenClient:
 
     async def aclose(self) -> None:
         return None
+
+
+class _OfflineClient:
+    """Stands in for a dropped home connection: robots.txt never resolves."""
+
+    async def check_robots(self, urls: list[str]) -> None:
+        raise SourceUnavailableError(
+            "https://www.freelancermap.de/robots.txt unreachable after 3 attempts "
+            "(ConnectError: All connection attempts failed)"
+        )
+
+    async def get(self, url: str) -> _Resp:
+        raise AssertionError("unreachable")  # pragma: no cover
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_unreachable_source_fails_run_without_cooldown_or_traceback(
+    session_factory: async_sessionmaker[AsyncSession],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    watermark = NOW - timedelta(minutes=10)
+    await _seed_state(session_factory, watermark=watermark)
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(session_factory, client=_OfflineClient(), notifier=notifier)
+
+    with caplog.at_level(logging.WARNING, logger="project_pilot.pipeline"):
+        outcome = await pipeline.run_once(now=NOW)
+
+    assert outcome.is_error is True
+    assert outcome.error is not None
+    assert outcome.error.startswith("source unreachable:")
+    records = [record for record in caplog.records if record.name == "project_pilot.pipeline"]
+    assert records and all(record.exc_info is None for record in records)  # no traceback dump
+    assert notifier.warnings == []
+    async with session_factory() as db_session:
+        state = await Repository(db_session).get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.cooldown_until is None  # only 403/captcha cools down
+        assert state.consecutive_failures == 1
+        assert state.watermark_at == watermark  # gap stays open for the next run
 
 
 async def test_source_blocked_sets_cooldown_and_warns(

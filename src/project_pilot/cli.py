@@ -32,6 +32,7 @@ from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
 from project_pilot.enrichment.service import EnrichmentService
 from project_pilot.errors import EnrichmentError
+from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
 from project_pilot.ingestion.normalize import canonicalize_url
@@ -140,7 +141,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
 
 
 def _build_bot(settings: Settings) -> BotRuntime:
-    """Wire the Slack bot: draft generator, mailer, application service, fetcher."""
+    """Wire the Slack bot: draft generator, mailer, application service, fetcher, checker."""
     profile = ProfileService(Path("profile")).load()
     api_key, model = settings.require_openai()
     config = settings.require_slack()
@@ -158,9 +159,14 @@ def _build_bot(settings: Settings) -> BotRuntime:
         mailer=mailer,
         cv_attachments=settings.cv_attachments(),
     )
-    web = AsyncWebClient(token=config.bot_token)
-    client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
-
+    checker = CheckService(
+        session_factory=session_factory,
+        matcher=LlmMatcher(
+            OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
+        ),
+        profile=profile,
+        threshold=settings.match_threshold,
+    )
     enrichment: ListingEnrichmentService | None = None
     enrichment_closer: Callable[[], Awaitable[None]] | None = None
     if settings.has_enrichment():
@@ -168,6 +174,9 @@ def _build_bot(settings: Settings) -> BotRuntime:
         enrichment = ListingEnrichmentService(
             session_factory=session_factory, service=enrichment_service
         )
+
+    web = AsyncWebClient(token=config.bot_token)
+    client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
 
     async def fetch_listing(url: str) -> ParsedListing:
         politeness = PolitenessClient(user_agent=settings.user_agent())
@@ -196,6 +205,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
         service=service,
         fetcher=fetch_listing,
         file_reader=read_slack_file,
+        checker=checker,
         enrichment=enrichment,
     )
 
@@ -362,7 +372,7 @@ def daemon() -> None:
 
 @app.command("bot")
 def bot() -> None:
-    """Run only the Slack bot (Apply buttons, /apply command, thread review)."""
+    """Run only the Slack bot (Apply buttons, /apply and /check commands, thread review)."""
     settings = load_settings()
     settings.require_slack()
     asyncio.run(_run_bot(settings))
