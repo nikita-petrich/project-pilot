@@ -95,6 +95,7 @@ features:
   bot_user: { display_name: project-pilot, always_online: true }
   slash_commands:
     - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
+    - { command: /check, description: Check a listing against your profile, usage_hint: "<link or text>", should_escape: false }
 oauth_config:
   scopes: { bot: [chat:write, commands, channels:history, files:read] }
 settings:
@@ -123,9 +124,10 @@ change how applications are written. The draft posts as **one** message:
   as vision input — e.g. a picture of the client's answer or of the listing detail
   the revision should reflect.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
-  (double-taps guarded, failures keep the draft); **📧 Im Mail-Client öffnen** opens
-  your mail client with subject (and recipient, once known) prefilled — available
-  from the start; **❌ Verwerfen** cancels.
+  (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
+  **📧 Open in mail client** link above the buttons opens your mail client with
+  subject (and recipient, once known) prefilled — available from the start. It is
+  a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.
@@ -138,6 +140,28 @@ the same way — drop in a project-description PDF, or a **screenshot of the lis
 are read by the vision LLM directly. Slash commands cannot carry files in Slack, so
 the upload *is* the image form of `/apply`. Nothing is ever sent without the
 explicit Send tap.
+
+## Checking a listing from Slack
+
+`/check <freelancermap-link or pasted project description>` runs any listing through
+the same evaluation the scanner uses — hard rules from `constraints.yaml` first
+(0 tokens), then the LLM match against your profile:
+
+- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full match message you know from
+  the scanner (all listing facts, reasons, gaps, risks) including the **📝 Bewerben**
+  button, so the apply flow starts exactly as if the scanner had found it.
+- **No match** — posts the verdict with the failed hard rule (matched blacklist
+  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
+- **Files and screenshots** — upload a PDF, text file, or **image** with a comment
+  containing `check` and it is checked instead of drafted (a comment without `check`
+  keeps the usual upload-to-apply behavior). A screenshot goes to the vision LLM
+  directly, and a passing check still offers the **📝 Bewerben** button, which drafts
+  from the same screenshot.
+
+A check is read-only: nothing is stored, the freshness gate is skipped, and the
+scanner's watermark stays untouched. One caveat for screenshots: the hard rules read
+text, so an image with no caption skips stage 2 and is judged by the LLM alone —
+a caption is still rule-checked as usual.
 
 ## Running on the home server (Docker)
 

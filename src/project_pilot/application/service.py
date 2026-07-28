@@ -8,18 +8,22 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from project_pilot.application.documents import ImageAttachment
+from project_pilot.application.documents import (
+    ImageAttachment,
+    annotate_image_listing,
+    image_fallback_title,
+)
 from project_pilot.application.generator import ApplicationGenerator, GeneratedDraft
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.config import CvAttachments
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
-from project_pilot.evaluation.llm import render_listing
+from project_pilot.evaluation.llm import render_listing, render_listing_entity
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash, detect_language
 from project_pilot.ingestion.parser import ParsedListing
-from project_pilot.models import Application, ApplicationStatus, Listing
+from project_pilot.models import Application, ApplicationStatus
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -57,37 +61,6 @@ def _iter_strings(value: object) -> Iterator[str]:
     elif isinstance(value, list):
         for item in value:
             yield from _iter_strings(item)
-
-
-def _image_title(images: Sequence[ImageAttachment]) -> str:
-    """Draft title for an image-only submission: the first screenshot's name."""
-    return images[0].name[:120] if images else "Projekt"
-
-
-def render_listing_entity(listing: Listing) -> str:
-    """Format a stored listing into the text block handed to the draft LLM."""
-    raw = listing.raw or {}
-    parts = [f"Title: {listing.title}"]
-    company = raw.get("company")
-    if isinstance(company, str) and company:
-        parts.append(f"Company: {company}")
-    contact = " ".join(
-        part for part in (raw.get("firstName"), raw.get("lastName")) if isinstance(part, str)
-    ).strip()
-    if contact:
-        parts.append(f"Contact: {contact}")
-    parts.append(f"Remote: {listing.remote_status.value}")
-    if listing.location:
-        parts.append(f"Location: {listing.location}")
-    if listing.start_asap:
-        parts.append("Start: ab sofort")
-    elif listing.start_date is not None:
-        parts.append(f"Start: {listing.start_date.isoformat()}")
-    if listing.skills:
-        parts.append("Skills: " + ", ".join(listing.skills))
-    parts.append("")
-    parts.append(listing.description)
-    return "\n".join(parts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,10 +162,8 @@ class ApplicationService:
         longer see the pixels) know the listing arrived as a screenshot.
         """
         stripped = text.strip()
-        listing_text = "\n".join(
-            (stripped, *(f"[Project listing attached as image: {img.name}]" for img in images))
-        ).strip()
-        title = stripped.splitlines()[0][:120] if stripped else _image_title(images)
+        listing_text = annotate_image_listing(stripped, images)
+        title = stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             generated = await self._generate(listing_text, images=images)

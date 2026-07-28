@@ -5,10 +5,23 @@ from collections.abc import Awaitable, Callable, Sequence
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.service import DraftView
 from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.evaluation.check import CheckResult
 from project_pilot.ingestion.parser import ParsedListing
-from project_pilot.models import ApplicationStatus, PostedPrecision, RemoteStatus
+from project_pilot.models import (
+    ApplicationStatus,
+    EvaluationStage,
+    PostedPrecision,
+    RemoteStatus,
+    Verdict,
+)
+from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.slack import Block, PostedMessage
-from project_pilot.notification.slack_bot import DEFAULT_IMAGE_INSTRUCTION, USAGE, SlackBot
+from project_pilot.notification.slack_bot import (
+    CHECK_USAGE,
+    DEFAULT_IMAGE_INSTRUCTION,
+    USAGE,
+    SlackBot,
+)
 
 CHANNEL = "C1"
 
@@ -152,12 +165,50 @@ class _FakeService:
         return self.known_urls.get(url)
 
 
+def _check_result(*, passed: bool = True, with_message: bool = True) -> CheckResult:
+    return CheckResult(
+        title="KI-Projekt",
+        stage=EvaluationStage.LLM,
+        verdict=Verdict.MATCH if passed else Verdict.NO_MATCH,
+        passed=passed,
+        score=80 if passed else 20,
+        threshold=60,
+        reason={"reasons": ["passt"]},
+        message=MatchMessage(title="KI-Projekt", url="", score=80)
+        if passed and with_message
+        else None,
+        is_llm_error=False,
+    )
+
+
+class _FakeChecker:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, object]] = []
+        self.result = _check_result()
+        self.images: list[list[str]] = []
+
+    def _record(self, name: str, arg: object) -> CheckResult:
+        self.calls.append((name, arg))
+        return self.result
+
+    async def check_stored(self, listing_id: int) -> CheckResult:
+        return self._record("check_stored", listing_id)
+
+    async def check_parsed(self, parsed: ParsedListing) -> CheckResult:
+        return self._record("check_parsed", parsed.external_url)
+
+    async def check_text(self, text: str, *, images: Sequence[ImageAttachment] = ()) -> CheckResult:
+        self.images.append([image.name for image in images])
+        return self._record("check_text", text)
+
+
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
     *,
     fetched: ParsedListing | None = None,
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
+    checker: _FakeChecker | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -169,6 +220,7 @@ def _bot(
         service=service,
         fetcher=fetcher if fetched is not None else None,
         file_reader=file_reader,
+        checker=checker,
     )
 
 
@@ -186,11 +238,14 @@ def _file_event(
         file["url_private_download"] = url
     if mimetype is not None:
         file["mimetype"] = mimetype
-    event: dict[str, object] = {"type": "message", "channel": channel, "files": [file]}
+    event: dict[str, object] = {
+        "type": "message",
+        "channel": channel,
+        "text": text,
+        "files": [file],
+    }
     if thread_ts is not None:
         event["thread_ts"] = thread_ts
-    if text:
-        event["text"] = text
     return {"event": event}
 
 
@@ -224,8 +279,28 @@ def _event(
     return {"event": event}
 
 
-def _slash(text: str) -> dict[str, object]:
-    return {"command": "/apply", "text": text, "channel_id": CHANNEL}
+def _slash(text: str, command: str = "/apply") -> dict[str, object]:
+    return {"command": command, "text": text, "channel_id": CHANNEL}
+
+
+def _buttons(blocks: list[Block]) -> dict[str, str | None]:
+    """Map ``action_id -> value`` for every button in the given blocks."""
+    out: dict[str, str | None] = {}
+    for block in blocks:
+        if block.get("type") != "actions":
+            continue
+        elements = block.get("elements")
+        assert isinstance(elements, list)
+        for element in elements:
+            if isinstance(element, dict):
+                value = element.get("value")
+                out[str(element.get("action_id"))] = str(value) if value is not None else None
+    return out
+
+
+def _updated_buttons(poster: _FakePoster) -> dict[str, str | None]:
+    assert poster.updates, "no message update happened"
+    return _buttons(poster.updates[-1][2])
 
 
 async def test_apply_action_threads_draft_and_records_root_ref() -> None:
@@ -272,9 +347,9 @@ async def test_cancel_action_updates_message() -> None:
     assert "9.9" in [ts for _, ts, _ in poster.updates]
 
 
-async def test_open_mail_action_is_ignored() -> None:
+async def test_url_button_action_is_ignored() -> None:
     poster, service = _FakePoster(), _FakeService()
-    await _bot(poster, service).on_block_action("open_mail", None, CHANNEL, "1.1")
+    await _bot(poster, service).on_block_action("open_project", None, CHANNEL, "1.1")
     assert service.calls == []
 
 
@@ -489,4 +564,157 @@ async def test_image_in_unknown_thread_starts_a_new_draft() -> None:
         "events_api", _file_event("shot.png", mimetype="image/png", thread_ts="999.9")
     )
     assert ("draft_from_text", "") in service.calls
+    assert service.last_images == ["shot.png"]
+
+
+async def test_slash_check_text_match_renders_apply_button_for_remembered_text() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, checker=checker)
+    await bot.dispatch("slash_commands", _slash("Python RAG Projekt", command="/check"))
+    assert ("check_text", "Python RAG Projekt") in checker.calls
+    buttons = _updated_buttons(poster)
+    key = buttons["apply_check"]
+    assert key is not None  # the placeholder ts routes back to the checked text
+    # clicking the button drafts from exactly the checked text
+    await bot.dispatch("interactive", _interactive("apply_check", key))
+    assert ("draft_from_text", "Python RAG Projekt") in service.calls
+    assert poster.draft_rendered()
+
+
+async def test_slash_check_no_match_renders_verdict_without_apply_button() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    checker.result = _check_result(passed=False)
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("Java Projekt", command="/check")
+    )
+    assert not _updated_buttons(poster)
+    joined = "\n".join(poster.visible_texts())
+    assert "20/100" in joined
+
+
+async def test_slash_check_known_url_checks_stored_listing() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    url = "https://www.freelancermap.de/projekt/ki-projekt"
+    service.known_urls[url] = 7
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(url, command="/check")
+    )
+    assert ("check_stored", 7) in checker.calls
+    assert _updated_buttons(poster)["apply"] == "7"  # the normal stored-listing apply flow
+
+
+async def test_slash_check_unknown_freelancermap_url_fetches_and_offers_apply_url() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    parsed = _parsed()
+    url = "https://www.freelancermap.de/projekt/neu"
+    await _bot(poster, service, fetched=parsed, checker=checker).dispatch(
+        "slash_commands", _slash(url, command="/check")
+    )
+    assert ("check_parsed", parsed.external_url) in checker.calls
+    assert _updated_buttons(poster)["apply_url"] == url
+
+
+async def test_apply_url_action_drafts_via_fetch() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    parsed = _parsed()
+    await _bot(poster, service, fetched=parsed).dispatch(
+        "interactive", _interactive("apply_url", "https://www.freelancermap.de/projekt/neu")
+    )
+    assert ("draft_from_parsed", parsed.external_url) in service.calls
+    assert poster.draft_rendered()
+
+
+async def test_apply_check_action_with_unknown_key_hints_expiry() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service, checker=_FakeChecker()).dispatch(
+        "interactive", _interactive("apply_check", "123.456")
+    )
+    assert service.calls == []
+    assert any("expired" in t for t in poster.visible_texts())
+
+
+async def test_slash_check_foreign_url_hints() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("https://example.com/job", command="/check")
+    )
+    assert checker.calls == []
+    assert any("project description" in t for t in poster.visible_texts())
+
+
+async def test_slash_check_empty_shows_usage() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service, checker=_FakeChecker()).dispatch(
+        "slash_commands", _slash("  ", command="/check")
+    )
+    assert poster.texts[-1][0] == CHECK_USAGE
+
+
+async def test_slash_check_error_is_surfaced() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    url = "https://www.freelancermap.de/projekt/ki-projekt"
+    service.known_urls[url] = 7
+
+    async def boom(listing_id: int) -> CheckResult:
+        raise ApplicationStateError("Project 7 not found")
+
+    checker.check_stored = boom  # type: ignore[method-assign]
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(url, command="/check")
+    )
+    assert any("Project 7 not found" in t for t in poster.visible_texts())
+
+
+async def test_file_upload_with_check_comment_checks_extracted_text() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+
+    async def reader(url: str) -> bytes:
+        return b"Senior Python Backend Engineer gesucht"
+
+    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", text="check das bitte")
+    )
+    assert any(name == "check_text" and "Python Backend" in str(arg) for name, arg in checker.calls)
+    assert service.calls == []  # no draft — checking only
+    key = _updated_buttons(poster)["apply_check"]
+    assert key is not None  # a passing file check still offers the apply button
+
+
+async def test_file_upload_without_check_comment_still_drafts() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+
+    async def reader(url: str) -> bytes:
+        return b"Projektbeschreibung"
+
+    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", text="bitte bewerben")
+    )
+    assert checker.calls == []
+    assert any(name == "draft_from_text" for name, _ in service.calls)
+
+
+async def test_image_upload_with_check_comment_checks_the_screenshot() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_png_reader, checker=checker)
+    await bot.dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", text="check das bitte")
+    )
+    assert ("check_text", "") in checker.calls
+    assert checker.images == [["shot.png"]]
+    assert service.calls == []  # checking only, no draft yet
+    # the apply button on a passing image check drafts from the same screenshot
+    key = _updated_buttons(poster)["apply_check"]
+    assert key is not None
+    await bot.dispatch("interactive", _interactive("apply_check", key))
+    assert ("draft_from_text", "") in service.calls
+    assert service.last_images == ["shot.png"]
+
+
+async def test_image_upload_without_check_comment_drafts_instead() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", text="bitte bewerben")
+    )
+    assert checker.calls == []
+    assert ("draft_from_text", "bitte bewerben") in service.calls
     assert service.last_images == ["shot.png"]

@@ -1,6 +1,5 @@
 """LLM generation of personalized application drafts (subject, body, LinkedIn)."""
 
-import base64
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,9 +11,10 @@ from openai import AsyncOpenAI
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.errors import ConfigError, LlmSchemaError
+from project_pilot.evaluation.llm import build_user_content
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
+    from openai.types.chat import ChatCompletionMessageParam
 
 PROMPT_VERSION = "application"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -147,21 +147,9 @@ class OpenAiDraftClient:
         user: str,
         images: Sequence[ImageAttachment] = (),
     ) -> DraftResponse:  # pragma: no cover
-        content: str | list[ChatCompletionContentPartParam] = user
-        if images:
-            parts: list[ChatCompletionContentPartParam] = [{"type": "text", "text": user}]
-            for image in images:
-                encoded = base64.b64encode(image.data).decode("ascii")
-                parts.append(
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:{image.mime_type};base64,{encoded}"},
-                    }
-                )
-            content = parts
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": content},
+            {"role": "user", "content": build_user_content(user, images)},
         ]
         completion = await self._client.chat.completions.parse(
             model=model,

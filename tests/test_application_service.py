@@ -11,14 +11,10 @@ from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import ApplicationGenerator, DraftResponse
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.application.service import (
-    ApplicationService,
-    extract_email,
-    is_email,
-    render_listing_entity,
-)
+from project_pilot.application.service import ApplicationService, extract_email, is_email
 from project_pilot.config import CvAttachments, SmtpConfig
 from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.evaluation.llm import render_listing_entity
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
 from project_pilot.ingestion.parser import ParsedListing
@@ -438,6 +434,16 @@ async def test_render_listing_entity_includes_context(
     assert "Anna Muster" in text
     assert "München" in text
     assert "Beschreibungstext" in text
+
+
+def test_render_listing_entity_carries_the_reference_number() -> None:
+    def listing(raw: dict[str, object]) -> Listing:
+        entity = _listing(raw=raw)
+        entity.remote_status = Remote.REMOTE  # column default only lands on flush
+        return entity
+
+    assert "Reference: 12345" in render_listing_entity(listing({"id": 12345}))
+    assert "Reference:" not in render_listing_entity(listing({"company": "Firma GmbH"}))
 
 
 async def test_drafts_are_queryable_per_listing(

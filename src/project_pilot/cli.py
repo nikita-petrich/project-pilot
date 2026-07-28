@@ -25,6 +25,7 @@ from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
 from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
+from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
 from project_pilot.ingestion.normalize import canonicalize_url
@@ -91,7 +92,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
 
 
 def _build_bot(settings: Settings) -> BotRuntime:
-    """Wire the Slack bot: draft generator, mailer, application service, fetcher."""
+    """Wire the Slack bot: draft generator, mailer, application service, fetcher, checker."""
     profile = ProfileService(Path("profile")).load()
     api_key, model = settings.require_openai()
     config = settings.require_slack()
@@ -108,6 +109,14 @@ def _build_bot(settings: Settings) -> BotRuntime:
         profile=profile,
         mailer=mailer,
         cv_attachments=settings.cv_attachments(),
+    )
+    checker = CheckService(
+        session_factory=session_factory,
+        matcher=LlmMatcher(
+            OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
+        ),
+        profile=profile,
+        threshold=settings.match_threshold,
     )
     web = AsyncWebClient(token=config.bot_token)
     client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
@@ -139,6 +148,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
         service=service,
         fetcher=fetch_listing,
         file_reader=read_slack_file,
+        checker=checker,
     )
 
     async def closer() -> None:
@@ -253,7 +263,7 @@ def daemon() -> None:
 
 @app.command("bot")
 def bot() -> None:
-    """Run only the Slack bot (Apply buttons, /apply command, thread review)."""
+    """Run only the Slack bot (Apply buttons, /apply and /check commands, thread review)."""
     settings = load_settings()
     settings.require_slack()
     asyncio.run(_run_bot(settings))

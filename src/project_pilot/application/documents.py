@@ -6,6 +6,7 @@ images travel as ``ImageAttachment`` payloads straight into the vision-capable
 LLM call (drafting and revision alike).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from io import BytesIO
 
@@ -28,6 +29,22 @@ class ImageAttachment:
 def is_image_mime_type(mime_type: str | None) -> bool:
     """True when ``mime_type`` is an image format the vision LLM accepts."""
     return mime_type in IMAGE_MIME_TYPES
+
+
+def image_fallback_title(images: Sequence[ImageAttachment]) -> str:
+    """Title for an image-only submission: the first screenshot's name."""
+    return images[0].name[:120] if images else "Projekt"
+
+
+def annotate_image_listing(text: str, images: Sequence[ImageAttachment]) -> str:
+    """Append one marker per attached image to a listing text.
+
+    The pixels only exist in the LLM call itself; the marker keeps a trace in the
+    persisted/rendered text so later readers (and text-only revisions) know the
+    listing arrived as a screenshot.
+    """
+    markers = (f"[Project listing attached as image: {image.name}]" for image in images)
+    return "\n".join((text.strip(), *markers)).strip()
 
 
 def extract_document_text(filename: str, data: bytes) -> str:
