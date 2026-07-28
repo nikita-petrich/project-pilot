@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 
 from project_pilot.models import (
     Application,
+    ContactLead,
     Evaluation,
     EvaluationStage,
     Listing,
@@ -150,3 +151,16 @@ class Repository:
             select(Application).where(Application.draft_ref == draft_ref)
         )
         return result.first()
+
+    async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
+        self._session.add(lead)
+        await self._session.flush()
+        return lead
+
+    async def get_contact_leads(self, listing_id: int) -> Sequence[ContactLead]:
+        result = await self._session.scalars(
+            select(ContactLead)
+            .where(ContactLead.listing_id == listing_id)
+            .order_by(ContactLead.created_at.desc())
+        )
+        return result.all()

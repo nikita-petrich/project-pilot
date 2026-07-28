@@ -19,6 +19,7 @@ from project_pilot.ingestion.normalize import (
     parse_start,
     remote_status_from_percent,
     remote_status_from_text,
+    resolve_contact_name,
     start_from_parts,
 )
 from project_pilot.models import PostedPrecision, RemoteStatus
@@ -152,6 +153,18 @@ def test_extract_contact_person() -> None:
     assert extract_contact_person("Ihr Ansprechpartner: Max Mustermann bei uns") == "Max Mustermann"
     assert extract_contact_person("Ansprechpartner: Hays AG") is None  # company, not a person
     assert extract_contact_person("no contact here") is None
+
+
+def test_resolve_contact_name() -> None:
+    # structured contact naming a person wins over the text
+    assert resolve_contact_name("Anna", "Kleinen", "Acme GmbH", "Ansprechpartner: Max Muster") == (
+        "Anna Kleinen"
+    )
+    # company-like or company-equal structured values fall back to the text label
+    assert resolve_contact_name("Hays", "AG", None, "Ansprechpartner: Max Muster") == "Max Muster"
+    assert resolve_contact_name("Acme", None, "Acme", "Ansprechpartner: Max Muster") == "Max Muster"
+    # nothing structured, nothing in the text
+    assert resolve_contact_name(None, None, None, "no contact here") is None
 
 
 def test_is_onsite_only() -> None:

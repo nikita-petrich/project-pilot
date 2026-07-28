@@ -25,6 +25,13 @@ from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
 from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
+from project_pilot.enrichment.fetch import Fetcher, WebFetcher
+from project_pilot.enrichment.listing import ListingEnrichmentService
+from project_pilot.enrichment.render import PlaywrightFetcher
+from project_pilot.enrichment.schemas import ContactEnrichment
+from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
+from project_pilot.enrichment.service import EnrichmentService
+from project_pilot.errors import EnrichmentError
 from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
@@ -59,6 +66,49 @@ def _slack_client(settings: Settings) -> SlackClient:
     config = settings.require_slack()
     web = cast("SlackWebClient", AsyncWebClient(token=config.bot_token))
     return SlackClient(channel=config.channel, web_client=web)
+
+
+def _enrichment_service(
+    settings: Settings,
+) -> tuple[EnrichmentService, Callable[[], Awaitable[None]]]:
+    """Build the enrichment service plus a closer for the fetcher(s) it owns.
+
+    Page fetching honors ``ENRICHMENT_RENDER`` (headless Chromium for JS-rendered
+    sites, else httpx). The DuckDuckGo result page is static, so search always uses a
+    lightweight httpx fetcher — the browser is reserved for company pages.
+    """
+    ua = settings.user_agent()
+    closeables: list[Fetcher] = []
+
+    if settings.enrichment_render:
+        page_fetcher: Fetcher = PlaywrightFetcher(
+            user_agent=ua, executable_path=settings.enrichment_render_browser_path or None
+        )
+        search_fetcher: Fetcher = WebFetcher(user_agent=ua)
+        closeables.extend((page_fetcher, search_fetcher))
+    else:
+        page_fetcher = WebFetcher(user_agent=ua)
+        search_fetcher = page_fetcher
+        closeables.append(page_fetcher)
+
+    provider: SearchProvider = (
+        DuckDuckGoSearch(search_fetcher)
+        if settings.enrichment_search == "duckduckgo"
+        else NullSearchProvider()
+    )
+    service = EnrichmentService(
+        fetcher=page_fetcher,
+        search=provider,
+        max_pages=settings.enrichment_max_pages,
+        sender=settings.applicant_name or None,
+        offer_du=settings.outreach_offer_du,
+    )
+
+    async def closer() -> None:
+        for fetcher in closeables:
+            await fetcher.aclose()
+
+    return service, closer
 
 
 def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
@@ -118,6 +168,14 @@ def _build_bot(settings: Settings) -> BotRuntime:
         profile=profile,
         threshold=settings.match_threshold,
     )
+    enrichment: ListingEnrichmentService | None = None
+    enrichment_closer: Callable[[], Awaitable[None]] | None = None
+    if settings.has_enrichment():
+        enrichment_service, enrichment_closer = _enrichment_service(settings)
+        enrichment = ListingEnrichmentService(
+            session_factory=session_factory, service=enrichment_service
+        )
+
     web = AsyncWebClient(token=config.bot_token)
     client = SlackClient(channel=config.channel, web_client=cast("SlackWebClient", web))
 
@@ -149,9 +207,12 @@ def _build_bot(settings: Settings) -> BotRuntime:
         fetcher=fetch_listing,
         file_reader=read_slack_file,
         checker=checker,
+        enrichment=enrichment,
     )
 
     async def closer() -> None:
+        if enrichment_closer is not None:
+            await enrichment_closer()
         await engine.dispose()
 
     return slack_bot, web, config.app_token, closer
@@ -230,6 +291,55 @@ async def _send_test_notification(settings: Settings) -> bool:
     return posted is not None
 
 
+async def _run_enrich(
+    settings: Settings,
+    *,
+    company: str | None,
+    listing_id: int | None,
+    person: str | None,
+    url: str | None,
+) -> ContactEnrichment:
+    service, closer = _enrichment_service(settings)
+    engine = None
+    try:
+        if listing_id is not None:
+            engine = create_engine(settings.database_url)
+            session_factory = create_session_factory(engine)
+            listing_service = ListingEnrichmentService(
+                session_factory=session_factory, service=service
+            )
+            return await listing_service.enrich_listing(listing_id)
+        if not company:
+            raise EnrichmentError("provide a company name or --listing-id")
+        return await service.enrich(company=company, person=person, known_url=url)
+    finally:
+        await closer()
+        if engine is not None:
+            await engine.dispose()
+
+
+def _format_enrichment(result: ContactEnrichment) -> str:
+    lines = [f"Company: {result.company or '—'}", f"Contact: {result.person or '—'}"]
+    if result.website:
+        lines.append(f"Website: {result.website}")
+    lines.append("E-mails: " + (", ".join(result.emails) if result.emails else "none found"))
+    lines.append("Phones:  " + (", ".join(result.phones) if result.phones else "none found"))
+    if result.persons:
+        lines.append("Named on site: " + ", ".join(result.persons))
+    lines += ["", "LinkedIn connection message (copy):", f"  {result.linkedin_message}"]
+    links = result.links
+    lines += [
+        "",
+        "Research links (open in your browser — nothing is scraped):",
+        f"  LinkedIn company: {links.linkedin_company}",
+        f"  LinkedIn people:  {links.linkedin_people}",
+        f"  Google contact:   {links.google_contact}",
+    ]
+    if result.sources:
+        lines.append("Sources read: " + ", ".join(result.sources))
+    return "\n".join(lines)
+
+
 @app.command("init-db")
 def init_db() -> None:
     """Apply database migrations (alembic upgrade head)."""
@@ -283,6 +393,29 @@ def stats() -> None:
     """Print a reporting summary (verdicts, matches per day, no-match terms, tokens)."""
     settings = load_settings()
     typer.echo(asyncio.run(_build_report(settings)))
+
+
+@app.command("enrich")
+def enrich(
+    company: str = typer.Argument(
+        None, help="Company name to research (omit when using --listing-id)."
+    ),
+    listing_id: int = typer.Option(
+        None, "--listing-id", "-l", help="Enrich a stored listing's company and record the lead."
+    ),
+    person: str = typer.Option(None, "--person", "-p", help="Known contact person (First Last)."),
+    url: str = typer.Option(None, "--url", "-u", help="Known company website (skips search)."),
+) -> None:
+    """Find a company's contact data (Impressum/website) plus LinkedIn/Google links."""
+    settings = load_settings()
+    try:
+        result = asyncio.run(
+            _run_enrich(settings, company=company, listing_id=listing_id, person=person, url=url)
+        )
+    except EnrichmentError as err:
+        typer.echo(f"enrich failed: {err}")
+        raise typer.Exit(code=1) from err
+    typer.echo(_format_enrichment(result))
 
 
 @app.command("test-notify")

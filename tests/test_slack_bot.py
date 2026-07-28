@@ -4,7 +4,8 @@ from collections.abc import Awaitable, Callable, Sequence
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.service import DraftView
-from project_pilot.errors import ApplicationStateError, EmailSendError
+from project_pilot.enrichment.schemas import ContactEnrichment, DiscoveryLinks
+from project_pilot.errors import ApplicationStateError, EmailSendError, EnrichmentError
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import (
@@ -20,6 +21,7 @@ from project_pilot.notification.slack_bot import (
     CHECK_USAGE,
     DEFAULT_IMAGE_INSTRUCTION,
     USAGE,
+    EnrichmentFlow,
     SlackBot,
 )
 
@@ -31,11 +33,13 @@ def _view(
     application_id: int = 1,
     recipient: str | None = "pm@firma.de",
     status: ApplicationStatus = ApplicationStatus.READY,
+    contact_name: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=application_id,
         title="KI-Projekt",
         url="https://www.freelancermap.de/projekt/ki-projekt",
+        contact_name=contact_name,
         recipient=recipient,
         subject="Bewerbung: KI-Projekt",
         body="Sehr geehrte Damen und Herren",
@@ -71,6 +75,17 @@ def _block_text(block: Block) -> str:
 
 def _is_draft(blocks: list[Block]) -> bool:
     return any(b.get("type") == "header" and "Application draft" in _block_text(b) for b in blocks)
+
+
+def _button_elements(blocks: list[Block]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for block in blocks:
+        if block.get("type") != "actions":
+            continue
+        block_elements = block.get("elements")
+        assert isinstance(block_elements, list)
+        elements.extend(element for element in block_elements if isinstance(element, dict))
+    return elements
 
 
 class _FakePoster:
@@ -202,6 +217,32 @@ class _FakeChecker:
         return self._record("check_text", text)
 
 
+class _FakeEnrichment:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+        self.error: Exception | None = None
+
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment:
+        self.calls.append(listing_id)
+        if self.error is not None:
+            raise self.error
+        return ContactEnrichment(
+            company="Muster GmbH",
+            person="Max Mustermann",
+            website="https://muster-gmbh.de/",
+            links=DiscoveryLinks(
+                linkedin_company="https://www.linkedin.com/search/results/companies/?keywords=Muster",
+                linkedin_people="https://www.linkedin.com/search/results/people/?keywords=Max",
+                google_company="https://www.google.com/search?q=Muster",
+                google_contact="https://www.google.com/search?q=Muster+Impressum",
+            ),
+            emails=["bewerbung@muster-gmbh.de"],
+            phones=["+49 30 1234567"],
+            persons=["Max Mustermann"],
+            sources=["https://muster-gmbh.de/impressum"],
+        )
+
+
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
@@ -209,6 +250,7 @@ def _bot(
     fetched: ParsedListing | None = None,
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
     checker: _FakeChecker | None = None,
+    enrichment: EnrichmentFlow | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -221,6 +263,7 @@ def _bot(
         fetcher=fetcher if fetched is not None else None,
         file_reader=file_reader,
         checker=checker,
+        enrichment=enrichment,
     )
 
 
@@ -342,13 +385,20 @@ async def test_apply_from_foreign_channel_is_ignored() -> None:
 
 async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:
     poster, service = _FakePoster(), _FakeService()
-    service.view = _view(status=ApplicationStatus.SENT)
+    service.view = _view(status=ApplicationStatus.SENT, contact_name="Anna Kleinen")
     await _bot(poster, service).dispatch(
         "interactive", _interactive("send", "1", ts="222.2", thread_ts="111.1")
     )
     assert ("send", 1) in service.calls
     assert "222.2" in poster.draft_update_ids()  # the draft message is updated in place
-    assert any("sent to" in t and "Hallo!" in t for t in poster.visible_texts())
+    visible = "\n".join(poster.visible_texts())
+    assert "sent to" in visible and "Hallo!" in visible
+    # the confirmation carries the LinkedIn people-search button for the contact
+    buttons = [e for _, _, blocks in poster.updates for e in _button_elements(blocks)]
+    assert any(
+        e.get("action_id") == "linkedin_search" and "Anna%20Kleinen" in str(e.get("url"))
+        for e in buttons
+    )
 
 
 async def test_send_action_surfaces_error() -> None:
@@ -370,6 +420,43 @@ async def test_url_button_action_is_ignored() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service).on_block_action("open_project", None, CHANNEL, "1.1")
     assert service.calls == []
+
+
+def _contact_rendered(poster: _FakePoster) -> bool:
+    def is_contact(blocks: list[Block]) -> bool:
+        return any(
+            b.get("type") == "header" and "Contact research" in _block_text(b) for b in blocks
+        )
+
+    return any(is_contact(blocks) for _, _, blocks in poster.updates) or any(
+        is_contact(blocks) for blocks, _ in poster.posted_blocks
+    )
+
+
+async def test_enrich_action_posts_contact_blocks() -> None:
+    poster, service, enrichment = _FakePoster(), _FakeService(), _FakeEnrichment()
+    await _bot(poster, service, enrichment=enrichment).dispatch(
+        "interactive", _interactive("enrich", "42", thread_ts="111.1")
+    )
+    assert enrichment.calls == [42]
+    assert _contact_rendered(poster)
+    rendered = [_block_text(b) for _, _, blocks in poster.updates for b in blocks]
+    assert any("bewerbung@muster-gmbh.de" in text for text in rendered)
+
+
+async def test_enrich_action_without_service_hints_to_enable() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("interactive", _interactive("enrich", "42"))
+    assert any("ENRICHMENT_ENABLED" in t for t in poster.visible_texts())
+
+
+async def test_enrich_action_surfaces_error() -> None:
+    poster, service, enrichment = _FakePoster(), _FakeService(), _FakeEnrichment()
+    enrichment.error = EnrichmentError("Listing 42 not found")
+    await _bot(poster, service, enrichment=enrichment).dispatch(
+        "interactive", _interactive("enrich", "42")
+    )
+    assert any("not found" in t for t in poster.visible_texts())
 
 
 async def test_slash_apply_text_drafts_from_text_in_thread() -> None:

@@ -22,9 +22,11 @@ from project_pilot.application.documents import (
     is_image_mime_type,
 )
 from project_pilot.application.service import DraftView, is_email
+from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import (
     ApplicationStateError,
     EmailSendError,
+    EnrichmentError,
     LlmSchemaError,
     SelectorMismatchError,
     assert_defined,
@@ -35,10 +37,14 @@ from project_pilot.notification.slack import (
     Block,
     PostedMessage,
     check_fallback_text,
+    contact_fallback_text,
     draft_fallback_text,
     format_check_blocks,
+    format_contact_blocks,
     format_draft_blocks,
     format_upload_prompt_blocks,
+    sent_confirmation_blocks,
+    sent_fallback_text,
     status_blocks,
     upload_prompt_fallback_text,
 )
@@ -114,6 +120,12 @@ class ApplicationFlow(Protocol):
     async def record_draft_ref(self, application_id: int, draft_ref: str) -> None: ...
     async def find_by_draft_ref(self, draft_ref: str) -> DraftView | None: ...
     async def find_listing_id_by_url(self, url: str) -> int | None: ...
+
+
+class EnrichmentFlow(Protocol):
+    """The contact-enrichment surface the bot drives (optional)."""
+
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment: ...
 
 
 type ListingFetcher = Callable[[str], Awaitable[ParsedListing]]
@@ -229,6 +241,7 @@ class SlackBot:
         fetcher: ListingFetcher | None = None,
         file_reader: FileReader | None = None,
         checker: CheckFlow | None = None,
+        enrichment: EnrichmentFlow | None = None,
     ) -> None:
         self._client = client
         self._channel = channel
@@ -236,6 +249,7 @@ class SlackBot:
         self._fetcher = fetcher
         self._file_reader = file_reader
         self._checker = checker
+        self._enrichment = enrichment
         self._pending_checks: dict[str, _PendingCheck] = {}
         self._pending_uploads: dict[str, _PendingUpload] = {}
 
@@ -337,7 +351,9 @@ class SlackBot:
             await self._send_application(target, draft_ts=message_ts, thread_root=root)
         elif action_id == "cancel":
             await self._cancel_application(target, draft_ts=message_ts, thread_root=root)
-        # open_project is a URL button handled by Slack itself.
+        elif action_id == "enrich":
+            await self._run_enrichment(target, thread_root=root)
+        # open_project / open_li_* / open_google are URL buttons handled by Slack itself.
 
     async def on_slash_apply(self, channel_id: str | None, text: str) -> None:
         argument = text.strip()
@@ -695,12 +711,38 @@ class SlackBot:
         await self._client.update_blocks(
             self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
         )
-        await self._replace(
-            progress,
-            thread_root,
-            f"✅ Application sent to *{view.recipient}*\n"
-            f"💬 LinkedIn message to copy:\n```{view.linkedin_message}```",
+        confirmation = sent_confirmation_blocks(view)
+        fallback = sent_fallback_text(view)
+        if progress is not None:
+            await self._client.update_blocks(progress.channel, progress.ts, confirmation, fallback)
+        else:
+            await self._client.post_blocks(confirmation, fallback, thread_ts=thread_root)
+
+    async def _run_enrichment(self, listing_id: int, *, thread_root: str) -> None:
+        if self._enrichment is None:
+            await self._client.post_text(
+                "🔎 Contact research is off. Set `ENRICHMENT_ENABLED=true` to enable it.",
+                thread_ts=thread_root,
+            )
+            return
+        progress = await self._client.post_text(
+            "🔎 Searching the company website for contact data …", thread_ts=thread_root
         )
+        try:
+            enrichment = await self._enrichment.enrich_listing(listing_id)
+        except EnrichmentError as err:
+            await self._replace(progress, thread_root, f"⚠️ {err}")
+            return
+        except Exception as err:
+            logger.exception("enrichment failed for listing %d", listing_id)
+            await self._replace(progress, thread_root, f"⚠️ Unexpected error: {err}")
+            return
+        blocks = format_contact_blocks(enrichment)
+        fallback = contact_fallback_text(enrichment)
+        if progress is not None:
+            await self._client.update_blocks(progress.channel, progress.ts, blocks, fallback)
+        else:
+            await self._client.post_blocks(blocks, fallback, thread_ts=thread_root)
 
     async def _cancel_application(
         self, application_id: int, *, draft_ts: str, thread_root: str

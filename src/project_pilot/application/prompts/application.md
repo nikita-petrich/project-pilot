@@ -31,10 +31,17 @@ des Erstgespräch-Links.
 
 LINK-KOPPLUNG (HARTE REGEL):
 
-- Bewerbungssprache Deutsch → verwende die Zeile `Erstgespräch (DE)` aus dem Profil
-- Bewerbungssprache Englisch → verwende die Zeile `Erstgespräch (EN)` aus dem Profil
+- Der Erstgespräch-Link steht im Profil-Abschnitt „Kontakt & Signatur" als
+  Notion-Calendar-Buchungslink (`https://calendar.notion.so/…`) — je einer für
+  Deutsch und Englisch
+- Bewerbungssprache Deutsch → verwende die deutsche Zeile (`CTA German`, alternativ
+  `Erstgespräch (DE)`)
+- Bewerbungssprache Englisch → verwende die englische Zeile (`CTA English`,
+  alternativ `Erstgespräch (EN)`)
 - Der Link muss immer zur gewählten Bewerbungssprache passen — nie den deutschen
   Link in einer englischen Bewerbung (oder umgekehrt)
+- Übernimm den Link exakt so, wie er im Profil steht (keine Kürzung, keine
+  spitzen Klammern, kein Markdown-Link)
 
 =================================================================
 
@@ -403,10 +410,10 @@ eigene Offenheit benennt:
   über das Projekt zu sprechen!" / Englisch: „I would be glad to discuss the project
   with you."
 - Direkt danach IMMER die Einladung zum kostenlosen Erstgespräch (HARTE REGEL) mit
-  dem Link, der zur oben bestimmten Bewerbungssprache gehört (Deutsch →
-  `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`), als genau ein fertiger Satz:
-  - Deutsch: „Kostenloses Erstgespräch buchen: <Link aus Erstgespräch (DE)>"
-  - Englisch: „Book a free intro call: <Link aus Erstgespräch (EN)>"
+  dem Notion-Calendar-Link, der zur oben bestimmten Bewerbungssprache gehört
+  (Deutsch → `CTA German`, Englisch → `CTA English`), als genau ein fertiger Satz:
+  - Deutsch: „Kostenloses Erstgespräch buchen: <deutscher Buchungslink>"
+  - Englisch: „Book a free intro call: <englischer Buchungslink>"
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
@@ -419,6 +426,31 @@ eigene Offenheit benennt:
   Telefon, Web, LinkedIn, GitHub. Übernimm dabei **keine** Meta-/Auswahl-Texte
   (z. B. Zeilen mit „CTA", „Hier musst … entscheiden", Klammer-Alternativen) — der
   Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 11), nicht roh in die Signatur.
+
+13. Vertraulichkeitshinweis (HARTE REGEL – IMMER AUSGEBEN, WÖRTLICH)
+
+Nach der Signatur folgt eine Leerzeile und danach der Vertraulichkeitshinweis in
+der Bewerbungssprache. Gib ihn **exakt** so aus — nicht umformulieren, nicht
+kürzen, nicht übersetzen, keine Überschrift und keine Klammerzusätze davor:
+
+- Deutsch:
+
+  Der Inhalt dieser E-Mail ist ausschließlich für den bezeichneten Adressaten
+  bestimmt. Wenn Sie nicht der vorgesehene Adressat dieser E-Mail oder dessen
+  Vertreter sein sollten, so beachten Sie bitte, dass jede Form der Kenntnisnahme,
+  Veröffentlichung, Vervielfältigung oder Weitergabe des Inhalts dieser E-Mail
+  unzulässig ist. Wir bitten Sie, sich in diesem Fall mit dem Absender der E-Mail
+  in Verbindung zu setzen.
+
+- Englisch:
+
+  The contents of this e-mail are intended solely for the named addressee. If you
+  are not the intended recipient of this e-mail or their representative, please
+  note that any form of review, publication, reproduction or disclosure of the
+  contents of this e-mail is not permitted. In this case, please contact the
+  sender of the e-mail.
+
+Der Hinweis ist der letzte Block der Bewerbung; danach folgt nichts mehr.
 
 =================================================================
 
@@ -443,8 +475,8 @@ Ansprechpartner der Ausschreibung:
      kein ganzer Satz – z. B. „zu Ihrem Projekt <Kurztitel>" / „Ihre
      <Rolle>-Ausschreibung")
   3. Ein Halbsatz, warum der Kandidat zum Kern passt
-  4. Einladung zum kostenlosen Erstgespräch mit dem Link zur gewählten
-     Bewerbungssprache (Deutsch → `Erstgespräch (DE)`, Englisch → `Erstgespräch (EN)`),
+  4. Einladung zum kostenlosen Erstgespräch mit dem Notion-Calendar-Link zur
+     gewählten Bewerbungssprache (Deutsch → `CTA German`, Englisch → `CTA English`),
      z. B. „Kostenloses Erstgespräch: <Link>" / „Free intro call: <Link>". Schreibe
      NIEMALS „CTA" oder Klammer-Alternativen.
 - Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
@@ -473,9 +505,9 @@ Gib ausschließlich das strukturierte Objekt mit diesen drei Feldern aus:
 
 - `subject`: der Betreff (eine Zeile, ohne Präfix „Betreff:", inkl. Referenznummer
   wenn vorhanden)
-- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur, alle
-  PFLICHT-Bausteine aus „Struktur der Bewerbung" enthalten), kein Markdown, kein
-  Code, keine Erklärungen, keine Kommentare
+- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur und
+  Vertraulichkeitshinweis, alle PFLICHT-Bausteine aus „Struktur der Bewerbung"
+  enthalten), kein Markdown, kein Code, keine Erklärungen, keine Kommentare
 - `linkedin_message`: die LinkedIn-Nachricht (max. 250 Zeichen)
 
 =================================================================

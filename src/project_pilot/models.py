@@ -163,6 +163,7 @@ class Application(Base):
     listing_url: Mapped[str | None] = mapped_column(String(1024), default=None)
     listing_title: Mapped[str] = mapped_column(String(512))
     listing_text: Mapped[str] = mapped_column(Text, default="")
+    contact_name: Mapped[str | None] = mapped_column(String(256), default=None)
 
     recipient_email: Mapped[str | None] = mapped_column(String(320), default=None)
     subject: Mapped[str] = mapped_column(String(512), default="")
@@ -187,6 +188,31 @@ class Application(Base):
         DateTime(timezone=True), default=_utcnow, onupdate=_utcnow
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+
+
+class ContactLead(Base):
+    """Contact data found for a listing's company (Impressum/website + research links).
+
+    Additive, append-only record for traceability; one row per enrichment lookup so a
+    company can be re-checked later without losing the earlier result.
+    """
+
+    __tablename__ = "contact_leads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("listings.id", ondelete="SET NULL"), index=True, default=None
+    )
+    company: Mapped[str | None] = mapped_column(String(512), default=None)
+    person: Mapped[str | None] = mapped_column(String(256), default=None)
+    website: Mapped[str | None] = mapped_column(String(1024), default=None)
+    emails: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    phones: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    persons: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    sources: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
+    linkedin_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class SourceState(Base):

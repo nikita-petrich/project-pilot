@@ -3,6 +3,7 @@
 from typing import cast
 
 from project_pilot.application.service import DraftView
+from project_pilot.enrichment.schemas import ContactEnrichment, DiscoveryLinks
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
 from project_pilot.notification.messages import MatchMessage
@@ -14,8 +15,10 @@ from project_pilot.notification.slack import (
     SlackWebClient,
     check_fallback_text,
     format_check_blocks,
+    format_contact_blocks,
     format_draft_blocks,
     format_match_blocks,
+    sent_confirmation_blocks,
 )
 
 
@@ -50,11 +53,13 @@ def _draft_view(
     status: ApplicationStatus = ApplicationStatus.READY,
     body: str = "Sehr geehrte Damen und Herren,\nich passe gut.",
     revision_count: int = 1,
+    contact_name: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=7,
         title="KI-Projekt",
         url="https://www.freelancermap.de/projekt/x",
+        contact_name=contact_name,
         recipient=recipient,
         subject="Bewerbung: KI-Projekt",
         body=body,
@@ -85,6 +90,8 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
     assert apply_button["action_id"] == "apply"
     assert apply_button["value"] == "42"
     assert "open_project" in _action_ids(blocks)
+    enrich_button = next(e for e in _action_elements(blocks) if e["action_id"] == "enrich")
+    assert enrich_button["value"] == "42"  # enrich carries the listing id
 
 
 def test_match_blocks_show_short_description_in_full() -> None:
@@ -141,6 +148,115 @@ def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() ->
     context = _blocks_of_type(blocks, "context")[0]["elements"]
     assert isinstance(context, list)
     assert "e-mail address" in str(context[0]["text"])
+
+
+def _all_action_elements(blocks: list[Block]) -> list[dict[str, object]]:
+    elements: list[dict[str, object]] = []
+    for actions in _blocks_of_type(blocks, "actions"):
+        block_elements = actions["elements"]
+        assert isinstance(block_elements, list)
+        elements.extend(cast("dict[str, object]", element) for element in block_elements)
+    return elements
+
+
+def test_draft_without_recipient_offers_enrich_when_listing_known() -> None:
+    view = DraftView(
+        application_id=7,
+        title="KI-Projekt",
+        url="https://x/proj",
+        contact_name=None,
+        recipient=None,
+        subject="Bewerbung: KI-Projekt",
+        body="Text",
+        linkedin_message="Hi",
+        status=ApplicationStatus.AWAITING_EMAIL,
+        revision_count=0,
+        listing_id=42,
+    )
+    blocks = format_draft_blocks(view)
+    # No Send yet; contact research is offered (the mail-client action is a link, no contact name).
+    assert _action_ids(blocks) == ["enrich", "cancel"]
+    enrich = next(e for e in _action_elements(blocks) if e["action_id"] == "enrich")
+    assert enrich["value"] == "42"
+
+
+def _enrichment(*, emails: list[str], phones: list[str]) -> ContactEnrichment:
+    return ContactEnrichment(
+        company="Muster GmbH",
+        person="Max Mustermann",
+        website="https://muster-gmbh.de/",
+        links=DiscoveryLinks(
+            linkedin_company="https://www.linkedin.com/search/results/companies/?keywords=Muster",
+            linkedin_people="https://www.linkedin.com/search/results/people/?keywords=Max",
+            google_company="https://www.google.com/search?q=Muster",
+            google_contact="https://www.google.com/search?q=Muster+Impressum",
+        ),
+        linkedin_message="Hallo Max, ich würde mich gerne vernetzen. Beste Grüße!",
+        emails=emails,
+        phones=phones,
+        persons=["Max Mustermann"],
+        sources=["https://muster-gmbh.de/impressum"],
+    )
+
+
+def test_contact_blocks_render_emails_phones_message_and_links() -> None:
+    blocks = format_contact_blocks(
+        _enrichment(emails=["bewerbung@muster-gmbh.de"], phones=["+49 30 1234567"])
+    )
+    joined = "\n".join(_section_texts(blocks))
+    assert "bewerbung@muster-gmbh.de" in joined
+    assert "+49 30 1234567" in joined
+    assert "Muster GmbH" in joined
+    assert "Hallo Max," in joined  # the copyable LinkedIn connection message
+    assert _action_ids(blocks) == ["open_li_company", "open_li_people", "open_google"]
+
+
+def test_contact_blocks_note_when_nothing_found() -> None:
+    joined = "\n".join(_section_texts(format_contact_blocks(_enrichment(emails=[], phones=[]))))
+    assert "No direct e-mail" in joined  # falls back to the links below
+
+
+def test_draft_blocks_offer_linkedin_search_for_contact() -> None:
+    blocks = format_draft_blocks(_draft_view(contact_name="Anna Kleinen"))
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert button["url"] == (
+        "https://www.linkedin.com/search/results/people/?keywords=Anna%20Kleinen"
+    )
+    text = button["text"]
+    assert isinstance(text, dict)
+    assert "Anna Kleinen" in str(text["text"])
+    # the search button rides directly under the LinkedIn section, before the review row
+    assert _action_ids(blocks) == ["linkedin_search"]
+    assert len(_blocks_of_type(blocks, "actions")) == 2
+
+
+def test_draft_blocks_keep_linkedin_search_after_send() -> None:
+    blocks = format_draft_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
+    assert ids == ["linkedin_search"]  # review buttons gone, the search stays
+
+
+def test_draft_blocks_without_contact_have_no_linkedin_search() -> None:
+    ids = [str(e["action_id"]) for e in _all_action_elements(format_draft_blocks(_draft_view()))]
+    assert "linkedin_search" not in ids
+
+
+def test_sent_confirmation_carries_linkedin_text_and_search_button() -> None:
+    blocks = sent_confirmation_blocks(
+        _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
+    )
+    joined = "\n".join(_section_texts(blocks))
+    assert "sent to *pm@firma.de*" in joined
+    assert "```Hallo, kurzes Interesse!```" in joined
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
+    assert "keywords=Anna%20Kleinen" in str(button["url"])
+
+
+def test_sent_confirmation_without_contact_has_no_button() -> None:
+    blocks = sent_confirmation_blocks(_draft_view(status=ApplicationStatus.SENT))
+    assert _blocks_of_type(blocks, "actions") == []
 
 
 def test_draft_blocks_split_long_email_without_truncation() -> None:

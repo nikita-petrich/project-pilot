@@ -48,6 +48,9 @@ application drafts):
   no-gos, reference projects, and the application signature. **This file is
   gitignored and stays local** (it holds personal CV/contact data) — a sanitized
   `profile/profile.example.md` template is tracked instead, like `.env.example`.
+  Its contact block ends with the two Notion Calendar booking links
+  (`CTA German` / `CTA English`); the application generator picks the one matching
+  the application language for the closing sentence and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
@@ -77,6 +80,8 @@ uv run project-pilot bot            # only the Slack bot (no scanning)
 uv run project-pilot test-notify    # post a test message to the Slack channel
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
+uv run project-pilot enrich "<company>" [--person "First Last"] [--url https://…]
+uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, record the lead
 ```
 
 ## Slack setup
@@ -115,7 +120,10 @@ prompt (style rules, reference projects, skills, signature) — edit it directly
 change how applications are written. The draft posts as **one** message:
 
 - **Full e-mail** in copyable code blocks (split across Block Kit sections when
-  long, never truncated), plus the subject and the LinkedIn message.
+  long, never truncated), plus the subject and the LinkedIn message. Whenever a
+  contact person is known, a **🔍 … on LinkedIn** button under the LinkedIn text
+  opens a LinkedIn people search for that name (also on the post-send
+  confirmation in the thread).
 - **Recipient** — auto-extracted from the listing when an e-mail address is
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
@@ -144,6 +152,46 @@ press one, and the buttons disappear once used, so an upload can never fire twic
 Any comment you add to the upload is kept as extra project context (there is no
 keyword to remember), and screenshots (PNG/JPEG/WebP/GIF) go to the vision LLM
 directly. Nothing is ever sent without the explicit Send tap.
+
+## Finding a contact (enrichment)
+
+Optional, **off by default** (`ENRICHMENT_ENABLED=true` to switch on). When a match
+lists a company but no reachable e-mail, tap **🔎 Find contact** on the match (or on a
+recipient-less draft) and project-pilot looks the company's contact channel up:
+
+1. **Company website** — a web search (`ENRICHMENT_SEARCH=duckduckgo`, or pass a known
+   `--url`) finds the official site, then its **Impressum / Kontakt / Team / Karriere**
+   pages are read for e-mails, phone numbers, and contact-person names. In Germany the
+   Impressum is legally-required public contact data, so this is the reliable source of
+   a phone/e-mail. Fetches are polite and robots-aware; a 403 is never retried.
+2. **LinkedIn & Google** — surfaced as **one-click research links** (company search,
+   people search, Google contact search). These open in your own browser; **nothing on
+   LinkedIn or Google is ever scraped** — that would breach their terms, and LinkedIn
+   never exposes phone/e-mail publicly anyway.
+3. **LinkedIn connection message** — every result includes a short, personalized German
+   **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
+   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it, and
+   `OUTREACH_OFFER_DU=true` (the default) to offer first-name terms ("Gerne auch per Du.").
+
+The result posts in the message's thread (e-mails best-first, phone, named people, the
+connection message, the links) and is stored in `contact_leads`. Reply to a draft's
+thread with a found address to set it as the recipient. From the shell:
+
+```sh
+uv run project-pilot enrich "Muster GmbH" --person "Max Mustermann"
+uv run project-pilot enrich --listing-id 42     # uses the listing's company + records a lead
+```
+
+**JS-rendered sites (optional).** Some sites inject their contact data via JavaScript,
+which the default httpx fetcher can't see. Set `ENRICHMENT_RENDER=true` to fetch company
+pages with a headless Chromium instead — install the extra once:
+
+```sh
+uv sync --extra render && uv run playwright install chromium
+```
+
+Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
+retry); only company pages are rendered, never LinkedIn or Google.
 
 ## Checking a listing from Slack
 
@@ -225,14 +273,24 @@ the first-run verification checklist are in
 [`docs/adr/0001-source-verification.md`](docs/adr/0001-source-verification.md). Do
 not resell or redistribute scraped data.
 
+The same posture governs **contact enrichment**: it reads only a company's own public
+website (the legally-required Impressum and its contact pages), with the identifying
+user agent, a per-host `robots.txt` gate, a spacing delay, and no 403 retry. It **does
+not scrape LinkedIn or Google** — those are only ever offered as search links you open
+yourself. Enrichment is off unless you set `ENRICHMENT_ENABLED=true`, and it processes
+personal contact data (names, e-mails, phone numbers) solely so you can apply to the
+project — use it accordingly and do not store or share the results beyond that purpose.
+
 ## Project layout
 
 ```
 src/project_pilot/
   config.py profile_loader.py errors.py db.py models.py repository.py
   ingestion/    client, parser, normalize, watermark
-  evaluation/   freshness, rules, llm, schemas, prompts/
+  evaluation/   freshness, rules, llm, schemas, check, prompts/
+  enrichment/   fetch, render, search, extract, links, message, service, listing
   notification/ slack
+  application/  generator, service, mailer, documents (apply flow)
   pipeline.py scheduler.py reporting.py cli.py
 alembic/        async migrations
 docs/           compliance.md, operations.md, adr/
