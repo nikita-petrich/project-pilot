@@ -23,7 +23,6 @@ from project_pilot.application.generator import (
 )
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
-from project_pilot.application.signature import load_signatures
 from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
 from project_pilot.evaluation.check import CheckService
@@ -110,7 +109,6 @@ def _build_bot(settings: Settings) -> BotRuntime:
         profile=profile,
         mailer=mailer,
         cv_attachments=settings.cv_attachments(),
-        signatures=load_signatures(settings.signature_dir_path()),
     )
     checker = CheckService(
         session_factory=session_factory,

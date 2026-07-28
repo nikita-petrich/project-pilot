@@ -1,30 +1,13 @@
 """Tests for the SMTP mailer (fake transport, TLS mode selection, error mapping)."""
 
-from collections.abc import Callable
 from email.message import EmailMessage
-from itertools import count
 
 import aiosmtplib
 import pytest
 
 from project_pilot.application.mailer import SmtpMailer
-from project_pilot.application.signature import InlineImage, Signature
 from project_pilot.config import SmtpConfig
 from project_pilot.errors import EmailSendError
-
-
-def _cids() -> Callable[[], str]:
-    """Deterministic Content-ID factory so assertions can name the expected value."""
-    counter = count(1)
-    return lambda: f"<cid{next(counter)}@project-pilot>"
-
-
-def _signature() -> Signature:
-    return Signature(
-        html='<table><tr><td><img src="cid:photo"></td><td>Nikita Petrich</td></tr></table>',
-        text="--\nNikita Petrich\nn.petrich@sequenz.io",
-        images=(InlineImage(name="photo", data=b"\xff\xd8jpeg", maintype="image", subtype="jpeg"),),
-    )
 
 
 def _config(port: int = 587, use_starttls: bool = True) -> SmtpConfig:
@@ -137,76 +120,3 @@ async def test_missing_attachment_file_raises_email_send_error(tmp_path: object)
         await SmtpMailer(_config(), send_fn=_FakeSend()).send(
             to="a@b.de", subject="s", body="b", attachments=[missing]
         )
-
-
-async def test_without_signature_the_mail_stays_plain_text() -> None:
-    fake = _FakeSend()
-    await SmtpMailer(_config(), send_fn=fake).send(to="a@b.de", subject="s", body="Hallo")
-    assert fake.message is not None
-    assert fake.message.get_content_type() == "text/plain"
-
-
-async def test_signature_produces_text_and_html_alternatives() -> None:
-    fake = _FakeSend()
-    await SmtpMailer(_config(), send_fn=fake, cid_factory=_cids()).send(
-        to="a@b.de",
-        subject="s",
-        body="Guten Tag\n\nMit freundlichen Grüßen\nNikita",
-        signature=_signature(),
-    )
-    assert fake.message is not None
-    assert fake.message.get_content_type() == "multipart/alternative"
-
-    plain = fake.message.get_body(preferencelist=("plain",))
-    html = fake.message.get_body(preferencelist=("html",))
-    assert plain is not None and html is not None
-    # The text part carries the plain-text signature for clients that ignore HTML.
-    assert "n.petrich@sequenz.io" in plain.get_content()
-    # The HTML part carries the body as paragraphs plus the signature block.
-    assert "<p" in html.get_content()
-    assert "Nikita Petrich" in html.get_content()
-
-
-async def test_cid_placeholder_is_rewritten_and_image_embedded() -> None:
-    fake = _FakeSend()
-    await SmtpMailer(_config(), send_fn=fake, cid_factory=_cids()).send(
-        to="a@b.de", subject="s", body="Hallo", signature=_signature()
-    )
-    assert fake.message is not None
-    html = fake.message.get_body(preferencelist=("html",))
-    assert html is not None
-    # The template placeholder is replaced by this message's real Content-ID.
-    assert 'src="cid:cid1@project-pilot"' in html.get_content()
-    assert "cid:photo" not in html.get_content()
-
-    related = [part for part in fake.message.walk() if part.get_content_type() == "image/jpeg"]
-    assert len(related) == 1
-    assert related[0]["Content-ID"] == "<cid1@project-pilot>"
-    assert related[0].get_payload(decode=True) == b"\xff\xd8jpeg"
-
-
-async def test_inline_image_is_not_offered_as_an_attachment_next_to_the_cv(
-    tmp_path: object,
-) -> None:
-    from pathlib import Path
-
-    cv = Path(str(tmp_path)) / "CV-DE.pdf"
-    cv.write_bytes(b"%PDF-1.4 fake")
-    fake = _FakeSend()
-    await SmtpMailer(_config(), send_fn=fake, cid_factory=_cids()).send(
-        to="a@b.de", subject="s", body="Hallo", attachments=[cv], signature=_signature()
-    )
-    assert fake.message is not None
-    # Only the CV is a real attachment; the photo lives inside the HTML alternative.
-    assert [p.get_filename() for p in fake.message.iter_attachments()] == ["CV-DE.pdf"]
-
-
-async def test_body_html_escapes_markup_from_the_draft() -> None:
-    fake = _FakeSend()
-    await SmtpMailer(_config(), send_fn=fake, cid_factory=_cids()).send(
-        to="a@b.de", subject="s", body="Preis < 100 & fair", signature=_signature()
-    )
-    assert fake.message is not None
-    html = fake.message.get_body(preferencelist=("html",))
-    assert html is not None
-    assert "Preis &lt; 100 &amp; fair" in html.get_content()

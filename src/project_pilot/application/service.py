@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.generator import ApplicationGenerator, GeneratedDraft
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.application.signature import Signatures
 from project_pilot.config import CvAttachments
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
@@ -118,14 +117,12 @@ class ApplicationService:
         profile: Profile,
         mailer: SmtpMailer | None,
         cv_attachments: CvAttachments | None = None,
-        signatures: Signatures | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._generator = generator
         self._profile = profile
         self._mailer = mailer
         self._cv_attachments = cv_attachments
-        self._signatures = signatures
 
     async def draft_for_listing(self, listing_id: int) -> DraftView:
         """Generate and persist a draft for a stored listing (Apply button, known URL)."""
@@ -252,23 +249,17 @@ class ApplicationService:
             subject = application.subject
             body = application.body
 
-        # The draft language picks both the CV and the signature (English draft → EN).
-        language = detect_language(body)
+        # Attach the CV that matches the draft language (English draft → EN CV).
         cv = None
         if self._cv_attachments is not None:
-            cv = self._cv_attachments.for_language(language)
+            cv = self._cv_attachments.for_language(detect_language(body))
         attachments = [cv] if cv is not None else []
-        signature = self._signatures.for_language(language) if self._signatures else None
 
         # The SMTP call happens outside any unit of work so a slow/failing server
         # never holds a transaction; the outcome is recorded in a follow-up one.
         try:
             await self._mailer.send(
-                to=recipient,
-                subject=subject,
-                body=body,
-                attachments=attachments,
-                signature=signature,
+                to=recipient, subject=subject, body=body, attachments=attachments
             )
         except Exception as err:
             try:

@@ -10,7 +10,6 @@ from project_pilot.application.generator import ApplicationGenerator, DraftRespo
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.application.service import ApplicationService, extract_email, is_email
-from project_pilot.application.signature import Signature, Signatures
 from project_pilot.config import CvAttachments, SmtpConfig
 from project_pilot.errors import ApplicationStateError, EmailSendError
 from project_pilot.evaluation.llm import render_listing_entity
@@ -108,7 +107,6 @@ def _service(
     *,
     mailer: SmtpMailer | None = None,
     cv_attachments: CvAttachments | None = None,
-    signatures: Signatures | None = None,
 ) -> ApplicationService:
     generator, _ = _generator(drafts if drafts is not None else [_draft(), _draft()])
     return ApplicationService(
@@ -117,7 +115,6 @@ def _service(
         profile=_profile(),
         mailer=mailer,
         cv_attachments=cv_attachments,
-        signatures=signatures,
     )
 
 
@@ -338,44 +335,6 @@ async def test_send_attaches_the_cv_matching_the_draft_language(
 
     files = [part.get_filename() for part in send.sent[0].iter_attachments()]
     assert files == ["CV-EN.pdf"]  # English body → English CV
-
-
-async def test_send_uses_the_signature_matching_the_draft_language(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    signatures = Signatures(
-        de=Signature(html="<div>Deutsch</div>", text="Mit freundlichen Grüßen"),
-        en=Signature(html="<div>English</div>", text="Best regards, Nikita"),
-    )
-    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
-    send = _FakeSend()
-    english = _draft()
-    english.body = "Dear Sir or Madam, I would be glad to support your project."
-    service = _service(
-        session_factory, drafts=[english, english], mailer=_mailer(send), signatures=signatures
-    )
-    view = await service.draft_for_listing(listing_id)
-    await service.send(view.application_id)
-
-    message = send.sent[0]
-    assert message.get_content_type() == "multipart/alternative"
-    plain = message.get_body(preferencelist=("plain",))
-    html = message.get_body(preferencelist=("html",))
-    assert plain is not None and html is not None
-    assert "Best regards, Nikita" in plain.get_content()  # English body → English signature
-    assert "English" in html.get_content()
-    assert "Deutsch" not in html.get_content()
-
-
-async def test_send_without_configured_signature_stays_plain_text(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
-    send = _FakeSend()
-    service = _service(session_factory, mailer=_mailer(send))  # no signatures
-    view = await service.draft_for_listing(listing_id)
-    await service.send(view.application_id)
-    assert send.sent[0].get_content_type() == "text/plain"
 
 
 async def test_send_without_configured_cv_has_no_attachment(

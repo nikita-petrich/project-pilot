@@ -411,15 +411,14 @@ eigene Offenheit benennt:
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
 
-12. Grußformel und Name (HARTE REGEL – IMMER AUSGEBEN, DANN ENDE)
+12. Grußformel und Signatur (HARTE REGEL – IMMER AUSGEBEN)
 
 - Grußformel in der Bewerbungssprache: Deutsch „Mit freundlichen Grüßen", Englisch
-  „Best regards" — danach eine Leerzeile, dann der Name des Kandidaten
-- **Nach dem Namen ist die Bewerbung zu Ende.** Schreibe **KEINEN** Kontaktblock
-  (E-Mail, Telefon, Web, LinkedIn, GitHub) und keine Signatur-Zeilen darunter. Der
-  Versand hängt die echte Signatur automatisch an; jede vom Modell geschriebene
-  Signatur würde doppelt in der Mail stehen.
-- Der Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 11) und sonst nirgendwo hin.
+  „Best regards" — danach eine Leerzeile, dann die Signatur
+- Signatur aus dem Profil-Abschnitt „Kontakt & Signatur": Name, Titel, E-Mail,
+  Telefon, Web, LinkedIn, GitHub. Übernimm dabei **keine** Meta-/Auswahl-Texte
+  (z. B. Zeilen mit „CTA", „Hier musst … entscheiden", Klammer-Alternativen) — der
+  Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 11), nicht roh in die Signatur.
 
 =================================================================
 
@@ -474,9 +473,9 @@ Gib ausschließlich das strukturierte Objekt mit diesen drei Feldern aus:
 
 - `subject`: der Betreff (eine Zeile, ohne Präfix „Betreff:", inkl. Referenznummer
   wenn vorhanden)
-- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Grußformel und
-  Name, alle PFLICHT-Bausteine aus „Struktur der Bewerbung" enthalten, aber **ohne**
-  Kontaktblock/Signatur), kein Markdown, kein Code, keine Erklärungen, keine Kommentare
+- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur, alle
+  PFLICHT-Bausteine aus „Struktur der Bewerbung" enthalten), kein Markdown, kein
+  Code, keine Erklärungen, keine Kommentare
 - `linkedin_message`: die LinkedIn-Nachricht (max. 250 Zeichen)
 
 =================================================================

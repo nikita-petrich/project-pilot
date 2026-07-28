@@ -45,13 +45,10 @@ Fill in the two profile files (they feed the matcher, the hard rules, and the
 application drafts):
 
 - `profile/profile.md` free-text profile: positioning, skills, desired projects,
-  no-gos, and reference projects. **This file is gitignored and stays local** (it
-  holds personal CV/contact data) — a sanitized `profile/profile.example.md`
-  template is tracked instead, like `.env.example`.
+  no-gos, reference projects, and the application signature. **This file is
+  gitignored and stays local** (it holds personal CV/contact data) — a sanitized
+  `profile/profile.example.md` template is tracked instead, like `.env.example`.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
-
-Optionally add an e-mail signature (see [E-mail signature](#e-mail-signature)); the
-contact block under the greeting comes from there, not from `profile.md`.
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
 gitignored and `.env.example` is the template):
@@ -69,7 +66,6 @@ gitignored and `.env.example` is the template):
 | `LOG_LEVEL` | default `info` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | your mail server, used to send application e-mails (port 465 implies TLS, otherwise STARTTLS) |
 | `SMTP_FROM` / `SMTP_STARTTLS` | optional sender override (defaults to `SMTP_USER`) and STARTTLS toggle |
-| `SIGNATURE_DIR` | optional directory holding the e-mail signature (see below) |
 
 ## Commands
 
@@ -135,50 +131,12 @@ change how applications are written. The draft posts as **one** message:
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
   the letter references it. Leave the paths unset to send without an attachment.
-- **Signature** — appended on send, in the draft's language (see below). The draft
-  shown in Slack therefore ends at your name; the contact block is added to the
-  outgoing mail, not to the text you review.
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
 **Uploading a file** (PDF or text) to the channel drafts from its contents the same
 way — drop in a project-description PDF and the draft appears. Nothing is ever sent
 without the explicit Send tap.
-
-## E-mail signature
-
-Point `SIGNATURE_DIR` at a directory holding one pair of files per language:
-
-| File | Purpose |
-|---|---|
-| `signature.de.html` | the HTML signature for German drafts |
-| `signature.de.txt` | plain-text fallback, **required** next to the HTML |
-| `signature.en.html` / `signature.en.txt` | the same pair for English drafts |
-| `photo.jpg`, `linkedin.png`, … | every image the HTML references |
-
-Copy `profile/signature.example.html` and `profile/signature.example.txt` as a
-starting point. `profile/signature/` is gitignored, so it is a good place to keep
-the real one.
-
-The HTML references images as `cid:<name>`, and `<name>` resolves to `<name>.<ext>`
-in the same directory — `cid:photo` finds `photo.jpg`. **Images are embedded into
-the message** (a per-message Content-ID, `multipart/related`), so they render
-without the recipient allowing remote content, and they do not show up as
-attachments next to the CV.
-
-Mails are then sent as `multipart/alternative`: the plain-text part is the draft
-plus `signature.<lang>.txt`, the HTML part is the draft rendered as paragraphs plus
-`signature.<lang>.html`. Without `SIGNATURE_DIR` nothing changes — the mail stays
-plain text and ends at your name.
-
-Two things to know when writing the HTML:
-
-- **Use tables and inline styles.** Outlook ignores flexbox, grid and `<style>`
-  blocks; the example template sticks to what renders everywhere.
-- **Skip HTML comments.** The file is sent verbatim, so a comment rides along in
-  every mail — and a `cid:` reference inside one gets rewritten like any other.
-- **A misconfigured signature aborts at startup**, on purpose — a missing image or
-  a missing `.txt` fallback fails loudly rather than silently sending bare mail.
 
 ## Checking a listing from Slack
 
