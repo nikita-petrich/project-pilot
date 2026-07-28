@@ -62,7 +62,6 @@ gitignored and `.env.example` is the template):
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | Slack bot token (`xoxb-…`), app-level token for Socket Mode (`xapp-…`), and the channel id to post to |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
-| `VISION_MODEL` | optional — model used to transcribe uploaded screenshots; defaults to `LLM_MODEL`, set it only if that model has no image input |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
 | `ANALYSIS_WINDOW_MIN` | default 30 |
