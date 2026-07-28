@@ -1,12 +1,50 @@
-"""Extract plain text from an uploaded document (PDF or text) for drafting.
+"""Turn Slack uploads (PDF, text, or image) into drafting input.
 
 Used when a project description arrives as a Slack file upload instead of pasted
-text — the extracted text feeds the same ``draft_from_text`` flow.
+text — documents are extracted to text for the ``draft_from_text`` flow, while
+images travel as ``ImageAttachment`` payloads straight into the vision-capable
+LLM call (drafting and revision alike).
 """
 
+from collections.abc import Sequence
+from dataclasses import dataclass, field
 from io import BytesIO
 
 from project_pilot.errors import ApplicationStateError
+
+# Image formats the OpenAI vision input accepts; anything else is not an image
+# attachment and falls back to the document-extraction path.
+IMAGE_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
+
+
+@dataclass(frozen=True, slots=True)
+class ImageAttachment:
+    """An uploaded image (screenshot of a listing, feedback, …) for the LLM."""
+
+    name: str
+    mime_type: str
+    data: bytes = field(repr=False)  # keep byte blobs out of logs
+
+
+def is_image_mime_type(mime_type: str | None) -> bool:
+    """True when ``mime_type`` is an image format the vision LLM accepts."""
+    return mime_type in IMAGE_MIME_TYPES
+
+
+def image_fallback_title(images: Sequence[ImageAttachment]) -> str:
+    """Title for an image-only submission: the first screenshot's name."""
+    return images[0].name[:120] if images else "Projekt"
+
+
+def annotate_image_listing(text: str, images: Sequence[ImageAttachment]) -> str:
+    """Append one marker per attached image to a listing text.
+
+    The pixels only exist in the LLM call itself; the marker keeps a trace in the
+    persisted/rendered text so later readers (and text-only revisions) know the
+    listing arrived as a screenshot.
+    """
+    markers = (f"[Project listing attached as image: {image.name}]" for image in images)
+    return "\n".join((text.strip(), *markers)).strip()
 
 
 def extract_document_text(filename: str, data: bytes) -> str:
@@ -20,8 +58,8 @@ def extract_document_text(filename: str, data: bytes) -> str:
     text = raw.strip()
     if not text or "\x00" in text:
         raise ApplicationStateError(
-            "Could not read any text from this file — please attach a PDF or a text "
-            "file with the project description."
+            "Could not read any text from this file — please attach a PDF, a text "
+            "file, or an image (PNG/JPEG/WebP/GIF) with the project description."
         )
     return text
 

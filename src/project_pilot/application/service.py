@@ -2,12 +2,17 @@
 
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from project_pilot.application.documents import (
+    ImageAttachment,
+    annotate_image_listing,
+    image_fallback_title,
+)
 from project_pilot.application.generator import ApplicationGenerator, GeneratedDraft
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
@@ -170,15 +175,24 @@ class ApplicationService:
             await repo.add_application(application)
             return _to_view(application)
 
-    async def draft_from_text(self, text: str) -> DraftView:
-        """Generate a draft from a pasted project description (``/apply <text>``)."""
-        title = text.strip().splitlines()[0][:120] if text.strip() else "Projekt"
+    async def draft_from_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
+        """Generate a draft from a pasted description and/or listing screenshots.
+
+        Attached images go straight into the vision LLM call; the persisted
+        ``listing_text`` keeps a marker per image so later revisions (which can no
+        longer see the pixels) know the listing arrived as a screenshot.
+        """
+        stripped = text.strip()
+        listing_text = annotate_image_listing(stripped, images)
+        title = stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            generated = await self._generate(text)
+            generated = await self._generate(listing_text, images=images)
             application = self._build_application(
                 generated,
-                listing_text=text,
+                listing_text=listing_text,
                 title=title,
                 url=None,
                 listing_id=None,
@@ -188,7 +202,9 @@ class ApplicationService:
             await repo.add_application(application)
             return _to_view(application)
 
-    async def revise(self, application_id: int, instruction: str) -> DraftView:
+    async def revise(
+        self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
         """Rewrite the draft per Nik's reply; sent/cancelled applications are immutable."""
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -203,6 +219,7 @@ class ApplicationService:
                 listing_text=application.listing_text,
                 current=current,
                 instruction=instruction,
+                images=images,
             )
             application.subject = generated.draft.subject
             application.body = generated.draft.body
@@ -307,10 +324,13 @@ class ApplicationService:
             listing = await Repository(session).get_listing_by_hash(url_hash)
             return listing.id if listing is not None else None
 
-    async def _generate(self, listing_text: str) -> GeneratedDraft:
+    async def _generate(
+        self, listing_text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> GeneratedDraft:
         return await self._generator.generate(
             profile_text=self._profile.text,
             listing_text=listing_text,
+            images=images,
         )
 
     def _build_application(

@@ -1,15 +1,18 @@
 """Tests for the stage 3 LLM matcher (OpenAI client fully mocked)."""
 
+from collections.abc import Sequence
 from datetime import date
 from typing import Literal
 
 import pytest
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.llm import (
     LlmEvaluation,
     LlmMatcher,
     LlmResponse,
+    build_user_content,
     is_match_notifiable,
     load_prompt,
     render_listing,
@@ -23,9 +26,18 @@ class _FakeClient:
     def __init__(self, responses: list[LlmResponse | Exception]) -> None:
         self._responses: list[LlmResponse | Exception] = list(responses)
         self.calls = 0
+        self.images: list[list[str]] = []
 
-    async def complete(self, *, model: str, system: str, user: str) -> LlmResponse:
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmResponse:
         self.calls += 1
+        self.images.append([image.name for image in images])
         item = self._responses.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -214,3 +226,26 @@ def test_render_listing_with_start_date() -> None:
     text = render_listing(listing)
     assert "Start: 2026-09-01" in text
     assert "ab sofort" not in text
+
+
+async def test_evaluate_forwards_images_to_the_client() -> None:
+    client = _FakeClient([LlmResponse(verdict=_verdict(), tokens_in=1, tokens_out=1)])
+    matcher = LlmMatcher(client, model="m", prompt_template="sys")
+    image = ImageAttachment(name="listing.png", mime_type="image/png", data=b"\x89PNG")
+    await matcher.evaluate(profile_text="p", listing_text="l", images=[image])
+    assert client.images == [["listing.png"]]
+
+
+def test_build_user_content_is_plain_text_without_images() -> None:
+    assert build_user_content("hello", []) == "hello"
+
+
+def test_build_user_content_encodes_images_as_data_urls() -> None:
+    image = ImageAttachment(name="a.png", mime_type="image/png", data=b"\x89PNG")
+    parts = build_user_content("hello", [image])
+    assert isinstance(parts, list)
+    assert parts[0] == {"type": "text", "text": "hello"}
+    assert parts[1] == {
+        "type": "image_url",
+        "image_url": {"url": "data:image/png;base64,iVBORw=="},
+    }

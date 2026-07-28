@@ -1,17 +1,23 @@
 """Manual match check (Slack ``/check``): hard rules + LLM verdict for one input.
 
 Runs the scan pipeline's stages 2-3 for a single manually supplied listing (URL,
-pasted text, or an uploaded file's text). Deliberately read-only: nothing is
-persisted, the freshness gate is skipped (a manual check is always wanted), and
-the scan watermark stays untouched.
+pasted text, an uploaded file's text, or a screenshot judged by the vision LLM).
+Deliberately read-only: nothing is persisted, the freshness gate is skipped (a
+manual check is always wanted), and the scan watermark stays untouched.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from project_pilot.application.documents import (
+    ImageAttachment,
+    annotate_image_listing,
+    image_fallback_title,
+)
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
 from project_pilot.evaluation.llm import (
@@ -29,7 +35,13 @@ from project_pilot.repository import Repository
 
 
 class Matcher(Protocol):
-    async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation: ...
+    async def evaluate(
+        self,
+        *,
+        profile_text: str,
+        listing_text: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmEvaluation: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,12 +102,16 @@ class CheckService:
             match_source=parsed,
         )
 
-    async def check_text(self, text: str) -> CheckResult:
-        """Check a pasted project description or an uploaded file's text."""
+    async def check_text(self, text: str, *, images: Sequence[ImageAttachment] = ()) -> CheckResult:
+        """Check a pasted description, an uploaded file's text, and/or screenshots."""
         stripped = text.strip()
-        title = stripped.splitlines()[0][:120] if stripped else "Projekt"
+        title = stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
         return await self._evaluate(
-            title=title, rules_text=stripped, listing_text=stripped, match_source=None
+            title=title,
+            rules_text=stripped,
+            listing_text=annotate_image_listing(stripped, images),
+            match_source=None,
+            images=images,
         )
 
     async def _evaluate(
@@ -105,22 +121,27 @@ class CheckService:
         rules_text: str,
         listing_text: str,
         match_source: Listing | ParsedListing | None,
+        images: Sequence[ImageAttachment] = (),
     ) -> CheckResult:
-        rule = apply_hard_rules(rules_text, self._profile.constraints)
-        if not rule.passed:
-            return CheckResult(
-                title=title,
-                stage=EvaluationStage.HARD_RULE,
-                verdict=Verdict.NO_MATCH,
-                passed=False,
-                score=None,
-                threshold=self._threshold,
-                reason=rule.reason,
-                message=None,
-                is_llm_error=False,
-            )
+        # The rule engine reads text, so it cannot judge a screenshot: with no text
+        # to scan, stage 2 is skipped rather than failing a `must_have` it can never
+        # see. The LLM then judges the image itself.
+        if rules_text:
+            rule = apply_hard_rules(rules_text, self._profile.constraints)
+            if not rule.passed:
+                return CheckResult(
+                    title=title,
+                    stage=EvaluationStage.HARD_RULE,
+                    verdict=Verdict.NO_MATCH,
+                    passed=False,
+                    score=None,
+                    threshold=self._threshold,
+                    reason=rule.reason,
+                    message=None,
+                    is_llm_error=False,
+                )
         llm = await self._matcher.evaluate(
-            profile_text=self._profile.text, listing_text=listing_text
+            profile_text=self._profile.text, listing_text=listing_text, images=images
         )
         passed = is_match_notifiable(llm, self._threshold)
         return CheckResult(

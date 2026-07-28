@@ -2,7 +2,7 @@
 
 import pytest
 
-from project_pilot.application.documents import extract_document_text
+from project_pilot.application.documents import extract_document_text, is_image_mime_type
 from project_pilot.errors import ApplicationStateError
 
 
@@ -15,8 +15,16 @@ def test_extract_file_without_suffix_is_treated_as_text() -> None:
 
 
 def test_binary_without_readable_text_is_rejected() -> None:
-    with pytest.raises(ApplicationStateError, match="PDF or"):
-        extract_document_text("logo.png", b"\x89PNG\x00\x00binary")
+    with pytest.raises(ApplicationStateError, match="attach a PDF"):
+        extract_document_text("logo.bin", b"\x89BIN\x00\x00binary")
+
+
+def test_is_image_mime_type_accepts_only_vision_formats() -> None:
+    assert is_image_mime_type("image/png")
+    assert is_image_mime_type("image/jpeg")
+    assert not is_image_mime_type("image/tiff")  # not accepted by the vision input
+    assert not is_image_mime_type("application/pdf")
+    assert not is_image_mime_type(None)
 
 
 def test_empty_file_is_rejected() -> None:
