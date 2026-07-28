@@ -135,20 +135,15 @@ change how applications are written. The draft posts as **one** message:
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
 
-**Uploading a file** (PDF, text, or **image**) does the same, but Slack cannot
-attach a file to a slash command — so the upload's **comment names the intent**:
+**Uploading a file** (PDF, text, or **image**) does the same. Slack cannot attach a
+file to a slash command, so the bot asks instead: drop the file in the channel and
+it replies with two buttons — **📝 Apply** drafts the application, **🔍 Check**
+scores the listing first. Nothing is downloaded and no token is spent until you
+press one, and the buttons disappear once used, so an upload can never fire twice.
 
-| Upload with comment | What happens |
-| --- | --- |
-| `apply` | drafts an application from the file |
-| `check` | scores it against your profile first |
-| anything else, or no comment | nothing runs; the bot replies with a one-line hint |
-
-The keyword is required in both cases, so a screenshot dropped in the channel for
-any other reason never spends a token. Everything after the keyword is kept as the
-project description (`apply auch Java erwähnen`), and screenshots
-(PNG/JPEG/WebP/GIF) go to the vision LLM directly. Nothing is ever sent without the
-explicit Send tap.
+Any comment you add to the upload is kept as extra project context (there is no
+keyword to remember), and screenshots (PNG/JPEG/WebP/GIF) go to the vision LLM
+directly. Nothing is ever sent without the explicit Send tap.
 
 ## Checking a listing from Slack
 
@@ -161,10 +156,10 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   button, so the apply flow starts exactly as if the scanner had found it.
 - **No match** — posts the verdict with the failed hard rule (matched blacklist
   term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
-- **Files and screenshots** — upload a PDF, text file, or **image** with `check` as
-  its comment (see the table above; `check` wins if the comment also says `apply`).
-  A screenshot goes to the vision LLM directly, and a passing check still offers the
-  **📝 Bewerben** button, which drafts from the same screenshot.
+- **Files and screenshots** — upload a PDF, text file, or **image** and press
+  **🔍 Check** on the prompt (see above). A screenshot goes to the vision LLM
+  directly, and a passing check still offers the **📝 Bewerben** button, which drafts
+  from the same screenshot.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
 scanner's watermark stays untouched. One caveat for screenshots: the hard rules read
