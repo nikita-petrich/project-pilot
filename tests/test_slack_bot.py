@@ -453,7 +453,7 @@ async def test_file_upload_drafts_from_extracted_text() -> None:
         return b"Senior Python Backend Engineer gesucht"
 
     await _bot(poster, service, file_reader=reader).dispatch(
-        "events_api", _file_event("projekt.txt")
+        "events_api", _file_event("projekt.txt", text="apply")
     )
     assert any(
         name == "draft_from_text" and "Python Backend" in str(arg) for name, arg in service.calls
@@ -501,8 +501,9 @@ async def _png_reader(url: str) -> bytes:
 async def test_image_upload_drafts_with_vision() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service, file_reader=_png_reader).dispatch(
-        "events_api", _file_event("shot.png", mimetype="image/png", text="Zusatzinfo")
+        "events_api", _file_event("shot.png", mimetype="image/png", text="apply Zusatzinfo")
     )
+    # the routing keyword is stripped; only the real caption reaches the LLM
     assert ("draft_from_text", "Zusatzinfo") in service.calls
     assert service.last_images == ["shot.png"]
     assert any("Application from image" in text for text, _ in poster.texts)
@@ -561,7 +562,8 @@ async def test_non_image_file_in_draft_thread_posts_hint() -> None:
 async def test_image_in_unknown_thread_starts_a_new_draft() -> None:
     poster, service = _FakePoster(), _FakeService()
     await _bot(poster, service, file_reader=_png_reader).dispatch(
-        "events_api", _file_event("shot.png", mimetype="image/png", thread_ts="999.9")
+        "events_api",
+        _file_event("shot.png", mimetype="image/png", thread_ts="999.9", text="apply"),
     )
     assert ("draft_from_text", "") in service.calls
     assert service.last_images == ["shot.png"]
@@ -680,25 +682,55 @@ async def test_file_upload_with_check_comment_checks_extracted_text() -> None:
     assert key is not None  # a passing file check still offers the apply button
 
 
-async def test_file_upload_without_check_comment_still_drafts() -> None:
+async def test_file_upload_with_apply_comment_drafts() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
 
     async def reader(url: str) -> bytes:
         return b"Projektbeschreibung"
 
     await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
-        "events_api", _file_event("projekt.txt", text="bitte bewerben")
+        "events_api", _file_event("projekt.txt", text="apply bitte")
     )
     assert checker.calls == []
     assert any(name == "draft_from_text" for name, _ in service.calls)
 
 
+async def test_upload_without_keyword_only_hints() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+
+    async def reader(url: str) -> bytes:
+        raise AssertionError("an upload without a keyword must not be downloaded")
+
+    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", text="schau dir das mal an")
+    )
+    assert service.calls == [] and checker.calls == []
+    assert any("apply" in text and "check" in text for text, _ in poster.texts)
+
+
+async def test_image_upload_without_keyword_only_hints() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png")
+    )
+    assert service.calls == [] and checker.calls == []
+    assert not poster.draft_rendered()
+    assert any("apply" in text and "check" in text for text, _ in poster.texts)
+
+
+async def test_check_keyword_wins_when_both_words_appear() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
+        "events_api",
+        _file_event("shot.png", mimetype="image/png", text="check before I apply"),
+    )
+    assert checker.calls and service.calls == []
+
+
 async def test_image_upload_with_check_comment_checks_the_screenshot() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
     bot = _bot(poster, service, file_reader=_png_reader, checker=checker)
-    await bot.dispatch(
-        "events_api", _file_event("shot.png", mimetype="image/png", text="check das bitte")
-    )
+    await bot.dispatch("events_api", _file_event("shot.png", mimetype="image/png", text="check"))
     assert ("check_text", "") in checker.calls
     assert checker.images == [["shot.png"]]
     assert service.calls == []  # checking only, no draft yet
@@ -710,11 +742,11 @@ async def test_image_upload_with_check_comment_checks_the_screenshot() -> None:
     assert service.last_images == ["shot.png"]
 
 
-async def test_image_upload_without_check_comment_drafts_instead() -> None:
+async def test_image_upload_with_apply_comment_drafts_instead() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
     await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
-        "events_api", _file_event("shot.png", mimetype="image/png", text="bitte bewerben")
+        "events_api", _file_event("shot.png", mimetype="image/png", text="apply bitte")
     )
     assert checker.calls == []
-    assert ("draft_from_text", "bitte bewerben") in service.calls
+    assert ("draft_from_text", "bitte") in service.calls
     assert service.last_images == ["shot.png"]

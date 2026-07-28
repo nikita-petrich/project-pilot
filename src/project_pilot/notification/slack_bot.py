@@ -44,14 +44,21 @@ logger = logging.getLogger(__name__)
 
 USAGE = (
     "Usage: `/apply <freelancermap link or project description>` — or upload a "
-    "screenshot/PDF of the listing directly to the channel."
+    "screenshot/PDF with `apply` as its comment."
 )
 CHECK_USAGE = (
     "Usage: `/check <freelancermap link or project description>` — or upload a "
-    "screenshot/PDF with a comment containing `check`."
+    "screenshot/PDF with `check` as its comment."
+)
+# Slack cannot attach a file to a slash command, so an upload names its intent in
+# the comment instead. The keyword is required: without one nothing runs, so a
+# screenshot dropped in the channel for any other reason never triggers the LLM.
+UPLOAD_HINT = (
+    "💡 Add a comment to the file so I know what to do: `apply` writes an "
+    "application, `check` scores the project against your profile first."
 )
 
-# An uploaded file routes to /check instead of /apply when its comment says so.
+_APPLY_KEYWORD_RE = re.compile(r"\bapply\b", re.IGNORECASE)
 _CHECK_KEYWORD_RE = re.compile(r"\bcheck\b", re.IGNORECASE)
 
 # Checked inputs remembered for the result's apply button (in-memory; a restart
@@ -126,6 +133,11 @@ _SLACK_LINK_RE = re.compile(r"<(?:mailto:)?([^|>]+)(?:\|[^>]*)?>")
 
 def _unwrap_slack_links(text: str) -> str:
     return _SLACK_LINK_RE.sub(lambda match: match.group(1), text)
+
+
+def _strip_keyword(text: str, keyword: re.Pattern[str]) -> str:
+    """Drop the routing keyword so it never reaches the LLM as project text."""
+    return " ".join(keyword.sub(" ", text).split())
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -435,10 +447,10 @@ class SlackBot:
     ) -> None:
         """Route an upload (PDF, text, or image): revise, check, or draft.
 
-        In a draft's thread it feeds the revision; a comment containing ``check``
-        routes it through the ``/check`` flow; otherwise it starts a draft exactly
-        like ``/apply <text>``. Documents are extracted to text, images go to the
-        vision LLM.
+        Inside a draft's thread the upload feeds that draft's revision. In the
+        channel the comment decides: ``check`` scores the listing, ``apply`` drafts
+        an application, anything else only earns a hint — an upload never acts on
+        its own. Documents are extracted to text, images go to the vision LLM.
         """
         if channel != self._channel or self._file_reader is None:
             return
@@ -447,13 +459,27 @@ class SlackBot:
             if view is not None:
                 await self._revise_with_images(view, thread_ts=thread_ts, text=text, files=files)
                 return
+        comment = _unwrap_slack_links(text)
         images = _image_files(files)
         checker = self._checker
-        if checker is not None and _CHECK_KEYWORD_RE.search(text):
-            await self._check_upload(checker, images=images, files=files)
+        # `check` wins when both words appear: it is the read-only one, and its
+        # result carries an apply button anyway.
+        if _CHECK_KEYWORD_RE.search(comment):
+            if checker is None:
+                return
+            await self._check_upload(
+                checker,
+                images=images,
+                files=files,
+                caption=_strip_keyword(comment, _CHECK_KEYWORD_RE),
+            )
             return
+        if not _APPLY_KEYWORD_RE.search(comment):
+            await self._client.post_text(UPLOAD_HINT)
+            return
+        caption = _strip_keyword(comment, _APPLY_KEYWORD_RE)
         if images:
-            await self._draft_from_images(images, text=text)
+            await self._draft_from_images(images, caption=caption)
             return
         picked = next(
             ((file, url) for file in files if (url := _download_url(file)) is not None), None
@@ -477,7 +503,12 @@ class SlackBot:
         )
 
     async def _check_upload(
-        self, checker: CheckFlow, *, images: list[_ImageFile], files: list[dict[str, object]]
+        self,
+        checker: CheckFlow,
+        *,
+        images: list[_ImageFile],
+        files: list[dict[str, object]],
+        caption: str,
     ) -> None:
         """A ``check``-flagged upload: screenshots go to the vision matcher, documents
         are extracted to text; either way the scan's stages 2-3 judge the input."""
@@ -486,8 +517,8 @@ class SlackBot:
 
             async def image_factory() -> tuple[CheckResult, _PendingCheck | None]:
                 attachments = await self._download_images(images)
-                result = await checker.check_text("", images=attachments)
-                return result, _PendingCheck(text="", images=tuple(images))
+                result = await checker.check_text(caption, images=attachments)
+                return result, _PendingCheck(text=caption, images=tuple(images))
 
             await self._run_check(
                 image_factory, label=f"image {label[:140]}", apply_action=None, apply_value=None
@@ -511,13 +542,12 @@ class SlackBot:
             doc_factory, label=f"file {name[:140]}", apply_action=None, apply_value=None
         )
 
-    async def _draft_from_images(self, images: list[_ImageFile], *, text: str) -> None:
+    async def _draft_from_images(self, images: list[_ImageFile], *, caption: str) -> None:
         """Start a draft from screenshot upload(s), like ``/apply`` with a picture."""
         label = images[0].name if len(images) == 1 else f"{len(images)} images"
         parent = await self._client.post_text(f"📥 Application from image: {label[:150]}")
         if parent is None:
             return
-        caption = _unwrap_slack_links(text).strip()
 
         async def factory() -> DraftView:
             return await self._service.draft_from_text(
