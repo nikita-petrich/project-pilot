@@ -62,7 +62,7 @@ async def test_match_returns_verdict_and_metadata() -> None:
     assert result.is_match is True
     assert result.score == 80
     assert result.tokens_in == 100
-    assert result.prompt_version == "match.v1"
+    assert result.prompt_version == "match.v2"
     assert result.is_error is False
     assert client.calls == 1
 
@@ -153,12 +153,40 @@ def test_render_listing_includes_fields() -> None:
     assert "Py Dev" in text
     assert "Python" in text
     assert "ab sofort" in text
+    assert "Reference:" not in text
 
 
-def test_load_prompt_reads_v1() -> None:
-    text = load_prompt("match.v1")
-    assert text.strip()
-    assert "match" in text.lower()
+def test_render_listing_carries_the_reference_number() -> None:
+    listing = ParsedListing(
+        source="freelancermap",
+        external_url="https://x/3",
+        url_hash="h3",
+        title="Py Dev",
+        description="Build async services",
+        skills=[],
+        start_date=None,
+        start_asap=True,
+        end_date=None,
+        location=None,
+        remote_status=RemoteStatus.REMOTE,
+        posted_at=None,
+        posted_at_precision=PostedPrecision.UNKNOWN,
+        raw={"id": 3028498},
+    )
+    assert "Reference: 3028498" in render_listing(listing)
+
+
+def test_load_prompt_reads_every_shipped_version() -> None:
+    for version in ("match.v1", "match.v2"):
+        text = load_prompt(version)
+        assert text.strip()
+        assert "match" in text.lower()
+
+
+def test_current_prompt_keeps_an_unclear_hybrid_setup_neutral() -> None:
+    text = load_prompt().lower()
+    assert "hybrid" in text
+    assert 'never make it a reason for\n  "no_match"' in text
 
 
 def test_load_prompt_missing_raises() -> None:

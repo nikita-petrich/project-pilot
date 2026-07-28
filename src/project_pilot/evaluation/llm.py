@@ -1,5 +1,6 @@
 """Stage 3 LLM matching via OpenAI structured outputs."""
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -15,7 +16,7 @@ from project_pilot.models import Listing
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
-PROMPT_VERSION = "match.v1"
+PROMPT_VERSION = "match.v2"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
@@ -72,9 +73,23 @@ def load_prompt(version: str = PROMPT_VERSION) -> str:
         raise ConfigError(f"cannot read prompt {path}: {err}") from err
 
 
+def _reference(raw: Mapping[str, object]) -> str | None:
+    """The source's project id, which the draft uses as the subject's reference number."""
+    identifier = raw.get("id")
+    if isinstance(identifier, int):
+        return str(identifier)
+    if isinstance(identifier, str) and identifier.strip():
+        return identifier.strip()
+    return None
+
+
 def render_listing(listing: ParsedListing) -> str:
     """Format a parsed listing into the text block handed to the model."""
-    parts = [f"Title: {listing.title}", f"Remote: {listing.remote_status.value}"]
+    parts = [f"Title: {listing.title}"]
+    reference = _reference(listing.raw)
+    if reference:
+        parts.append(f"Reference: {reference}")
+    parts.append(f"Remote: {listing.remote_status.value}")
     if listing.location:
         parts.append(f"Location: {listing.location}")
     if listing.start_asap:
@@ -92,6 +107,9 @@ def render_listing_entity(listing: Listing) -> str:
     """Format a stored listing into the text block handed to the model."""
     raw = listing.raw or {}
     parts = [f"Title: {listing.title}"]
+    reference = _reference(raw)
+    if reference:
+        parts.append(f"Reference: {reference}")
     company = raw.get("company")
     if isinstance(company, str) and company:
         parts.append(f"Company: {company}")

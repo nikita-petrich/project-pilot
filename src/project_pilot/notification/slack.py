@@ -99,6 +99,20 @@ def status_blocks(text: str) -> list[Block]:
     return [_section(text)]
 
 
+def linkedin_search_url(name: str) -> str:
+    """LinkedIn people search pre-filled with the contact's name."""
+    return f"https://www.linkedin.com/search/results/people/?keywords={quote(name)}"
+
+
+def _linkedin_search_actions(contact_name: str) -> Block:
+    button = _button(
+        f"🔍 {contact_name[:60]} on LinkedIn",
+        action_id="linkedin_search",
+        url=linkedin_search_url(contact_name),
+    )
+    return {"type": "actions", "elements": [button]}
+
+
 def _code_sections(text: str, *, label: str) -> list[Block]:
     """Render ``text`` as one or more copyable code-block sections under ``label``.
 
@@ -283,6 +297,10 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
             label=f"💬 LinkedIn ({len(view.linkedin_message)}/{LINKEDIN_LIMIT})",
         )
     )
+    # The search button rides with the LinkedIn text in every state (also after
+    # sending, when the outreach actually happens).
+    if view.contact_name:
+        blocks.append(_linkedin_search_actions(view.contact_name))
 
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
         # "Open in mail client" is a mrkdwn mailto link, not a URL button: Slack
@@ -370,6 +388,19 @@ def format_contact_blocks(enrichment: ContactEnrichment) -> list[Block]:
 def contact_fallback_text(enrichment: ContactEnrichment) -> str:
     subject = enrichment.company or enrichment.person or "listing"
     return f"🔎 Contact research: {subject}"
+
+
+def sent_confirmation_blocks(view: DraftView) -> list[Block]:
+    """Thread confirmation after a send: the LinkedIn text to copy plus the search button."""
+    blocks = [_section(f"✅ Application sent to *{_esc(view.recipient or '')}*")]
+    blocks.extend(_code_sections(view.linkedin_message, label="💬 LinkedIn message (copy)"))
+    if view.contact_name:
+        blocks.append(_linkedin_search_actions(view.contact_name))
+    return blocks
+
+
+def sent_fallback_text(view: DraftView) -> str:
+    return f"✅ Application sent to {view.recipient or ''}"
 
 
 def match_fallback_text(message: MatchMessage) -> str:
