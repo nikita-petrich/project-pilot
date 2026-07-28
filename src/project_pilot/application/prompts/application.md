@@ -420,6 +420,31 @@ eigene Offenheit benennt:
   (z. B. Zeilen mit „CTA", „Hier musst … entscheiden", Klammer-Alternativen) — der
   Erstgespräch-Link gehört in den Abschluss-Satz (Punkt 11), nicht roh in die Signatur.
 
+13. Vertraulichkeitshinweis (HARTE REGEL – IMMER AUSGEBEN, WÖRTLICH)
+
+Nach der Signatur folgt eine Leerzeile und danach der Vertraulichkeitshinweis in
+der Bewerbungssprache. Gib ihn **exakt** so aus — nicht umformulieren, nicht
+kürzen, nicht übersetzen, keine Überschrift und keine Klammerzusätze davor:
+
+- Deutsch:
+
+  Der Inhalt dieser E-Mail ist ausschließlich für den bezeichneten Adressaten
+  bestimmt. Wenn Sie nicht der vorgesehene Adressat dieser E-Mail oder dessen
+  Vertreter sein sollten, so beachten Sie bitte, dass jede Form der Kenntnisnahme,
+  Veröffentlichung, Vervielfältigung oder Weitergabe des Inhalts dieser E-Mail
+  unzulässig ist. Wir bitten Sie, sich in diesem Fall mit dem Absender der E-Mail
+  in Verbindung zu setzen.
+
+- Englisch:
+
+  The contents of this e-mail are intended solely for the named addressee. If you
+  are not the intended recipient of this e-mail or their representative, please
+  note that any form of review, publication, reproduction or disclosure of the
+  contents of this e-mail is not permitted. In this case, please contact the
+  sender of the e-mail.
+
+Der Hinweis ist der letzte Block der Bewerbung; danach folgt nichts mehr.
+
 =================================================================
 
 LINKEDIN-NACHRICHT (`linkedin_message`)
@@ -473,9 +498,9 @@ Gib ausschließlich das strukturierte Objekt mit diesen drei Feldern aus:
 
 - `subject`: der Betreff (eine Zeile, ohne Präfix „Betreff:", inkl. Referenznummer
   wenn vorhanden)
-- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur, alle
-  PFLICHT-Bausteine aus „Struktur der Bewerbung" enthalten), kein Markdown, kein
-  Code, keine Erklärungen, keine Kommentare
+- `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur und
+  Vertraulichkeitshinweis, alle PFLICHT-Bausteine aus „Struktur der Bewerbung"
+  enthalten), kein Markdown, kein Code, keine Erklärungen, keine Kommentare
 - `linkedin_message`: die LinkedIn-Nachricht (max. 250 Zeichen)
 
 =================================================================
