@@ -95,15 +95,6 @@ def test_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_openai() == ("sk-x", "gpt-mini")
 
 
-def test_require_vision_falls_back_to_the_llm_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
-    monkeypatch.setenv("LLM_MODEL", "gpt-mini")
-    monkeypatch.delenv("VISION_MODEL", raising=False)
-    assert Settings().require_vision() == ("sk-x", "gpt-mini")
-    monkeypatch.setenv("VISION_MODEL", "gpt-vision")
-    assert Settings().require_vision() == ("sk-x", "gpt-vision")
-
-
 def test_load_settings_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SCAN_INTERVAL_MIN", raising=False)
     assert isinstance(load_settings(), Settings)

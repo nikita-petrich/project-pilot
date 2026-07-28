@@ -84,8 +84,8 @@ not the `#name`. The bot only serves this one channel.
 | --- | --- |
 | `chat:write` | post and update match/draft/status messages |
 | `commands` | receive the `/apply` and `/check` slash commands |
-| `channels:history` | read thread replies (revisions, recipient address) |
-| `files:read` | download an uploaded PDF/text file to draft from it |
+| `channels:history` | read thread replies (revisions, recipient address, screenshots) |
+| `files:read` | download an uploaded PDF/text/image file to draft from or check it |
 | `connections:write` (app-level) | open the Socket Mode connection |
 
 ## Environment and running

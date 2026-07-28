@@ -1,11 +1,13 @@
 """Tests for the application service: draft flow, guards, sending (Postgres-backed)."""
 
+from collections.abc import Sequence
 from email.message import EmailMessage
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import ApplicationGenerator, DraftResponse
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
@@ -42,9 +44,18 @@ class _FakeClient:
     def __init__(self, responses: list[DraftResponse]) -> None:
         self.responses = list(responses)
         self.calls: list[str] = []
+        self.images: list[list[str]] = []
 
-    async def complete(self, *, model: str, system: str, user: str) -> DraftResponse:
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> DraftResponse:
         self.calls.append(user)
+        self.images.append([image.name for image in images])
         return self.responses.pop(0)
 
 
@@ -236,6 +247,36 @@ async def test_draft_from_text_uses_first_line_as_title(
     assert view.title == "Python Backend für LegalTech"
     assert view.recipient == "kontakt@kanzlei.de"
     assert view.url is None
+
+
+async def test_draft_from_images_forwards_them_and_records_a_marker(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    generator, client = _generator([_draft()])
+    service = ApplicationService(
+        session_factory=session_factory, generator=generator, profile=_profile(), mailer=None
+    )
+    image = ImageAttachment(name="listing.png", mime_type="image/png", data=b"\x89PNG")
+    view = await service.draft_from_text("", images=[image])
+    assert view.title == "listing.png"  # image-only submission: named after the screenshot
+    assert client.images == [["listing.png"]]
+    stored = await _load_application(session_factory, view.application_id)
+    assert "[Project listing attached as image: listing.png]" in stored.listing_text
+
+
+async def test_revise_forwards_images_to_the_generator(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _store(session_factory, _listing())
+    generator, client = _generator([_draft(), _draft("Bewerbung: überarbeitet")])
+    service = ApplicationService(
+        session_factory=session_factory, generator=generator, profile=_profile(), mailer=None
+    )
+    view = await service.draft_for_listing(listing_id)
+    image = ImageAttachment(name="feedback.jpg", mime_type="image/jpeg", data=b"\xff\xd8")
+    revised = await service.revise(view.application_id, "Siehe Screenshot", images=[image])
+    assert revised.subject == "Bewerbung: überarbeitet"
+    assert client.images[-1] == ["feedback.jpg"]
 
 
 async def test_draft_from_parsed_links_stored_listing(

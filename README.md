@@ -48,6 +48,9 @@ application drafts):
   no-gos, reference projects, and the application signature. **This file is
   gitignored and stays local** (it holds personal CV/contact data) — a sanitized
   `profile/profile.example.md` template is tracked instead, like `.env.example`.
+  Its contact block ends with the two Notion Calendar booking links
+  (`CTA German` / `CTA English`); the application generator picks the one matching
+  the application language for the closing sentence and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
@@ -126,6 +129,9 @@ change how applications are written. The draft posts as **one** message:
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
+  Attach a screenshot to the reply (with or without text) and it goes to the LLM
+  as vision input — e.g. a picture of the client's answer or of the listing detail
+  the revision should reflect.
 - **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
   (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
   **📧 Open in mail client** link above the buttons opens your mail client with
@@ -137,11 +143,17 @@ change how applications are written. The draft posts as **one** message:
 
 `/apply <freelancermap-link>` starts the same flow for any listing (stored or
 freshly fetched), and `/apply <pasted project description>` works without a link.
-**Uploading a file** to the channel drafts from its contents the same way — drop in a
-project-description PDF and the draft appears. **Screenshots work too**: a `.png`,
-`.jpg`, `.gif` or `.webp` is transcribed by the vision model (`VISION_MODEL`, or
-`LLM_MODEL` when unset) and the transcript feeds the same flow, so forwarding a
-screenshot of a listing is enough. Nothing is ever sent without the explicit Send tap.
+
+**Uploading a file** (PDF, text, or **image**) does the same. Slack cannot attach a
+file to a slash command, so the bot asks instead: drop the file in the channel and
+it replies **in the upload's thread** with two buttons — **📝 Apply** drafts the
+application, **🔍 Check** scores the listing first. Nothing is downloaded and no
+token is spent until you press one, and the buttons disappear once used, so an
+upload can never fire twice.
+
+Any comment you add to the upload is kept as extra project context (there is no
+keyword to remember), and screenshots (PNG/JPEG/WebP/GIF) go to the vision LLM
+directly. Nothing is ever sent without the explicit Send tap.
 
 **Everything answers in a thread.** A slash command posts a single channel line
 (`📥 Application: …`) and puts the draft, progress, and any hint in its thread; an
@@ -199,15 +211,18 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   button, so the apply flow starts exactly as if the scanner had found it.
 - **No match** — posts the verdict with the failed hard rule (matched blacklist
   term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
-- **Files** — upload a PDF, screenshot, or text file with a comment containing `check`
-  and the extracted text is checked instead of drafted (a comment without `check`
-  keeps the usual upload-to-apply behavior).
+- **Files and screenshots** — upload a PDF, text file, or **image** and press
+  **🔍 Check** on the prompt (see above). A screenshot goes to the vision LLM
+  directly, and a passing check still offers the **📝 Bewerben** button, which drafts
+  from the same screenshot.
 
 Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
 lands in its thread; a checked upload is answered in the upload's own thread.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
-scanner's watermark stays untouched.
+scanner's watermark stays untouched. One caveat for screenshots: the hard rules read
+text, so an image with no caption skips stage 2 and is judged by the LLM alone —
+a caption is still rule-checked as usual.
 
 ## Running on the home server (Docker)
 

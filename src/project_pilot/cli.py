@@ -23,7 +23,6 @@ from project_pilot.application.generator import (
 )
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
-from project_pilot.application.vision import OpenAiVisionClient
 from project_pilot.config import SOURCE_NAME, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
 from project_pilot.enrichment.fetch import Fetcher, WebFetcher
@@ -201,7 +200,6 @@ def _build_bot(settings: Settings) -> BotRuntime:
             response.raise_for_status()
             return response.content
 
-    _, vision_model = settings.require_vision()
     slack_bot = SlackBot(
         client=client,
         channel=config.channel,
@@ -210,7 +208,6 @@ def _build_bot(settings: Settings) -> BotRuntime:
         file_reader=read_slack_file,
         checker=checker,
         enrichment=enrichment,
-        vision=OpenAiVisionClient(api_key, model=vision_model),
     )
 
     async def closer() -> None:

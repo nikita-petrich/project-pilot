@@ -1,6 +1,7 @@
 """Stage 3 LLM matching via OpenAI structured outputs."""
 
-from collections.abc import Mapping
+import base64
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -8,13 +9,14 @@ from typing import TYPE_CHECKING, Protocol
 
 from openai import AsyncOpenAI
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import Listing
 
 if TYPE_CHECKING:
-    from openai.types.chat import ChatCompletionMessageParam
+    from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
 
 PROMPT_VERSION = "match.v2"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -30,7 +32,14 @@ class LlmResponse:
 
 
 class StructuredLlmClient(Protocol):
-    async def complete(self, *, model: str, system: str, user: str) -> LlmResponse: ...
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmResponse: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +80,27 @@ def load_prompt(version: str = PROMPT_VERSION) -> str:
         return path.read_text(encoding="utf-8")
     except OSError as err:
         raise ConfigError(f"cannot read prompt {path}: {err}") from err
+
+
+def build_user_content(
+    user: str, images: Sequence[ImageAttachment]
+) -> "str | list[ChatCompletionContentPartParam]":
+    """The user message for an OpenAI call: plain text, or text plus image parts.
+
+    Images travel as base64 ``data:`` URLs, the format the vision input accepts.
+    """
+    if not images:
+        return user
+    parts: list[ChatCompletionContentPartParam] = [{"type": "text", "text": user}]
+    for image in images:
+        encoded = base64.b64encode(image.data).decode("ascii")
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image.mime_type};base64,{encoded}"},
+            }
+        )
+    return parts
 
 
 def _reference(raw: Mapping[str, object]) -> str | None:
@@ -152,14 +182,20 @@ class LlmMatcher:
         self._prompt_template = prompt_template
         self._prompt_version = prompt_version
 
-    async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
+    async def evaluate(
+        self,
+        *,
+        profile_text: str,
+        listing_text: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmEvaluation:
         user = f"## Candidate profile\n{profile_text}\n\n## Project listing\n{listing_text}"
         started = perf_counter()
         detail = "no response"
         for _ in range(2):
             try:
                 response = await self._client.complete(
-                    model=self._model, system=self._prompt_template, user=user
+                    model=self._model, system=self._prompt_template, user=user, images=images
                 )
             except Exception as err:
                 detail = f"llm call failed: {err}"
@@ -195,11 +231,16 @@ class OpenAiStructuredClient:
         self._client = client or AsyncOpenAI(api_key=api_key)
 
     async def complete(
-        self, *, model: str, system: str, user: str
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
     ) -> LlmResponse:  # pragma: no cover
         messages: list[ChatCompletionMessageParam] = [
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user", "content": build_user_content(user, images)},
         ]
         completion = await self._client.chat.completions.parse(
             model=model,

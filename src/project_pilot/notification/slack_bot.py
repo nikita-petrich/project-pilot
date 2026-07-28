@@ -1,16 +1,29 @@
 """Slack bot: routes Block-Kit button actions, ``/apply``, and thread replies.
 
+Uploads work everywhere text does: a PDF/text/image dropped in the channel starts
+a draft (the image path of ``/apply``, since slash commands cannot carry files),
+and an image posted in a draft's thread feeds the next revision as vision input.
+
+Every request costs the channel exactly one line: a slash command posts an anchor
+and answers in its thread, an upload is answered in its own thread.
+
 The routing is pure and unit-tested; the Socket Mode connection that feeds it is
 wired in ``cli.py`` (network boundary). Only the configured channel is served, and
 every state change is guarded in the service layer.
 """
 
+import asyncio
 import logging
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Protocol
 
-from project_pilot.application.documents import VisionClient, extract_upload_text
+from project_pilot.application.documents import (
+    ImageAttachment,
+    extract_document_text,
+    is_image_mime_type,
+)
 from project_pilot.application.service import DraftView, is_email
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import (
@@ -19,6 +32,7 @@ from project_pilot.errors import (
     EnrichmentError,
     LlmSchemaError,
     SelectorMismatchError,
+    assert_defined,
 )
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.ingestion.parser import ParsedListing
@@ -31,28 +45,39 @@ from project_pilot.notification.slack import (
     format_check_blocks,
     format_contact_blocks,
     format_draft_blocks,
+    format_upload_prompt_blocks,
     sent_confirmation_blocks,
     sent_fallback_text,
     status_blocks,
+    upload_prompt_fallback_text,
 )
 
 logger = logging.getLogger(__name__)
 
 USAGE = (
     "Usage: `/apply <freelancermap link or project description>` — or upload a "
-    "PDF, screenshot, or text file with the project description."
+    "screenshot/PDF and press 📝 Apply."
 )
 CHECK_USAGE = (
     "Usage: `/check <freelancermap link or project description>` — or upload a "
-    "PDF, screenshot, or text file with a comment containing `check`."
+    "screenshot/PDF and press 🔍 Check."
 )
+# Both buttons are gone once used (the message is rewritten), so this only shows
+# after a restart dropped the in-memory state.
+UPLOAD_EXPIRED = "⚠️ I no longer have that upload (bot restart) — please upload the file again."
 
-# An uploaded file routes to /check instead of /apply when its comment says so.
-_CHECK_KEYWORD_RE = re.compile(r"\bcheck\b", re.IGNORECASE)
-
-# Checked texts remembered for the result's apply button (in-memory; a restart
-# only costs the button, `/apply <text>` always works).
+# Bounded per-message state: pending uploads awaiting their button, and checked
+# inputs kept for a passing check's apply button. Losing either on restart only
+# costs a button; `/apply` and `/check` always work.
 _PENDING_CHECK_LIMIT = 50
+_PENDING_UPLOAD_LIMIT = 50
+
+# What an image-only thread reply means: fold the screenshot into the draft.
+DEFAULT_IMAGE_INSTRUCTION = "Revise the draft taking the attached image(s) into account."
+
+# More screenshots than this per message is almost certainly a mistake; cap the
+# vision payload instead of uploading a whole gallery to the LLM.
+_MAX_IMAGES = 5
 
 
 class SlackPoster(Protocol):
@@ -76,7 +101,9 @@ class CheckFlow(Protocol):
 
     async def check_stored(self, listing_id: int) -> CheckResult: ...
     async def check_parsed(self, parsed: ParsedListing) -> CheckResult: ...
-    async def check_text(self, text: str) -> CheckResult: ...
+    async def check_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> CheckResult: ...
 
 
 class ApplicationFlow(Protocol):
@@ -84,8 +111,12 @@ class ApplicationFlow(Protocol):
 
     async def draft_for_listing(self, listing_id: int) -> DraftView: ...
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView: ...
-    async def draft_from_text(self, text: str) -> DraftView: ...
-    async def revise(self, application_id: int, instruction: str) -> DraftView: ...
+    async def draft_from_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView: ...
+    async def revise(
+        self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView: ...
     async def set_recipient(self, application_id: int, email: str) -> DraftView: ...
     async def send(self, application_id: int) -> DraftView: ...
     async def cancel(self, application_id: int) -> DraftView: ...
@@ -102,9 +133,9 @@ class EnrichmentFlow(Protocol):
 
 type ListingFetcher = Callable[[str], Awaitable[ParsedListing]]
 type FileReader = Callable[[str], Awaitable[bytes]]
-# A check factory yields the result plus the checked raw text (when there is one)
-# so a passing text/file check can remember it for its apply button.
-type CheckFactory = Callable[[], Awaitable[tuple[CheckResult, str | None]]]
+# A check factory yields the result plus the checked input (when there is one)
+# so a passing text/file/image check can remember it for its apply button.
+type CheckFactory = Callable[[], Awaitable[tuple[CheckResult, "_PendingCheck | None"]]]
 
 
 # Slack auto-links addresses and URLs in message text: an e-mail becomes
@@ -117,6 +148,13 @@ def _unwrap_slack_links(text: str) -> str:
     return _SLACK_LINK_RE.sub(lambda match: match.group(1), text)
 
 
+def _remember[T](store: dict[str, T], key: str, value: T, limit: int) -> None:
+    """Keep bounded per-message state, evicting the oldest entry first."""
+    store[key] = value
+    while len(store) > limit:
+        store.pop(next(iter(store)))
+
+
 def _mapping(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
@@ -124,6 +162,70 @@ def _mapping(value: object) -> dict[str, object]:
 def _download_url(file: dict[str, object]) -> str | None:
     """Slack's authenticated download link for an uploaded file."""
     return _text(file.get("url_private_download")) or _text(file.get("url_private"))
+
+
+@dataclass(frozen=True, slots=True)
+class _ImageFile:
+    """A supported image upload, not yet downloaded (name, type, and where from)."""
+
+    name: str
+    mime_type: str
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class _DocumentFile:
+    """A non-image upload (PDF or text) whose text is extracted on use."""
+
+    name: str
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingCheck:
+    """What a passing check's apply button should draft from later.
+
+    Images are kept as Slack file references, not bytes — they are re-downloaded
+    when the button is tapped, so 50 remembered checks stay cheap.
+    """
+
+    text: str
+    images: tuple[_ImageFile, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingUpload:
+    """An upload waiting for its Apply/Check button; images or one document."""
+
+    label: str
+    caption: str
+    images: tuple[_ImageFile, ...] = ()
+    document: _DocumentFile | None = None
+
+
+def _document_file(files: list[dict[str, object]]) -> _DocumentFile | None:
+    """The first downloadable non-image upload, if any."""
+    for file in files:
+        url = _download_url(file)
+        if url is not None and not is_image_mime_type(_text(file.get("mimetype"))):
+            return _DocumentFile(name=_text(file.get("name")) or "upload", url=url)
+    return None
+
+
+def _image_files(files: list[dict[str, object]]) -> list[_ImageFile]:
+    """The vision-capable image uploads among ``files`` (capped at ``_MAX_IMAGES``)."""
+    picked: list[_ImageFile] = []
+    for file in files:
+        mime_type = _text(file.get("mimetype"))
+        url = _download_url(file)
+        if mime_type is None or not is_image_mime_type(mime_type) or url is None:
+            continue
+        picked.append(
+            _ImageFile(name=_text(file.get("name")) or "screenshot", mime_type=mime_type, url=url)
+        )
+        if len(picked) == _MAX_IMAGES:
+            break
+    return picked
 
 
 def _text(value: object) -> str | None:
@@ -143,7 +245,6 @@ class SlackBot:
         file_reader: FileReader | None = None,
         checker: CheckFlow | None = None,
         enrichment: EnrichmentFlow | None = None,
-        vision: VisionClient | None = None,
     ) -> None:
         self._client = client
         self._channel = channel
@@ -152,8 +253,8 @@ class SlackBot:
         self._file_reader = file_reader
         self._checker = checker
         self._enrichment = enrichment
-        self._vision = vision
-        self._pending_checks: dict[str, str] = {}
+        self._pending_checks: dict[str, _PendingCheck] = {}
+        self._pending_uploads: dict[str, _PendingUpload] = {}
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -192,9 +293,8 @@ class SlackBot:
                 channel=_text(event.get("channel")),
                 files=[_mapping(item) for item in files],
                 text=_text(event.get("text")) or "",
-                # Answer inside the upload's own thread (or the thread it was dropped
-                # into), so the channel keeps exactly one line per upload.
-                thread_ts=_text(event.get("thread_ts")) or _text(event.get("ts")),
+                thread_ts=_text(event.get("thread_ts")),
+                message_ts=_text(event.get("ts")),
             )
             return
         # A file-share message also carries a subtype; only text replies flow on.
@@ -234,6 +334,12 @@ class SlackBot:
             return
         if action_id == "apply_check":  # a passing /check on pasted text or a file
             await self._apply_checked_text(value, root)
+            return
+        if action_id == "upload_apply":  # 📝 on an upload prompt
+            await self._apply_upload(value, prompt_ts=message_ts, thread_root=root)
+            return
+        if action_id == "upload_check":  # 🔍 on an upload prompt
+            await self._check_upload(value, prompt_ts=message_ts, thread_root=root)
             return
         if not value.isdigit():
             return
@@ -305,7 +411,11 @@ class SlackBot:
             return  # a hint was already posted in the thread
         factory, apply_action, apply_value = resolved
         await self._run_check(
-            factory, apply_action=apply_action, apply_value=apply_value, thread_ts=parent.ts
+            factory,
+            label=argument[:150],
+            apply_action=apply_action,
+            apply_value=apply_value,
+            thread_ts=parent.ts,
         )
 
     async def _resolve_check(
@@ -317,15 +427,15 @@ class SlackBot:
             return None
         if not argument.lower().startswith(("http://", "https://")):
 
-            async def from_text() -> tuple[CheckResult, str | None]:
-                return await checker.check_text(argument), argument
+            async def from_text() -> tuple[CheckResult, _PendingCheck | None]:
+                return await checker.check_text(argument), _PendingCheck(text=argument)
 
             return from_text, None, None
         listing_id = await self._service.find_listing_id_by_url(argument)
         if listing_id is not None:
             target = listing_id
 
-            async def from_stored() -> tuple[CheckResult, str | None]:
+            async def from_stored() -> tuple[CheckResult, _PendingCheck | None]:
                 return await checker.check_stored(target), None
 
             return from_stored, "apply", str(target)
@@ -337,7 +447,7 @@ class SlackBot:
             return None
         fetcher = self._fetcher
 
-        async def fetch_and_check() -> tuple[CheckResult, str | None]:
+        async def fetch_and_check() -> tuple[CheckResult, _PendingCheck | None]:
             parsed = await fetcher(argument)
             return await checker.check_parsed(parsed), None
 
@@ -347,20 +457,28 @@ class SlackBot:
         self,
         factory: CheckFactory,
         *,
+        label: str,
         apply_action: str | None,
         apply_value: str | None,
-        thread_ts: str | None,
+        target_ts: str | None = None,
+        thread_ts: str | None = None,
     ) -> None:
-        """Run the check in ``thread_ts`` and render the verdict over its progress line.
+        """Run the check and render the verdict in place.
 
-        The subject is already named by the anchor message (or the upload) the thread
-        hangs off, so the progress line stays short.
+        ``target_ts`` reuses an existing message (an upload prompt) as the progress
+        placeholder instead of posting a new one; ``thread_ts`` is the thread a fresh
+        placeholder is posted into, so a verdict never lands loose in the channel.
         """
-        placeholder = await self._client.post_text(
-            "🔍 Checking against your profile …", thread_ts=thread_ts
-        )
+        progress = f"🔍 Checking against your profile: {label} …"
+        if target_ts is None:
+            placeholder = await self._client.post_text(progress, thread_ts=thread_ts)
+        else:
+            await self._client.update_blocks(
+                self._channel, target_ts, status_blocks(progress), progress
+            )
+            placeholder = PostedMessage(channel=self._channel, ts=target_ts)
         try:
-            result, checked_text = await factory()
+            result, pending = await factory()
         except (ApplicationStateError, SelectorMismatchError, LlmSchemaError) as err:
             await self._replace(placeholder, thread_ts, f"⚠️ {err}")
             return
@@ -368,8 +486,8 @@ class SlackBot:
             logger.exception("check failed")
             await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
-        if result.passed and checked_text is not None and placeholder is not None:
-            self._remember_check(placeholder.ts, checked_text)
+        if result.passed and pending is not None and placeholder is not None:
+            self._remember_check(placeholder.ts, pending)
             apply_action, apply_value = "apply_check", placeholder.ts
         blocks = format_check_blocks(result, apply_action=apply_action, apply_value=apply_value)
         fallback = check_fallback_text(result)
@@ -378,26 +496,26 @@ class SlackBot:
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
 
-    def _remember_check(self, key: str, text: str) -> None:
-        """Keep a checked text so the result's apply button can draft from it later."""
-        self._pending_checks[key] = text
-        while len(self._pending_checks) > _PENDING_CHECK_LIMIT:
-            self._pending_checks.pop(next(iter(self._pending_checks)))
+    def _remember_check(self, key: str, pending: _PendingCheck) -> None:
+        """Keep a checked input so the result's apply button can draft from it later."""
+        _remember(self._pending_checks, key, pending, _PENDING_CHECK_LIMIT)
 
     async def _apply_checked_text(self, key: str, thread_root: str) -> None:
-        text = self._pending_checks.get(key)
-        if text is None:
+        pending = self._pending_checks.get(key)
+        if pending is None:
             await self._client.post_text(
                 "⚠️ This check has expired (bot restart) — run `/apply` with the "
                 "project text instead.",
                 thread_ts=thread_root,
             )
             return
-        await self._post_new_draft(
-            lambda: self._service.draft_from_text(text),
-            thread_root,
-            progress="⏳ Creating application draft …",
-        )
+
+        async def factory() -> DraftView:
+            return await self._service.draft_from_text(
+                pending.text, images=await self._download_images(list(pending.images))
+            )
+
+        await self._post_new_draft(factory, thread_root, progress="⏳ Creating application draft …")
 
     async def on_file_share(
         self,
@@ -406,48 +524,152 @@ class SlackBot:
         files: list[dict[str, object]],
         text: str = "",
         thread_ts: str | None = None,
+        message_ts: str | None = None,
     ) -> None:
-        """Handle an uploaded file (PDF, screenshot, or text): draft from it, or check it.
+        """Route an upload (PDF, text, or image): revise a draft, or offer buttons.
 
-        Every answer goes into the upload's own thread, so the upload stays the single
-        channel line for the whole exchange. The default mirrors ``/apply <text>``; a
-        comment containing ``check`` routes the extracted text through ``/check``.
+        Inside a draft's thread the upload feeds that draft's revision — the thread
+        already says which draft is meant. In the channel the intent is unknown, so
+        the bot asks with 📝 Apply / 🔍 Check buttons; nothing runs (and no token is
+        spent) until one is pressed. The prompt is posted as a reply to the upload, so
+        the whole exchange stays in the upload's thread and the channel keeps one line.
         """
         if channel != self._channel or self._file_reader is None:
             return
-        picked = next(
-            ((file, url) for file in files if (url := _download_url(file)) is not None), None
-        )
-        if picked is None:
+        if thread_ts is not None:
+            view = await self._service.find_by_draft_ref(f"{channel}:{thread_ts}")
+            if view is not None:
+                await self._revise_with_images(view, thread_ts=thread_ts, text=text, files=files)
+                return
+        if message_ts is None:
             return
-        file, url = picked
-        name = _text(file.get("name")) or "upload"
-        reader = self._file_reader
+        images = _image_files(files)
+        document = _document_file(files) if not images else None
+        if not images and document is None:
+            return  # nothing downloadable — not an upload we can read
+        if images:
+            label = images[0].name if len(images) == 1 else f"{len(images)} images"
+        else:
+            label = assert_defined(document, "upload without image or document").name
+        pending = _PendingUpload(
+            label=label[:150],
+            caption=_unwrap_slack_links(text).strip(),
+            images=tuple(images),
+            document=document,
+        )
+        # Keyed by the upload's own ts, which is known before the prompt is posted.
+        _remember(self._pending_uploads, message_ts, pending, _PENDING_UPLOAD_LIMIT)
+        await self._client.post_blocks(
+            format_upload_prompt_blocks(
+                pending.label, key=message_ts, can_check=self._checker is not None
+            ),
+            upload_prompt_fallback_text(pending.label),
+            thread_ts=message_ts,
+        )
+
+    async def _apply_upload(self, key: str, *, prompt_ts: str, thread_root: str) -> None:
+        """📝 Apply on an upload prompt: draft from the screenshot(s) or document.
+
+        The draft hangs off ``thread_root`` (the upload itself), not off the prompt —
+        the prompt is a reply, and the routing key must match the thread replies carry.
+        """
+        pending = self._pending_uploads.pop(key, None)
+        if pending is None:
+            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=thread_root)
+            return
+        await self._consume_prompt(prompt_ts, f"📥 Application from {pending.label}")
+        await self._post_new_draft(
+            self._draft_factory(pending), thread_root, progress="⏳ Reading upload and drafting …"
+        )
+
+    async def _check_upload(self, key: str, *, prompt_ts: str, thread_root: str) -> None:
+        """🔍 Check on an upload prompt: score it like the scanner would."""
         checker = self._checker
-        if checker is not None and _CHECK_KEYWORD_RE.search(text):
+        if checker is None:
+            return
+        pending = self._pending_uploads.pop(key, None)
+        if pending is None:
+            await self._client.post_text(UPLOAD_EXPIRED, thread_ts=thread_root)
+            return
 
-            async def check_factory() -> tuple[CheckResult, str | None]:
-                data = await reader(url)
-                extracted = await extract_upload_text(name, data, vision=self._vision)
-                return await checker.check_text(extracted), extracted
+        async def factory() -> tuple[CheckResult, _PendingCheck | None]:
+            text, images = await self._upload_input(pending)
+            result = await checker.check_text(text, images=images)
+            return result, _PendingCheck(text=text, images=pending.images)
 
-            await self._run_check(
-                check_factory, apply_action=None, apply_value=None, thread_ts=thread_ts
+        await self._run_check(
+            factory,
+            label=pending.label,
+            apply_action=None,
+            apply_value=None,
+            target_ts=prompt_ts,
+            thread_ts=thread_root,
+        )
+
+    def _draft_factory(self, pending: _PendingUpload) -> Callable[[], Awaitable[DraftView]]:
+        async def factory() -> DraftView:
+            text, images = await self._upload_input(pending)
+            return await self._service.draft_from_text(text, images=images)
+
+        return factory
+
+    async def _upload_input(self, pending: _PendingUpload) -> tuple[str, list[ImageAttachment]]:
+        """Resolve a pending upload into LLM input: screenshots, or extracted text.
+
+        Downloading is deferred to the button press, so an upload nobody acts on
+        never costs a fetch.
+        """
+        if pending.images:
+            return pending.caption, await self._download_images(list(pending.images))
+        document = assert_defined(pending.document, "pending upload has no document")
+        reader = assert_defined(self._file_reader, "no file reader configured")
+        data = await reader(document.url)
+        return await asyncio.to_thread(extract_document_text, document.name, data), []
+
+    async def _consume_prompt(self, prompt_ts: str, text: str) -> None:
+        """Rewrite the prompt message without its buttons so it cannot fire twice."""
+        await self._client.update_blocks(self._channel, prompt_ts, status_blocks(text), text)
+
+    async def _revise_with_images(
+        self, view: DraftView, *, thread_ts: str, text: str, files: list[dict[str, object]]
+    ) -> None:
+        """An upload in a draft's thread: images become vision input for the revision."""
+        message = _unwrap_slack_links(text).strip()
+        if is_email(message):
+            # The reply is really a recipient correction; the upload changes nothing.
+            await self._post_new_draft(
+                lambda: self._service.set_recipient(view.application_id, message),
+                thread_ts,
+                progress="✅ Setting recipient …",
             )
             return
-        root = thread_ts
-        if root is None:  # no timestamp to hang a thread off: fall back to an own anchor
-            parent = await self._client.post_text(f"📥 Application from file: {name[:150]}")
-            if parent is None:
-                return
-            root = parent.ts
+        images = _image_files(files)
+        if not images:
+            await self._client.post_text(
+                "⚠️ Only images (PNG/JPEG/WebP/GIF) can accompany a revision — "
+                "please paste document content as text.",
+                thread_ts=thread_ts,
+            )
+            return
+        instruction = message or DEFAULT_IMAGE_INSTRUCTION
 
         async def factory() -> DraftView:
-            data = await reader(url)
-            extracted = await extract_upload_text(name, data, vision=self._vision)
-            return await self._service.draft_from_text(extracted)
+            return await self._service.revise(
+                view.application_id, instruction, images=await self._download_images(images)
+            )
 
-        await self._post_new_draft(factory, root, progress="⏳ Reading file and creating draft …")
+        await self._post_new_draft(factory, thread_ts, progress="✏️ Revising the draft …")
+
+    async def _download_images(self, images: list[_ImageFile]) -> list[ImageAttachment]:
+        reader = self._file_reader
+        if reader is None:  # guarded by every caller; keeps the types honest
+            return []
+        return [
+            ImageAttachment(
+                name=image.name, mime_type=image.mime_type, data=await reader(image.url)
+            )
+            for image in images
+        ]
 
     async def on_thread_message(
         self, *, channel: str | None, thread_ts: str | None, text: str, from_bot: bool

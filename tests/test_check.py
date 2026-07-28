@@ -1,10 +1,12 @@
 """Tests for the manual /check evaluation service (fake matcher; one DB-backed case)."""
 
+from collections.abc import Sequence
 from typing import Literal, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
 from project_pilot.evaluation.check import CheckService
@@ -43,9 +45,17 @@ class _FakeMatcher:
     def __init__(self, evaluation: LlmEvaluation) -> None:
         self.evaluation = evaluation
         self.listing_texts: list[str] = []
+        self.images: list[list[str]] = []
 
-    async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
+    async def evaluate(
+        self,
+        *,
+        profile_text: str,
+        listing_text: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmEvaluation:
         self.listing_texts.append(listing_text)
+        self.images.append([image.name for image in images])
         return self.evaluation
 
 
@@ -113,6 +123,46 @@ async def test_check_text_match_builds_message_with_the_checked_text() -> None:
     assert message.description.startswith("Python Backend Projekt")
     assert message.reasons == ["Passt zum Profil"]
     assert matcher.listing_texts == ["Python Backend Projekt\nRAG und FastAPI"]
+
+
+async def test_check_text_forwards_images_and_marks_them_in_the_listing_text() -> None:
+    matcher = _FakeMatcher(_llm(score=75))
+    image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")
+    result = await _service(matcher).check_text("", images=[image])
+    assert result.passed and result.stage is EvaluationStage.LLM
+    assert result.title == "shot.png"  # image-only check: named after the screenshot
+    assert matcher.images == [["shot.png"]]
+    assert matcher.listing_texts == ["[Project listing attached as image: shot.png]"]
+
+
+async def test_image_only_check_skips_the_text_rule_engine() -> None:
+    # A must_have rule cannot be evaluated against pixels; stage 2 is skipped rather
+    # than failing a screenshot for text the rule engine can never see.
+    matcher = _FakeMatcher(_llm())
+    service = CheckService(
+        session_factory=cast("async_sessionmaker[AsyncSession]", None),
+        matcher=matcher,
+        profile=Profile(
+            text="Senior Python engineer",
+            constraints=ProfileConstraints(blacklist=[], must_have=["python"]),
+            profile_hash="hash",
+        ),
+        threshold=THRESHOLD,
+    )
+    image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")
+    result = await service.check_text("", images=[image])
+    assert result.stage is EvaluationStage.LLM  # not a hard-rule rejection
+    assert matcher.images == [["shot.png"]]
+
+
+async def test_check_text_blacklist_still_applies_to_an_image_caption() -> None:
+    matcher = _FakeMatcher(_llm())
+    image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")
+    result = await _service(matcher, blacklist=["sap"]).check_text(
+        "SAP Berater gesucht", images=[image]
+    )
+    assert result.stage is EvaluationStage.HARD_RULE
+    assert matcher.images == []  # 0 tokens, image never uploaded
 
 
 async def test_check_text_match_below_threshold_does_not_pass() -> None:

@@ -280,6 +280,26 @@ def check_fallback_text(result: CheckResult) -> str:
     return f"🔍 Check: {verdict} — {result.title}"
 
 
+def format_upload_prompt_blocks(label: str, *, key: str, can_check: bool) -> list[Block]:
+    """Ask what an upload is for, as buttons.
+
+    Slack cannot attach a file to a slash command, so the intent is chosen after
+    the fact. Buttons rather than a keyword: nothing to remember, and an upload
+    never spends a token until it is clicked.
+    """
+    actions: list[Block] = [_button("📝 Apply", action_id="upload_apply", value=key)]
+    if can_check:
+        actions.append(_button("🔍 Check", action_id="upload_check", value=key))
+    return [
+        _section(f"*📥 {_esc(label)}*\nWhat should I do with it?"),
+        {"type": "actions", "elements": actions},
+    ]
+
+
+def upload_prompt_fallback_text(label: str) -> str:
+    return f"📥 {label} — apply or check?"
+
+
 def format_draft_blocks(view: DraftView) -> list[Block]:
     """Build the Block Kit draft: full e-mail, LinkedIn, and the review buttons."""
     header_line = f"📨 Application draft: {view.title}"

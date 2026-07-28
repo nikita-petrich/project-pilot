@@ -1,8 +1,8 @@
 """Tests for the Slack bot routing (fake poster + fake application service)."""
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
-from project_pilot.application.documents import VisionClient
+from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.service import DraftView
 from project_pilot.enrichment.schemas import ContactEnrichment, DiscoveryLinks
 from project_pilot.errors import ApplicationStateError, EmailSendError, EnrichmentError
@@ -17,7 +17,13 @@ from project_pilot.models import (
 )
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.slack import Block, PostedMessage
-from project_pilot.notification.slack_bot import CHECK_USAGE, USAGE, EnrichmentFlow, SlackBot
+from project_pilot.notification.slack_bot import (
+    CHECK_USAGE,
+    DEFAULT_IMAGE_INSTRUCTION,
+    USAGE,
+    EnrichmentFlow,
+    SlackBot,
+)
 
 CHANNEL = "C1"
 
@@ -131,6 +137,7 @@ class _FakeService:
         self.by_ref: dict[str, DraftView] = {}
         self.known_urls: dict[str, int] = {}
         self.error: Exception | None = None
+        self.last_images: list[str] = []
 
     def _result(self, name: str, arg: object) -> DraftView:
         self.calls.append((name, arg))
@@ -144,10 +151,16 @@ class _FakeService:
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView:
         return self._result("draft_from_parsed", parsed.external_url)
 
-    async def draft_from_text(self, text: str) -> DraftView:
+    async def draft_from_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
+        self.last_images = [image.name for image in images]
         return self._result("draft_from_text", text)
 
-    async def revise(self, application_id: int, instruction: str) -> DraftView:
+    async def revise(
+        self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
+    ) -> DraftView:
+        self.last_images = [image.name for image in images]
         return self._result("revise", (application_id, instruction))
 
     async def set_recipient(self, application_id: int, email: str) -> DraftView:
@@ -189,6 +202,7 @@ class _FakeChecker:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
         self.result = _check_result()
+        self.images: list[list[str]] = []
 
     def _record(self, name: str, arg: object) -> CheckResult:
         self.calls.append((name, arg))
@@ -200,7 +214,8 @@ class _FakeChecker:
     async def check_parsed(self, parsed: ParsedListing) -> CheckResult:
         return self._record("check_parsed", parsed.external_url)
 
-    async def check_text(self, text: str) -> CheckResult:
+    async def check_text(self, text: str, *, images: Sequence[ImageAttachment] = ()) -> CheckResult:
+        self.images.append([image.name for image in images])
         return self._record("check_text", text)
 
 
@@ -230,18 +245,6 @@ class _FakeEnrichment:
         )
 
 
-class _FakeVision:
-    """Stands in for the vision model that transcribes uploaded screenshots."""
-
-    def __init__(self, text: str = "Senior Python Engineer gesucht, Remote") -> None:
-        self.calls: list[str] = []
-        self.text = text
-
-    async def read_image(self, *, data: bytes, mime_type: str) -> str:
-        self.calls.append(mime_type)
-        return self.text
-
-
 def _bot(
     poster: _FakePoster,
     service: _FakeService,
@@ -250,7 +253,6 @@ def _bot(
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
     checker: _FakeChecker | None = None,
     enrichment: EnrichmentFlow | None = None,
-    vision: VisionClient | None = None,
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -264,11 +266,7 @@ def _bot(
         file_reader=file_reader,
         checker=checker,
         enrichment=enrichment,
-        vision=vision,
     )
-
-
-UPLOAD_TS = "500.5"
 
 
 def _file_event(
@@ -276,20 +274,25 @@ def _file_event(
     *,
     channel: str = CHANNEL,
     url: str | None = "https://files.slack/x",
+    mimetype: str | None = None,
+    thread_ts: str | None = None,
     text: str = "",
-    ts: str | None = UPLOAD_TS,
+    ts: str = "500.5",
 ) -> dict[str, object]:
     file: dict[str, object] = {"name": name}
     if url is not None:
         file["url_private_download"] = url
+    if mimetype is not None:
+        file["mimetype"] = mimetype
     event: dict[str, object] = {
         "type": "message",
         "channel": channel,
         "text": text,
         "files": [file],
+        "ts": ts,
     }
-    if ts is not None:
-        event["ts"] = ts
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
     return {"event": event}
 
 
@@ -345,6 +348,33 @@ def _buttons(blocks: list[Block]) -> dict[str, str | None]:
 def _updated_buttons(poster: _FakePoster) -> dict[str, str | None]:
     assert poster.updates, "no message update happened"
     return _buttons(poster.updates[-1][2])
+
+
+def _prompt_buttons(poster: _FakePoster) -> dict[str, str | None]:
+    """The Apply/Check buttons of the upload prompt the bot posted."""
+    assert poster.posted_blocks, "no upload prompt was posted"
+    return _buttons(poster.posted_blocks[-1][0])
+
+
+async def _upload_and_press(
+    bot: SlackBot, poster: _FakePoster, event: dict[str, object], action: str
+) -> None:
+    """Upload a file, then press one of the prompt's buttons (the real user flow)."""
+    await bot.dispatch("events_api", event)
+    key = _prompt_buttons(poster)[action]
+    assert key is not None, f"prompt has no {action} button"
+    # The prompt carries the button, so its ts is the click target; it is a reply to
+    # the upload, so Slack sends the upload's ts as the payload's thread_ts.
+    envelope = event["event"]
+    assert isinstance(envelope, dict)
+    await bot.dispatch(
+        "interactive",
+        _interactive(action, key, ts="900.1", thread_ts=_text_of(envelope.get("ts"))),
+    )
+
+
+def _text_of(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 async def test_apply_action_threads_draft_and_records_root_ref() -> None:
@@ -446,20 +476,8 @@ async def test_slash_apply_text_drafts_from_text_in_thread() -> None:
     await _bot(poster, service).dispatch("slash_commands", _slash("Python Projekt gesucht"))
     assert ("draft_from_text", "Python Projekt gesucht") in service.calls
     assert poster.draft_rendered()
-    # exactly one channel-level anchor; every further post hangs in its thread
-    anchor_ts = poster.text_ids[0]
-    assert poster.texts[0] == ("📥 Application: Python Projekt gesucht", None)
-    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
-    # replies in that thread route back to the draft
-    assert service.recorded == [(1, f"{CHANNEL}:{anchor_ts}")]
-
-
-async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
-    poster, service = _FakePoster(), _FakeService()
-    await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
-    anchor_ts = poster.text_ids[0]
-    hint, thread = poster.texts[-1]
-    assert "project description" in hint and thread == anchor_ts
+    # a parent message is created and the draft lives in its thread
+    assert service.recorded and service.recorded[0][0] == 1
 
 
 async def test_slash_apply_known_url_uses_stored_listing() -> None:
@@ -545,93 +563,18 @@ async def test_reply_to_unknown_thread_is_ignored() -> None:
     assert poster.texts == []
 
 
-async def test_file_upload_drafts_from_extracted_text_in_the_upload_thread() -> None:
+async def test_file_upload_drafts_from_extracted_text() -> None:
     poster, service = _FakePoster(), _FakeService()
 
     async def reader(url: str) -> bytes:
         assert url == "https://files.slack/x"
         return b"Senior Python Backend Engineer gesucht"
 
-    await _bot(poster, service, file_reader=reader).dispatch(
-        "events_api", _file_event("projekt.txt")
-    )
+    bot = _bot(poster, service, file_reader=reader)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt"), "upload_apply")
     assert any(
         name == "draft_from_text" and "Python Backend" in str(arg) for name, arg in service.calls
     )
-    assert poster.draft_rendered()
-    # no extra channel message: the upload itself is the thread everything answers in
-    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
-    assert service.recorded == [(1, f"{CHANNEL}:{UPLOAD_TS}")]
-
-
-async def test_screenshot_upload_drafts_from_the_transcribed_text() -> None:
-    poster, service, vision = _FakePoster(), _FakeService(), _FakeVision()
-
-    async def reader(url: str) -> bytes:
-        return b"\x89PNG fake image bytes"
-
-    await _bot(poster, service, file_reader=reader, vision=vision).dispatch(
-        "events_api", _file_event("screenshot.png")
-    )
-    assert vision.calls == ["image/png"]
-    assert ("draft_from_text", "Senior Python Engineer gesucht, Remote") in service.calls
-    assert poster.draft_rendered()
-    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
-
-
-async def test_screenshot_upload_with_check_comment_checks_the_transcribed_text() -> None:
-    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
-    vision = _FakeVision()
-
-    async def reader(url: str) -> bytes:
-        return b"\x89PNG fake image bytes"
-
-    await _bot(poster, service, file_reader=reader, checker=checker, vision=vision).dispatch(
-        "events_api", _file_event("screenshot.png", text="check das bitte")
-    )
-    assert ("check_text", "Senior Python Engineer gesucht, Remote") in checker.calls
-    assert service.calls == []  # checking only, no draft
-
-
-async def test_screenshot_upload_without_a_vision_model_hints_in_the_thread() -> None:
-    poster, service = _FakePoster(), _FakeService()
-
-    async def reader(url: str) -> bytes:
-        return b"\x89PNG fake image bytes"
-
-    await _bot(poster, service, file_reader=reader).dispatch(
-        "events_api", _file_event("screenshot.png")
-    )
-    assert service.calls == []
-    assert any("VISION_MODEL" in text for text in poster.visible_texts())
-
-
-async def test_file_upload_inside_a_thread_answers_in_that_thread() -> None:
-    poster, service = _FakePoster(), _FakeService()
-
-    async def reader(url: str) -> bytes:
-        return b"Projektbeschreibung"
-
-    event = _file_event("projekt.txt")
-    envelope = event["event"]
-    assert isinstance(envelope, dict)
-    envelope["thread_ts"] = "111.1"  # dropped into an existing thread, not the channel
-    await _bot(poster, service, file_reader=reader).dispatch("events_api", event)
-    assert [thread for _, thread in poster.texts] == ["111.1"]
-
-
-async def test_file_upload_without_timestamp_falls_back_to_its_own_anchor() -> None:
-    poster, service = _FakePoster(), _FakeService()
-
-    async def reader(url: str) -> bytes:
-        return b"Projektbeschreibung"
-
-    await _bot(poster, service, file_reader=reader).dispatch(
-        "events_api", _file_event("projekt.txt", ts=None)
-    )
-    anchor_text, anchor_thread = poster.texts[0]
-    assert anchor_text.startswith("📥 Application from file:") and anchor_thread is None
-    assert [thread for _, thread in poster.texts[1:]] == [poster.text_ids[0]]
     assert poster.draft_rendered()
 
 
@@ -667,6 +610,89 @@ async def test_bot_file_upload_is_ignored() -> None:
     assert service.calls == []
 
 
+async def _png_reader(url: str) -> bytes:
+    assert url == "https://files.slack/x"
+    return b"\x89PNG"
+
+
+def _reader(payload: bytes) -> Callable[[str], Awaitable[bytes]]:
+    """A file reader returning fixed bytes, for uploads whose content matters."""
+
+    async def read(url: str) -> bytes:
+        return payload
+
+    return read
+
+
+async def test_image_upload_drafts_with_vision_after_pressing_apply() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, file_reader=_png_reader)
+    event = _file_event("shot.png", mimetype="image/png", text="Zusatzinfo")
+    await _upload_and_press(bot, poster, event, "upload_apply")
+    # the whole comment is project context now — no keyword to strip
+    assert ("draft_from_text", "Zusatzinfo") in service.calls
+    assert service.last_images == ["shot.png"]
+    assert poster.draft_rendered()
+
+
+async def test_image_in_draft_thread_revises_with_vision() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event("shot.png", mimetype="image/png", thread_ts="111.1", text="Bitte anpassen"),
+    )
+    assert ("revise", (1, "Bitte anpassen")) in service.calls
+    assert service.last_images == ["shot.png"]
+    assert poster.draft_rendered()
+
+
+async def test_image_only_thread_reply_revises_with_default_instruction() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png", thread_ts="111.1")
+    )
+    assert ("revise", (1, DEFAULT_IMAGE_INSTRUCTION)) in service.calls
+    assert service.last_images == ["shot.png"]
+
+
+async def test_email_reply_with_image_still_sets_recipient() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event(
+            "sig.png",
+            mimetype="image/png",
+            thread_ts="111.1",
+            text="<mailto:neu@firma.de|neu@firma.de>",
+        ),
+    )
+    assert ("set_recipient", (1, "neu@firma.de")) in service.calls
+    assert not any(name == "revise" for name, _ in service.calls)
+
+
+async def test_non_image_file_in_draft_thread_posts_hint() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api",
+        _file_event("doc.pdf", mimetype="application/pdf", thread_ts="111.1", text="anpassen"),
+    )
+    assert service.calls == []
+    assert any("Only images" in text for text, _ in poster.texts)
+
+
+async def test_image_in_unknown_thread_offers_the_prompt() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, file_reader=_png_reader)
+    event = _file_event("shot.png", mimetype="image/png", thread_ts="999.9")
+    await _upload_and_press(bot, poster, event, "upload_apply")
+    assert ("draft_from_text", "") in service.calls
+    assert service.last_images == ["shot.png"]
+
+
 async def test_slash_check_text_match_renders_apply_button_for_remembered_text() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
     bot = _bot(poster, service, checker=checker)
@@ -679,43 +705,6 @@ async def test_slash_check_text_match_renders_apply_button_for_remembered_text()
     await bot.dispatch("interactive", _interactive("apply_check", key))
     assert ("draft_from_text", "Python RAG Projekt") in service.calls
     assert poster.draft_rendered()
-
-
-async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
-    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
-    await _bot(poster, service, checker=checker).dispatch(
-        "slash_commands", _slash("Python RAG Projekt", command="/check")
-    )
-    anchor_ts = poster.text_ids[0]
-    assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
-    # the progress line is the only follow-up, and it lives in the anchor's thread
-    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
-    # the verdict replaces that threaded progress line — nothing lands in the channel
-    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
-    assert poster.posted_blocks == []
-
-
-async def test_slash_check_unknown_link_hint_lands_in_the_thread() -> None:
-    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
-    await _bot(poster, service, checker=checker).dispatch(
-        "slash_commands", _slash("https://example.com/job", command="/check")
-    )
-    anchor_ts = poster.text_ids[0]
-    hint, thread = poster.texts[-1]
-    assert "project description" in hint and thread == anchor_ts
-
-
-async def test_file_upload_check_answers_in_the_upload_thread() -> None:
-    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
-
-    async def reader(url: str) -> bytes:
-        return b"Senior Python Backend Engineer gesucht"
-
-    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
-        "events_api", _file_event("projekt.txt", text="check das bitte")
-    )
-    assert [thread for _, thread in poster.texts] == [UPLOAD_TS]
-    assert poster.posted_blocks == []  # the verdict replaces the threaded progress line
 
 
 async def test_slash_check_no_match_renders_verdict_without_apply_button() -> None:
@@ -802,29 +791,154 @@ async def test_slash_check_error_is_surfaced() -> None:
     assert any("Project 7 not found" in t for t in poster.visible_texts())
 
 
-async def test_file_upload_with_check_comment_checks_extracted_text() -> None:
+async def test_slash_apply_anchors_once_and_answers_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("Python Projekt gesucht"))
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("📥 Application: Python Projekt gesucht", None)
+    # exactly one channel line; everything after it hangs in that anchor's thread
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # replies in that thread route back to the draft
+    assert service.recorded == [(1, f"{CHANNEL}:{anchor_ts}")]
+
+
+async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("https://example.com/job"))
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == poster.text_ids[0]
+
+
+async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("Python RAG Projekt", command="/check")
+    )
+    anchor_ts = poster.text_ids[0]
+    assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
+    # the progress line is the only follow-up, and it lives in the anchor's thread
+    assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
+    # the verdict replaces that threaded progress line — nothing lands in the channel
+    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
+    assert poster.posted_blocks == []
+
+
+async def test_slash_check_unknown_link_hint_lands_in_the_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash("https://example.com/job", command="/check")
+    )
+    hint, thread = poster.texts[-1]
+    assert "project description" in hint and thread == poster.text_ids[0]
+
+
+async def test_upload_prompt_is_posted_in_the_uploads_own_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    await _bot(poster, service, file_reader=_png_reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", ts="500.5")
+    )
+    # the upload is the only channel line; the prompt replies to it
+    assert [thread for _, thread in poster.posted_blocks] == ["500.5"]
+    assert poster.texts == []
+
+
+async def test_upload_apply_threads_the_draft_under_the_upload() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_reader(b"Projektbeschreibung"), checker=checker)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt", ts="500.5"), "upload_apply")
+    assert poster.draft_rendered()
+    # progress and draft-ref hang off the upload, not off the prompt reply (900.1)
+    assert [thread for _, thread in poster.texts] == ["500.5"]
+    assert service.recorded == [(1, f"{CHANNEL}:500.5")]
+
+
+async def test_upload_check_verdict_stays_in_the_uploads_thread() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_reader(b"Projektbeschreibung"), checker=checker)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt", ts="500.5"), "upload_check")
+    assert checker.calls  # the check ran
+    # the verdict reuses the prompt message (already a thread reply); no new channel post
+    assert len(poster.posted_blocks) == 1 and poster.posted_blocks[0][1] == "500.5"
+    assert all(thread == "500.5" for _, thread in poster.texts)
+
+
+async def test_upload_alone_only_offers_buttons_and_spends_nothing() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+
+    async def reader(url: str) -> bytes:
+        raise AssertionError("an unanswered upload must not be downloaded")
+
+    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
+        "events_api", _file_event("projekt.txt", text="schau mal")
+    )
+    assert service.calls == [] and checker.calls == []
+    assert set(_prompt_buttons(poster)) == {"upload_apply", "upload_check"}
+
+
+async def test_upload_prompt_hides_check_button_without_a_checker() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service, file_reader=_png_reader).dispatch(
+        "events_api", _file_event("shot.png", mimetype="image/png")
+    )
+    assert set(_prompt_buttons(poster)) == {"upload_apply"}
+
+
+async def test_upload_check_button_checks_the_screenshot_then_applies() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    bot = _bot(poster, service, file_reader=_png_reader, checker=checker)
+    event = _file_event("shot.png", mimetype="image/png")
+    await _upload_and_press(bot, poster, event, "upload_check")
+    assert ("check_text", "") in checker.calls
+    assert checker.images == [["shot.png"]]
+    assert service.calls == []  # checking only, no draft yet
+    # the apply button on a passing check drafts from the same screenshot
+    key = _updated_buttons(poster)["apply_check"]
+    assert key is not None
+    await bot.dispatch("interactive", _interactive("apply_check", key))
+    assert ("draft_from_text", "") in service.calls
+    assert service.last_images == ["shot.png"]
+
+
+async def test_upload_check_button_checks_extracted_document_text() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
 
     async def reader(url: str) -> bytes:
         return b"Senior Python Backend Engineer gesucht"
 
-    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
-        "events_api", _file_event("projekt.txt", text="check das bitte")
-    )
+    bot = _bot(poster, service, file_reader=reader, checker=checker)
+    await _upload_and_press(bot, poster, _file_event("projekt.txt"), "upload_check")
     assert any(name == "check_text" and "Python Backend" in str(arg) for name, arg in checker.calls)
-    assert service.calls == []  # no draft — checking only
-    key = _updated_buttons(poster)["apply_check"]
-    assert key is not None  # a passing file check still offers the apply button
+    assert service.calls == []
 
 
-async def test_file_upload_without_check_comment_still_drafts() -> None:
-    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+async def test_pressing_a_button_twice_does_not_draft_twice() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, file_reader=_png_reader)
+    event = _file_event("shot.png", mimetype="image/png")
+    await _upload_and_press(bot, poster, event, "upload_apply")
+    key = _prompt_buttons(poster)["upload_apply"]
+    assert key is not None
+    await bot.dispatch("interactive", _interactive("upload_apply", key, ts="900.1"))
+    assert [name for name, _ in service.calls].count("draft_from_text") == 1
+    assert any("no longer have that upload" in text for text, _ in poster.texts)
+
+
+async def test_upload_prompt_is_rewritten_without_its_buttons() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, file_reader=_png_reader)
+    event = _file_event("shot.png", mimetype="image/png")
+    await _upload_and_press(bot, poster, event, "upload_apply")
+    consumed = [blocks for _, ts, blocks in poster.updates if ts == "900.1"]
+    assert consumed and _buttons(consumed[0]) == {}
+
+
+async def test_upload_from_foreign_channel_offers_nothing() -> None:
+    poster, service = _FakePoster(), _FakeService()
 
     async def reader(url: str) -> bytes:
-        return b"Projektbeschreibung"
+        return b"text"
 
-    await _bot(poster, service, file_reader=reader, checker=checker).dispatch(
-        "events_api", _file_event("projekt.txt", text="bitte bewerben")
+    await _bot(poster, service, file_reader=reader).dispatch(
+        "events_api", _file_event("x.txt", channel="C2")
     )
-    assert checker.calls == []
-    assert any(name == "draft_from_text" for name, _ in service.calls)
+    assert poster.posted_blocks == [] and poster.texts == []
