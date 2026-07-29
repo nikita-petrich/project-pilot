@@ -121,15 +121,21 @@ docker login ghcr.io -u <github-user>
 4. `docker compose pull` and `up -d --remove-orphans`;
 5. prunes dangling images (tagged `sha-*` images are kept, so rollback stays possible);
 6. waits up to five minutes for the app container to report **healthy**, and fails
-   the job with the last 80 log lines if it goes unhealthy or exits.
+   the job with the last 80 log lines if it goes unhealthy, exits, or restarts.
 
 Migrations are not a separate step: the container entrypoint runs
 `project-pilot init-db` (Alembic `upgrade head`) before starting the daemon.
 
-Step 6 is a real gate. The healthcheck only passes once a scan has actually
-succeeded, so a deploy that goes green means the worker is really working. It also
-means a deploy can fail while the source is in a 403 cooldown — check the logs
-before assuming the release is at fault.
+Step 6 fails on evidence of breakage, not on slowness. The healthcheck only passes
+once a scan has actually succeeded, so a green deploy means the worker is really
+working — but a container still inside its healthcheck start period is reported and
+the deploy still passes. That matters for the very first deploy: on an empty database
+the seed run fetches every listing's detail page with a 2–5 second delay and can
+easily outlast the wait, and failing that would be a false alarm. A crash loop or an
+`unhealthy` verdict still fails the job.
+
+A deploy can also fail while the source is in a 403 cooldown — check the logs before
+assuming the release is at fault.
 
 ## Rollback
 

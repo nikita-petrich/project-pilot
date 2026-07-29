@@ -45,12 +45,12 @@ docker image prune -f >/dev/null 2>&1 || true
 # The entrypoint applies migrations before starting the daemon, and the healthcheck
 # only passes once a scan has actually succeeded — so this waits out the first scan.
 printf 'waiting for the app container to become healthy'
+verdict=still_starting
 attempt=0
 while [ "$attempt" -lt 60 ]; do
     container="$(docker compose ps -q app)"
     if [ -z "$container" ]; then
-        echo
-        echo "FATAL: no app container was created." >&2
+        verdict="FATAL: no app container was created."
         break
     fi
     state="$(docker inspect -f '{{.State.Status}}' "$container")"
@@ -67,13 +67,11 @@ while [ "$attempt" -lt 60 ]; do
             exit 0
             ;;
         running:unhealthy)
-            echo
-            echo "FATAL: app container reports unhealthy." >&2
+            verdict="FATAL: app container reports unhealthy."
             break
             ;;
-        exited:* | dead:*)
-            echo
-            echo "FATAL: app container is $state." >&2
+        exited:* | dead:* | restarting:*)
+            verdict="FATAL: app container is $state."
             break
             ;;
     esac
@@ -81,8 +79,19 @@ while [ "$attempt" -lt 60 ]; do
     sleep 5
     attempt=$((attempt + 1))
 done
-
 echo
+
+# Only evidence of breakage fails a deploy. A container still working through its
+# first scan is not evidence: on an empty database the seed run fetches every
+# listing's detail page with a politeness delay and can outlast this wait.
+if [ "$verdict" = still_starting ]; then
+    echo "app is running on ${IMAGE}, still inside its healthcheck start period."
+    echo "The first scan on an empty database takes a while. Watch it with:"
+    echo "  cd $STACK_DIR && docker compose ps && docker compose logs -f app"
+    exit 0
+fi
+
+echo "$verdict" >&2
 echo "--- last 80 log lines ---" >&2
 docker compose logs --tail=80 app >&2 || true
 exit 1

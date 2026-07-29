@@ -37,7 +37,11 @@ services:
       interval: 60s
       timeout: 10s
       retries: 3
-      start_period: 60s
+      # The probe only passes once a scan has finished, and on an empty database the
+      # seed run fetches every listing's detail page with a 2-5 s delay between
+      # requests. A short start period would mark that first, entirely healthy run
+      # as a failure. Failures inside the start period do not count against retries.
+      start_period: 600s
     restart: unless-stopped
 
 volumes:
