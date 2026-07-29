@@ -32,7 +32,7 @@ be restored after a rebuild.
 | `profile/profile.md` | repo | matching profile and signature block |
 | `profile/constraints.yaml` | repo | deterministic hard rules |
 | `cv/*.pdf` | repo | attached to application e-mails |
-| `.env` | GitHub secret `PROJECT_PILOT_ENV` | written to the server on every deploy |
+| `.env` | GitHub `prod` environment | rendered from its secrets and written on every deploy |
 | database | `pgdata` volume | survives deploys |
 
 Because the deploy writes `.env`, editing it on the server is pointless: the next
@@ -93,7 +93,6 @@ on your plan for a private repo — the workflow just reads `secrets.*`.
 
 | Secret | Required | Value |
 |---|---|---|
-| `PROJECT_PILOT_ENV` | yes | the complete contents of `.env` (see below) |
 | `VPS_HOST` | yes | hostname or IP of the VPS |
 | `VPS_USER` | yes | the SSH user the setup commands ran as |
 | `VPS_SSH_KEY` | yes | the **private** deploy key, including the `BEGIN`/`END` lines |
@@ -103,22 +102,41 @@ on your plan for a private repo — the workflow just reads `secrets.*`.
 Optional repository **variable** `VPS_PATH` overrides the target directory
 (default `/opt/stacks/project-pilot`).
 
-### PROJECT_PILOT_ENV
+### App settings
 
-Fill in a local copy of `.env.example` and paste the whole file as this one secret.
-It is written to `<VPS_PATH>/.env` (mode 600) at the start of every deploy, so it is
-the single place any setting changes — including the ones you tune over time, like
-`MATCH_THRESHOLD`. Keep your local copy: GitHub secrets are write-only, so editing
-one value means pasting the file again.
+Every other secret or variable in the `prod` environment becomes one line of the
+app's `.env`, rendered by [`deploy/render-env.py`](../deploy/render-env.py) and
+written to the server at the start of each deploy. Nothing is hardcoded in the
+workflow, so adding a setting later is a new secret, not a code change.
 
-Two notes on its contents:
+Use `.env.example` as the checklist. Sensitive values go in as **secrets**; tunables
+you want to read back and edit in the UI (`MATCH_THRESHOLD`, `LOG_LEVEL`,
+`SEARCH_URLS`, …) work equally well as **variables**. A key defined as both wins as
+the secret.
 
-- `DATABASE_URL` is ignored even if present. Compose sets it in the service's
-  `environment:`, which takes precedence over `env_file`, so a stray `localhost`
-  line copied from the example is harmless.
-- `POSTGRES_PASSWORD` is read by compose itself to build that URL and to initialize
-  the database. Set a real one before the first deploy: it is baked into the volume
-  on creation, so changing it later means recreating `pgdata`.
+Required — the container dies at boot without them:
+
+| Key | Value |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
+| `LLM_MODEL` | model name, e.g. a small, cheap one |
+| `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
+
+Strongly recommended — it starts without them, but not usefully:
+
+| Key | Value |
+|---|---|
+| `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | without these there are no alerts at all |
+| `CONTACT_MAIL` | goes into the scraper's user agent; a compliance promise, so use a real address |
+| `POSTGRES_PASSWORD` | otherwise the default `pilot`. Set a real one **before the first deploy**: it is baked into the `pgdata` volume on creation, and changing it later means recreating the volume |
+
+Everything else from `.env.example` is optional (`SMTP_*` for sending applications,
+`ENRICHMENT_*`, `APPLICANT_NAME`, thresholds, `LOG_LEVEL`).
+
+Two things the renderer refuses, rather than writing a file a dotenv reader would
+silently misparse: a value spanning several lines, and a value containing `' #'`.
+`DATABASE_URL` is ignored even if set — compose puts it in the service's
+`environment:`, which takes precedence over `env_file`.
 
 Generating the key pair and the host pin:
 
@@ -145,8 +163,8 @@ docker login ghcr.io -u <github-user>
 ## What a deploy does
 
 First the workflow ships `compose.prod.yaml` and the deploy script itself over SSH,
-then writes `PROJECT_PILOT_ENV` to `<VPS_PATH>/.env` with mode 600 — piped over
-stdin, so the values never reach the job log or the server's process list.
+then renders the `prod` environment's secrets into `<VPS_PATH>/.env` with mode 600 —
+fed over stdin, so the values never reach the job log or the server's process list.
 
 Then [`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) runs on the server and:
 

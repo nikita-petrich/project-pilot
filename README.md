@@ -242,8 +242,8 @@ a caption is still rule-checked as usual.
 
 Pushing to `main` deploys to the VPS: GitHub Actions runs the quality gate, builds
 the image into GHCR, and the server pulls it over SSH. The server holds no
-configuration of its own — the app's `.env` comes from a secret in the `prod`
-environment and is written on every deploy. Setup, secrets, and rollback are in
+configuration of its own — the app's `.env` is rendered from the secrets of the
+`prod` environment and written on every deploy. Setup, secrets, and rollback are in
 [`docs/deployment.md`](docs/deployment.md).
 
 To build and run on the host instead, from a checkout:

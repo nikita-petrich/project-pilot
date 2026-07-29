@@ -110,8 +110,9 @@ deploys to the VPS at `/opt/stacks/project-pilot` over SSH
 (`.github/workflows/deploy.yml`, see `docs/deployment.md`). The same gate runs on
 branches and PRs via `.github/workflows/ci.yml`. `profile/profile.md` and the CVs in
 `cv/` are versioned and ride inside the image, so updating either is a commit; the
-app's `.env` comes from the `PROJECT_PILOT_ENV` secret in the `prod` environment and
-is written to the server on every deploy. The server holds no configuration of its own.
+app's `.env` is rendered from the secrets and variables of the `prod` GitHub
+environment and written to the server on every deploy, so adding a setting is a new
+secret rather than a workflow change. The server holds no configuration of its own.
 
 Testing is ON: the `Test: uv run pytest` command above is the opt-in switch, so a
 build step that adds logic-bearing code ships a passing test in the same diff and

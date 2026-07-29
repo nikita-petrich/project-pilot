@@ -115,20 +115,22 @@ jobs:
 
       - name: Install .env from the prod environment
         env:
-          APP_ENV: ${{ secrets.PROJECT_PILOT_ENV }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+          VARS_JSON: ${{ toJSON(vars) }}
         run: |
           set -euo pipefail
-          test -n "$APP_ENV" || {
-            echo "::error::secret PROJECT_PILOT_ENV is not set in the prod environment"
-            exit 1
-          }
-          # Piped over stdin and never echoed, so the values stay out of the job log
-          # and out of the server's process list. GitHub is the source of truth here:
-          # this overwrites the file on every deploy, so edits made on the server are
-          # replaced rather than merged.
-          printf '%s\n' "$APP_ENV" \
-            | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
-                "umask 077 && cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'"
+          # Rendered to a temp file first: piping python straight into ssh would
+          # truncate a working .env to nothing whenever the render fails.
+          rendered="$RUNNER_TEMP/project-pilot.env"
+          trap 'rm -f "$rendered"' EXIT
+          python3 deploy/render-env.py > "$rendered"
+
+          # Fed over stdin, so values reach neither the job log nor the server's
+          # process list. GitHub is the source of truth: this overwrites the file on
+          # every deploy, so edits made on the server are replaced rather than merged.
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+              "umask 077 && cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'" \
+              < "$rendered"
 
       - name: Pull image and restart the stack
         env:
