@@ -85,7 +85,7 @@ class Settings(BaseSettings):
     # update. A path that does not exist simply yields no attachment (see
     # CvAttachments.for_language), which is why the English default is harmless
     # until that file is added.
-    cv_de_path: str = "cv/lebenslauf-de.pdf"
+    cv_de_path: str = "cv/cv-de.pdf"
     cv_en_path: str = "cv/cv-en.pdf"
 
     scan_interval_min: int = 15

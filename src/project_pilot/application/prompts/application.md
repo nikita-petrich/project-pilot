@@ -31,7 +31,7 @@ des Erstgespräch-Links.
 
 LINK-KOPPLUNG (HARTE REGEL):
 
-- Der Erstgespräch-Link steht im Profil-Abschnitt „Kontakt & Signatur" als
+- Der Erstgespräch-Link steht im Profil-Abschnitt „Contact & Signature" als
   Notion-Calendar-Buchungslink (`https://calendar.notion.so/…`) — je einer für
   Deutsch und Englisch
 - Bewerbungssprache Deutsch → verwende die deutsche Zeile (`CTA German`, alternativ
@@ -433,7 +433,7 @@ unter der Trennlinie.
 
 Übernimm Zeilenfolge, Leerzeilen und Beschriftungen unverändert aus der folgenden
 Vorlage — nur die spitzen Klammern werden mit den Werten aus dem Profil-Abschnitt
-„Kontakt & Signatur" gefüllt. Der Block beginnt am linken Rand, ohne Einrückung.
+„Contact & Signature" gefüllt. Der Block beginnt am linken Rand, ohne Einrückung.
 
 Deutsch:
 
@@ -443,8 +443,8 @@ Viele Grüße
 <Vorname Nachname>
 <Titel>
 
-Tel.: <Telefon>
-E-Mail: <E-Mail>
+Tel.: <Phone>
+E-Mail: <Email>
 Web: <Web-URL>
 LinkedIn: <LinkedIn-URL>
 GitHub: <GitHub-URL>
@@ -452,8 +452,8 @@ GitHub: <GitHub-URL>
 Erstgespräch buchen (30 Min.):
 <deutscher Buchungslink>
 
-<Ort>
-USt-IdNr.: <USt-IdNr.>
+<Location German>
+USt-IdNr.: <VAT ID>
 
 Englisch:
 
@@ -463,8 +463,8 @@ Best regards
 <Vorname Nachname>
 <Titel>
 
-Phone: <Telefon>
-E-mail: <E-Mail>
+Phone: <Phone>
+E-mail: <Email>
 Web: <Web-URL>
 LinkedIn: <LinkedIn-URL>
 GitHub: <GitHub-URL>
@@ -472,22 +472,23 @@ GitHub: <GitHub-URL>
 Book an intro call (30 min):
 <englischer Buchungslink>
 
-<Location>
-VAT ID: <USt-IdNr.>
+<Location English>
+VAT ID: <VAT ID>
 
 REGELN ZUM SIGNATURBLOCK:
 
 - Die Beschriftungen stammen aus der Vorlage, nicht aus dem Profil: schreibt das
-  Profil „Telefon:", wird trotzdem „Tel.:" (Deutsch) bzw. „Phone:" (Englisch)
+  Profil „Phone:", wird trotzdem „Tel.:" (Deutsch) bzw. „Phone:" (Englisch)
   ausgegeben. Der Wert selbst kommt unverändert aus dem Profil.
 - Web, LinkedIn und GitHub als vollständige URL mit `https://` ausgeben; fehlt das
   Schema im Profil, ergänze es — die Adresse selbst bleibt unverändert
 - Der Buchungslink ist derselbe wie im Abschluss-Satz und gehört zur
   Bewerbungssprache (Deutsch → `CTA German`, Englisch → `CTA English`). Er steht
   allein in der Zeile unter der Beschriftung, ohne Klammern, ohne Markdown-Link.
-- Ort: Deutsch die Profil-Zeile `Ort`, Englisch die Profil-Zeile `Location`; gibt
+- Ort: Deutsch die Profil-Zeile `Location German`, Englisch die Profil-Zeile
+  `Location English`; gibt
   es nur eine der beiden, verwende sie unverändert in beiden Sprachen
-- Fehlt ein Wert im Profil (z. B. `Ort` oder `USt-IdNr.`), lasse die komplette
+- Fehlt ein Wert im Profil (z. B. `Location German` oder `VAT ID`), lasse die komplette
   Zeile weg — niemals eine Beschriftung mit leerem Wert, Platzhalter, spitzen
   Klammern oder erfundenen Daten ausgeben
 - Übernimm **keine** Meta-/Auswahl-Texte aus dem Profil (Zeilen mit „CTA",

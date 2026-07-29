@@ -39,11 +39,11 @@ Replace the file and push — there is no second mechanism and nothing to do on 
 server:
 
 ```sh
-cp ~/new-cv.pdf cv/lebenslauf-de.pdf
+cp ~/new-cv.pdf cv/cv-de.pdf
 git commit -am "chore: update the German CV" && git push
 ```
 
-`CV_DE_PATH` and `CV_EN_PATH` default to `cv/lebenslauf-de.pdf` and `cv/cv-en.pdf`,
+`CV_DE_PATH` and `CV_EN_PATH` default to `cv/cv-de.pdf` and `cv/cv-en.pdf`,
 so keeping the filenames means never touching config. A path that does not exist
 just means no attachment, which is why `cv/cv-en.pdf` being absent is harmless until
 you add it.

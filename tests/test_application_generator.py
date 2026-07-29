@@ -1,6 +1,8 @@
 """Tests for the application draft generator (retry, failure surfacing, prompts)."""
 
+import re
 from collections.abc import Sequence
+from pathlib import Path
 
 import pytest
 
@@ -121,12 +123,44 @@ def test_prompt_carries_the_signature_template_in_both_languages() -> None:
     assert lines.count("-- ") == 2  # one per language, trailing space intact
     assert "--" not in lines
 
+    # The output labels stay language-specific; the <...> placeholders name the keys
+    # the prompt looks up in the profile's "Contact & Signature" block.
     for greeting, phone, booking, vat in (
-        ("Viele Grüße", "Tel.: <Telefon>", "Erstgespräch buchen (30 Min.):", "USt-IdNr.: "),
-        ("Best regards", "Phone: <Telefon>", "Book an intro call (30 min):", "VAT ID: "),
+        ("Viele Grüße", "Tel.: <Phone>", "Erstgespräch buchen (30 Min.):", "USt-IdNr.: "),
+        ("Best regards", "Phone: <Phone>", "Book an intro call (30 min):", "VAT ID: "),
     ):
         # The greeting sits inside the signature block, right under the separator.
         assert lines[lines.index(greeting) - 1] == "-- "
         for expected in (phone, booking):
             assert expected in lines
         assert any(line.startswith(vat) for line in lines)
+
+
+def _signature_keys(profile_path: Path) -> set[str]:
+    """The ``Label:`` keys offered by a profile's "Contact & Signature" block."""
+    _, _, block = profile_path.read_text(encoding="utf-8").partition("## Contact & Signature")
+    assert block, f"{profile_path} has no 'Contact & Signature' section"
+    return set(re.findall(r"^([A-Za-z][A-Za-z .\-]*?):\s", block, re.MULTILINE))
+
+
+# The contract between the prompt and every profile file: the prompt fills these by
+# looking the label up in the profile, and only prose connects the two ends.
+SIGNATURE_KEYS = ("Phone", "Email", "Web", "LinkedIn", "GitHub", "VAT ID")
+LANGUAGE_KEYS = ("Location German", "Location English", "CTA German", "CTA English")
+
+
+@pytest.mark.parametrize(
+    "profile", [Path("profile/profile.md"), Path("profile/profile.example.md")]
+)
+def test_every_profile_defines_the_keys_the_signature_needs(profile: Path) -> None:
+    """A renamed label would otherwise drop its signature line without any error."""
+    assert set(SIGNATURE_KEYS + LANGUAGE_KEYS) <= _signature_keys(profile)
+
+
+def test_prompt_looks_up_the_signature_keys_by_name() -> None:
+    """The other half of the contract: the prompt must ask for those same keys."""
+    prompt = load_application_prompt()
+    for key in ("Phone", "Email", "VAT ID", "Location German", "Location English"):
+        assert f"<{key}>" in prompt, f"prompt no longer fills <{key}>"
+    for key in ("CTA German", "CTA English"):
+        assert f"`{key}`" in prompt, f"prompt no longer selects `{key}`"

@@ -203,7 +203,7 @@ def test_cv_attachments_default_to_the_repo_files(monkeypatch: pytest.MonkeyPatc
     monkeypatch.delenv("CV_EN_PATH", raising=False)
     cvs = Settings().cv_attachments()
     # Unset means "the CVs committed under cv/", so updating one is a file swap.
-    assert cvs.de == Path("cv/lebenslauf-de.pdf")
+    assert cvs.de == Path("cv/cv-de.pdf")
     assert cvs.en == Path("cv/cv-en.pdf")
 
 

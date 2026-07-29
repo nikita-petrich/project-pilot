@@ -1,138 +1,138 @@
-# Profil (LLM-Matching & Bewerbungen)
+# Profile (LLM matching & applications)
 
-> Einzige Quelle für Matcher UND Bewerbungs-Generator. Im Repo versioniert –
-> Änderungen greifen mit dem nächsten Deploy. Stand: Juli 2026.
+> Single source for BOTH the matcher and the application generator. Versioned in
+> the repo — edits take effect with the next deploy. As of: July 2026.
 
-## Wer ich bin
+## Who I am
 
-Freiberuflicher Senior Full-Stack & AI Engineer, 7+ Jahre Erfahrung. Schwerpunkt KI:
-LLM-Integration, RAG und KI-gestützte Automatisierung bis in den stabilen
-Produktivbetrieb – von Architektur über Integration bis Betrieb. Ebenso klassische
-Full-Stack-Entwicklung: komplette Anwendung, reines Backend (NestJS, Node.js,
-FastAPI) oder reines Frontend (Next.js, React, Angular). Robuste APIs, klar
-geschnittene Architektur (Clean Architecture, Microservices), getesteter Code;
-Datenschutz von Beginn an (DSGVO-konform, Secure by Design, EU-Infrastruktur).
-Konsequenter Einsatz von Agentic-Coding-Tools (Claude Code, Cursor, Code Rabbit).
-Branchen: LegalTech/GovTech, HealthTech, E-Commerce/Handel, EdTech, Logistik, IoT.
-Aktuell auch Gründer & CTO eines eigenen LegalTech-SaaS (BESCHEIDKLAR).
+Freelance Senior Full-Stack & AI Engineer, 7+ years of experience. AI focus:
+LLM integration, RAG, and AI-assisted automation all the way into stable production
+operation — from architecture through integration to running it. Equally at home in
+classic full-stack work: a complete application, backend only (NestJS, Node.js,
+FastAPI), or frontend only (Next.js, React, Angular). Robust APIs, cleanly cut
+architecture (Clean Architecture, microservices), tested code; data protection from
+the start (GDPR-compliant, secure by design, EU infrastructure). Consistent use of
+agentic coding tools (Claude Code, Cursor, Code Rabbit). Industries: LegalTech/GovTech,
+HealthTech, e-commerce/retail, EdTech, logistics, IoT. Currently also founder & CTO of
+my own LegalTech SaaS (BESCHEIDKLAR).
 
-## Verfügbarkeit & Rahmen
+## Availability & terms
 
-- **Ort:** Remote · München (max. 1–2 Tage onsite)
-- **Verfügbar:** ab sofort · Vollzeit (volle Kapazität); Arbeitnehmerüberlassung möglich
-- **Erfahrung:** 7+ Jahre · IHK-Fachinformatiker (Anwendungsentwicklung)
-- **Satz:** auf Anfrage
-- **Sprachen:** Deutsch (Muttersprache), Englisch (B2, US-/EU-Remote-Erfahrung)
-- **Arbeitsweise:** ergebnisorientiert, eigenverantwortlich, autonom/asynchron, klare Kommunikation (DE/EN)
+- **Location:** remote · Munich (max. 1–2 days on-site)
+- **Available:** immediately · full-time (full capacity); employee leasing possible
+- **Experience:** 7+ years · IHK-certified IT specialist (application development)
+- **Rate:** on request
+- **Languages:** German (native), English (B2, US/EU remote experience)
+- **Working style:** results-driven, self-directed, autonomous/asynchronous, clear communication (DE/EN)
 
-## Schwerpunkt
+## Focus
 
-LLM-Integration · RAG · KI-gestützte Automatisierung · Agentic Coding · TypeScript ·
+LLM integration · RAG · AI-assisted automation · agentic coding · TypeScript ·
 Python · NestJS/Node.js/FastAPI · Next.js/React/Angular · PostgreSQL · Clean
-Architecture · Microservices · CI/CD · Docker · DSGVO-konforme KI-Architektur
+Architecture · microservices · CI/CD · Docker · GDPR-compliant AI architecture
 
-## Skills / Tech-Stack
+## Skills / tech stack
 
-> In Bewerbungen nur Technologien nennen, die *sowohl* in der Projektbeschreibung
-> *als auch* hier vorkommen.
+> In applications, only name technologies that appear *both* in the listing
+> *and* here.
 
-- **KI & LLM:** LLM-Integration, RAG, Prompt Engineering, Embeddings, pgvector, semantische Suche, Dokumentenanalyse/OCR, LangChain, OpenAI API, Azure OpenAI, Anthropic Claude API, Hugging Face, Ollama, Agentic Software Engineering (Claude Code, Cursor AI, Code Rabbit)
-- **Backend & Sprachen:** TypeScript, Python, JavaScript, C#, Node.js, NestJS, Express.js, Fastify, FastAPI, Flask, ASP.NET Core/.NET, GraphQL, REST/OpenAPI, WebSockets, Webhooks, Microservices, Message Queues (BullMQ, RabbitMQ), SQL, Bash
-- **Frontend:** React, Next.js, Angular, React Native, Ionic, Redux, NgRx, RxJS, TanStack Query, React Hook Form, Zod, Tailwind CSS, shadcn/ui, Material UI, Fluent UI, SCSS, PWA, Responsive Design, WCAG, i18n, Storybook
-- **Daten:** PostgreSQL, MSSQL, MariaDB/MySQL, MongoDB, SQLite, Redis, pgvector, Prisma, MikroORM, TypeORM, Drizzle, Entity Framework Core
-- **DevOps & Cloud:** Docker/Compose, CI/CD, GitHub Actions, GitLab CI, Azure Pipelines, Jenkins, Nginx, Sentry, Linux, Self-Hosting, Azure, GCP, AWS, Hetzner, IONOS, Digital Ocean, Vercel, Supabase, Firebase
-- **Auth & Security:** JWT, OAuth 2.0, SSO, better-auth, RBAC, SSL/TLS, E2E-Verschlüsselung, O365 Identity, Secure by Design
-- **Architektur & Prinzipien:** Clean Architecture, Clean Code, SOLID, DDD, Event-Driven Architecture, Monorepos (Nx/Turborepo), Systemintegration, Plattform-Migration, Resilience-Patterns (Retry, Idempotenz, Caching), Type Safety
-- **Testing & QA:** Jest, Vitest, Cypress, Playwright, React Testing Library, Postman, E2E- & Unit-Testing
-- **Compliance:** DSGVO by Design, AVV (Art. 28), EU-Hosting (Hetzner/IONOS), EU AI Act, GoBD, RDG
-- **Methodik/Tooling:** Scrum/Agile, Kanban, Scrumban, TDD, Code Reviews, Observability; Git, GitHub, GitLab, Azure DevOps, Jira, Linear, Figma, Amplitude
+- **AI & LLM:** LLM integration, RAG, prompt engineering, embeddings, pgvector, semantic search, document analysis/OCR, LangChain, OpenAI API, Azure OpenAI, Anthropic Claude API, Hugging Face, Ollama, agentic software engineering (Claude Code, Cursor AI, Code Rabbit)
+- **Backend & languages:** TypeScript, Python, JavaScript, C#, Node.js, NestJS, Express.js, Fastify, FastAPI, Flask, ASP.NET Core/.NET, GraphQL, REST/OpenAPI, WebSockets, webhooks, microservices, message queues (BullMQ, RabbitMQ), SQL, Bash
+- **Frontend:** React, Next.js, Angular, React Native, Ionic, Redux, NgRx, RxJS, TanStack Query, React Hook Form, Zod, Tailwind CSS, shadcn/ui, Material UI, Fluent UI, SCSS, PWA, responsive design, WCAG, i18n, Storybook
+- **Data:** PostgreSQL, MSSQL, MariaDB/MySQL, MongoDB, SQLite, Redis, pgvector, Prisma, MikroORM, TypeORM, Drizzle, Entity Framework Core
+- **DevOps & cloud:** Docker/Compose, CI/CD, GitHub Actions, GitLab CI, Azure Pipelines, Jenkins, Nginx, Sentry, Linux, self-hosting, Azure, GCP, AWS, Hetzner, IONOS, Digital Ocean, Vercel, Supabase, Firebase
+- **Auth & security:** JWT, OAuth 2.0, SSO, better-auth, RBAC, SSL/TLS, end-to-end encryption, O365 Identity, secure by design
+- **Architecture & principles:** Clean Architecture, clean code, SOLID, DDD, event-driven architecture, monorepos (Nx/Turborepo), systems integration, platform migration, resilience patterns (retry, idempotency, caching), type safety
+- **Testing & QA:** Jest, Vitest, Cypress, Playwright, React Testing Library, Postman, E2E & unit testing
+- **Compliance:** GDPR by design, DPA (Art. 28), EU hosting (Hetzner/IONOS), EU AI Act, GoBD, RDG
+- **Method/tooling:** Scrum/agile, Kanban, Scrumban, TDD, code reviews, observability; Git, GitHub, GitLab, Azure DevOps, Jira, Linear, Figma, Amplitude
 
 ## Desired projects
 
-- KI-/LLM-lastige Projekte: LLM-Features in Produktion, RAG-Systeme, Agentic-Workflows, KI-Automatisierung
-- Full-Stack- oder Backend-Rollen mit modernem TypeScript-Stack (Next.js/NestJS/React)
-- LegalTech, HealthTech, GovTech, E-Commerce, EdTech, Logistik – branchenoffen, Präferenz für Projekte mit regulatorischem/gesellschaftlichem Anspruch
-- Remote-first, gelegentlich Onsite in/nahe München (max. 1–2 Tage)
-- Sole-Developer/CTO-Verantwortung wie auch Mitarbeit in größeren agilen Teams
-- Mittel- bis langfristig bevorzugt; Teilzeit-/Wartungsmandate möglich
-- Rollen mit technischer Verantwortung/Architekturentscheidung, nicht nur Umsetzung
+- AI/LLM-heavy projects: LLM features in production, RAG systems, agentic workflows, AI automation
+- Full-stack or backend roles on a modern TypeScript stack (Next.js/NestJS/React)
+- LegalTech, HealthTech, GovTech, e-commerce, EdTech, logistics — open to any industry, preference for projects with a regulatory or societal dimension
+- Remote-first, occasionally on-site in or near Munich (max. 1–2 days)
+- Sole-developer/CTO ownership as well as contributing within larger agile teams
+- Medium to long term preferred; part-time and maintenance engagements possible
+- Roles with technical ownership and architectural say, not implementation only
 
 ## No-gos
 
-Kontext entscheidet – Migration *weg* von einer Technologie, eine Rolle an einem
-anderen Layer (z. B. Frontend bei X-Backend) oder Integration aus einem modernen
-Stack sind ok. Match an der Rolle, nicht am bloßen Begriff.
+Context decides — migrating *away* from a technology, a role at a different layer
+(e.g. frontend against an X backend), or integration from a modern stack are all
+fine. Match on the role, not on the bare keyword.
 
-- **Java** – nicht als eigene Entwicklungssprache (Frontend mit Java-Backend ok)
-- **PHP** (inkl. Laravel/Symfony) – außer Migration weg davon
-- **WordPress** – außer Ablösung/Migration zu einem modernen Stack
-- **Django** – außer Migration weg davon (Python-Backend gerne mit FastAPI/Flask)
-- **SAP** (ABAP / SAP-Eigenentwicklung) – außer reine Anbindung aus modernem Stack
+- **Java** — not as my own development language (frontend against a Java backend is fine)
+- **PHP** (incl. Laravel/Symfony) — except migrating away from it
+- **WordPress** — except replacing/migrating it to a modern stack
+- **Django** — except migrating away from it (Python backend welcome with FastAPI/Flask)
+- **SAP** (ABAP / SAP custom development) — except plain integration from a modern stack
 
-## Referenzprojekte
+## Reference projects
 
-> Für Bewerbungen: max. 4 nach Relevanz wählen, dann chronologisch (neueste zuerst).
+> For applications: pick at most 4 by relevance, then order chronologically (newest first).
 
-### 01 · BESCHEIDKLAR — KI-LegalTech-SaaS
-Gründer & CTO · LegalTech/GovTech · 04/2025–heute · Niedersachsen/Remote · Solo (Eigenprodukt) · bescheidklar.de
-- Zweiseitige SaaS mit KI-Vorprüfung von Bescheiden/Kündigungen (Azure OpenAI, RAG) und DSGVO-konformer Lead-Übergabe an Kanzleien; Gesamtverantwortung Architektur, EU-Hosting, Compliance (EU AI Act, DSGVO, RDG). Ziel: bis zu 10.000 Vorprüfungen/Monat, bis zu 80 % weniger manuelle Fallannahme.
+### 01 · BESCHEIDKLAR — AI LegalTech SaaS
+Founder & CTO · LegalTech/GovTech · 04/2025–present · Lower Saxony/remote · solo (own product) · bescheidklar.de
+- Two-sided SaaS with AI pre-assessment of official decisions and terminations (Azure OpenAI, RAG) and GDPR-compliant lead handover to law firms; end-to-end ownership of architecture, EU hosting, and compliance (EU AI Act, GDPR, RDG). Target: up to 10,000 pre-assessments/month, up to 80% less manual case intake.
 - Tech: TypeScript, Python, Next.js, React, FastAPI, OpenAI API, Azure OpenAI, RAG, pgvector, LangChain, PostgreSQL, Redis, Docker, GitHub Actions, Hetzner, Clean Architecture
 
-### 02 · Manifest OS — KI-Einwanderungsplattform
-Full-Stack (KI-Features) · LegalTech/Immigration · 12/2025–04/2026 · New York/Remote · ~20 Engineers, Englisch, Scrum · manifestlaw.com
-- Produktive KI-Features (Bluedot → Webhook → BullMQ → OpenAI, resilient mit Retry/Idempotenz), KI-Evidence-Verarbeitung, Portal-Konsolidierung (B2B/B2C/Lawyer/Ops → „B2X") inkl. Fullstack-Migration, Event-Tracking (Amplitude). Plattform (~60 Mio. USD Bewertung) mit 3.000+ Kunden und 150+ Corporate-Programmen; bis zu 15 % höhere Genehmigungsraten (Team-Ergebnis).
-- Tech: TypeScript, Python, NestJS, Next.js, React, BullMQ, OpenAI API, Anthropic Claude API, RAG, PostgreSQL, MikroORM, Drizzle, better-auth, GCP, Docker, Playwright, Event-Driven Architecture
+### 02 · Manifest OS — AI immigration platform
+Full-stack (AI features) · LegalTech/immigration · 12/2025–04/2026 · New York/remote · ~20 engineers, English, Scrum · manifestlaw.com
+- Production AI features (Bluedot → webhook → BullMQ → OpenAI, resilient with retry/idempotency), AI evidence processing, portal consolidation (B2B/B2C/lawyer/ops → "B2X") including full-stack migration, event tracking (Amplitude). Platform (~USD 60M valuation) with 3,000+ customers and 150+ corporate programs; up to 15% higher approval rates (team result).
+- Tech: TypeScript, Python, NestJS, Next.js, React, BullMQ, OpenAI API, Anthropic Claude API, RAG, PostgreSQL, MikroORM, Drizzle, better-auth, GCP, Docker, Playwright, event-driven architecture
 
-### 03 · AITOI — Interaktives IoT-Spielzeug (MVP)
-Frontend Engineer · IoT/Consumer Electronics · 08/2025–09/2025 · Frankfurt/Remote · interdisziplinäres Team inkl. Hardware
-- IoT-WLAN-Onboarding per QR (Device-Pairing, Fehlerbehandlung), plattformunabhängige PWA (Next.js), Supabase für Auth/Datenhaltung/Realtime (RLS). Voll funktionsfähiges MVP-Frontend in ~1 Monat, eigenständig von Konzept bis Demo.
-- Tech: TypeScript, Next.js, React, PWA, Supabase (Auth/Realtime/RLS), WebSockets, Zod, TanStack Query, Tailwind, shadcn/ui, Docker
+### 03 · AITOI — interactive IoT toy (MVP)
+Frontend engineer · IoT/consumer electronics · 08/2025–09/2025 · Frankfurt/remote · interdisciplinary team incl. hardware
+- IoT Wi-Fi onboarding via QR (device pairing, error handling), platform-independent PWA (Next.js), Supabase for auth/storage/realtime (RLS). Fully working MVP frontend in ~1 month, owned end to end from concept to demo.
+- Tech: TypeScript, Next.js, React, PWA, Supabase (auth/realtime/RLS), WebSockets, Zod, TanStack Query, Tailwind, shadcn/ui, Docker
 
-### 04 · DiNo — Digitales Notariat
-Frontend Engineer · LegalTech/Notariat · 01/2025–05/2025 · Oranienburg/Remote · 2–4 Personen, Scrumban · digitales-notariat.de
-- Frontend für Mandanten-/Notarportal, digitale Vorgangs-/Aktenverwaltung, sichere Dokumentenbereitstellung; responsive Oberflächen (React, Material UI). Laut Anbieter bis zu 70 % weniger telefonische Rückfragen, Rechnungen bis zu 30 Tage früher bezahlt.
+### 04 · DiNo — digital notary office
+Frontend engineer · LegalTech/notary · 01/2025–05/2025 · Oranienburg/remote · 2–4 people, Scrumban · digitales-notariat.de
+- Frontend for the client and notary portal, digital case and file management, secure document delivery; responsive interfaces (React, Material UI). Per the vendor: up to 70% fewer phone queries, invoices paid up to 30 days earlier.
 - Tech: TypeScript, React, Redux, Material UI, Python, Flask, REST/OpenAPI, MariaDB, JWT/OAuth 2.0, RBAC, Docker, GitLab CI
 
-### 05 · AccountingOS — GoBD-Buchhaltung & Lager
-Sole Developer (Full-Stack & AI) · Handel & Kfz-Gewerbe (Warenwirtschaft) · 01/2024–12/2024 · Kunde: HD Autoservice · Salzgitter/Remote · github.com/nikita-petrich/accounting-os
-- GoBD-konformes Buchhaltungs-/Lagersystem (Clean Architecture); resilienter Daten-Sync-Service für Lieferanten-Kataloge (bis 20 Mio. CSV-Zeilen: Queue, Caching, Retry, Dedup); Lager ↔ Rechnung gekoppelt; RBAC (better-auth). Spart bis zu 40 Std./Monat, bis zu 50 % weniger Routineaufwand.
+### 05 · AccountingOS — GoBD accounting & inventory
+Sole developer (full-stack & AI) · retail & automotive trade (ERP) · 01/2024–12/2024 · client: HD Autoservice · Salzgitter/remote · github.com/nikita-petrich/accounting-os
+- GoBD-compliant accounting and inventory system (Clean Architecture); resilient data sync service for supplier catalogues (up to 20M CSV rows: queue, caching, retry, dedup); inventory coupled to invoicing; RBAC (better-auth). Saves up to 40 hours/month, up to 50% less routine effort.
 - Tech: TypeScript, Node.js, NestJS, Next.js, React, GraphQL, REST, MikroORM, MariaDB, PostgreSQL, Redis, better-auth, Docker, GitHub Actions, Hetzner
 
-### 06 · LadeTrans — LKW-Tourverwaltungssystem
-Sole Developer (Full-Stack & AI) · Logistik & Transport · 02/2021–05/2023 · Kunde: CDH Stephanus · Bremen/Remote · cdh-stephanus.org
-- Tourenverwaltung/-optimierung, automatisierte PDF-/DOCX-Generierung, revisionssichere digitale Archivführung, container-basiertes Self-Hosting (Docker, Nginx); typsichere Backend-Services (NestJS). Bis zu 1.000 Std./Jahr gespart; Transportgenauigkeit bis +25 %, Logistikeffizienz bis +30 %.
+### 06 · LadeTrans — truck tour management system
+Sole developer (full-stack & AI) · logistics & transport · 02/2021–05/2023 · client: CDH Stephanus · Bremen/remote · cdh-stephanus.org
+- Tour management and optimization, automated PDF/DOCX generation, audit-proof digital archiving, container-based self-hosting (Docker, Nginx); type-safe backend services (NestJS). Up to 1,000 hours/year saved; transport accuracy up to +25%, logistics efficiency up to +30%.
 - Tech: TypeScript, Node.js, NestJS, Next.js, React, PostgreSQL, MikroORM, better-auth, JWT/OAuth 2.0, Docker, GitHub Actions, Nginx
 
-### 07 · XU Navigator — Enterprise-Lernplattform
-Full-Stack Engineer · EdTech/E-Learning · 05/2020–02/2023 · Bremen/Remote · 5–10 Personen, Scrum · xu.de
-- Skalierbare Microservice-Lernplattform für Konzerne (**Daimler, VW, ThyssenKrupp**): mandantenspezifische Kursinhalte, Lernfortschritt + automatische Zertifikate; Backend (NestJS, GraphQL), responsive Angular-Oberflächen (Angular Material, NgRx), Bereitstellung über Azure.
+### 07 · XU Navigator — enterprise learning platform
+Full-stack engineer · EdTech/e-learning · 05/2020–02/2023 · Bremen/remote · 5–10 people, Scrum · xu.de
+- Scalable microservice learning platform for large corporates (**Daimler, VW, ThyssenKrupp**): tenant-specific course content, learning progress plus automatic certificates; backend (NestJS, GraphQL), responsive Angular interfaces (Angular Material, NgRx), delivered on Azure.
 - Tech: TypeScript, Angular, NestJS, Express.js, GraphQL, MongoDB (Mongoose), NgRx, RxJS, Azure, Azure DevOps, Docker, SSO/RBAC
 
-### 08 · Medizingeräte-Managementsystem
-Full-Stack Engineer · HealthTech/Medizintechnik · 01/2019–05/2020 · Deutschland · Vor Ort/Hybrid · Krankenhauskette (anonymisiert), Scrumban
-- Mandantenfähige Verwaltung medizinischer Geräte über mehrere Krankenhäuser: Stammdaten, Wartungshistorie, Dokumentenmanagement, Störungserfassung; typsichere REST-API (ASP.NET Core), EF Core/MSSQL, responsive React-UI (Fluent UI), Login via O365 Identity.
+### 08 · Medical device management system
+Full-stack engineer · HealthTech/medical technology · 01/2019–05/2020 · Germany · on-site/hybrid · hospital group (anonymized), Scrumban
+- Multi-tenant management of medical devices across several hospitals: master data, maintenance history, document management, fault reporting; type-safe REST API (ASP.NET Core), EF Core/MSSQL, responsive React UI (Fluent UI), login via O365 Identity.
 - Tech: C#, .NET Core, ASP.NET Core Web API, Entity Framework Core, MSSQL, TypeScript, React, Fluent UI, Redux, JWT/OAuth 2.0, O365 Identity, Azure DevOps, Docker
 
-## Kontakt & Signatur
+## Contact & Signature
 
-> Werte-Quelle für den Signaturblock der Bewerbung. Das Layout (Reihenfolge,
-> Leerzeilen, Trennlinie `-- `, Beschriftungen, DE/EN) steht im Prompt unter
-> „Grußformel und Signatur"; hier stehen ausschließlich die Werte.
+> Value source for the application's signature block. The layout (order, blank
+> lines, the `-- ` separator, labels, DE/EN) lives in the prompt under
+> "Grußformel und Signatur"; this section holds the values only.
 >
-> `Ort` wird in deutschen, `Location` in englischen Bewerbungen ausgegeben. Die
-> beiden CTA-Zeilen sind die Notion-Calendar-Buchungslinks; der Generator wählt
-> den zur Bewerbungssprache passenden und setzt ihn in den Abschlusssatz, in den
-> Signaturblock und in die LinkedIn-Nachricht.
+> `Location German` is used in German applications, `Location English` in English
+> ones. The two CTA lines are the Notion Calendar booking links; the generator
+> picks the one matching the application language and places it in the closing
+> sentence, the signature block, and the LinkedIn message.
 
 Nikita Petrich
 Senior Full-Stack & AI Engineer
-Telefon: +49 1567 9088678
-E-Mail: n.petrich@sequenz.io
+Phone: +49 1567 9088678
+Email: n.petrich@sequenz.io
 Web: https://sequenz.io
 LinkedIn: https://linkedin.com/in/nikita-petrich
 GitHub: https://github.com/nikita-petrich
-Ort: München, Deutschland
-Location: Munich, Germany
-USt-IdNr.: DE368159064
+Location German: München, Deutschland
+Location English: Munich, Germany
+VAT ID: DE368159064
 CTA German: https://calendar.notion.so/meet/petrichnikita/erstgespraech-30-min
 CTA English: https://calendar.notion.so/meet/petrichnikita/initial-consultation-30-min

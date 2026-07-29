@@ -49,15 +49,16 @@ The two profile files feed the matcher, the hard rules, and the application draf
   no-gos, reference projects, and the application signature. It is **versioned
   on purpose** — this repo is a public portfolio piece, and it holds the same CV
   and contact block that goes out to clients anyway. Real secrets stay in `.env`.
-  Its `Kontakt & Signatur` block holds the values for the e-mail signature (name,
-  title, `Telefon`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, plus `Ort` / `Location`
-  and `USt-IdNr.`); the layout itself lives in the prompt. It ends with the two
+  Its `Contact & Signature` block holds the values for the e-mail signature (name,
+  title, `Phone`, `Email`, `Web`, `LinkedIn`, `GitHub`, plus `Location German` /
+  `Location English` and `VAT ID`); the layout itself lives in the prompt, which
+  looks these keys up by name — rename one there and here together. It ends with the two
   Notion Calendar booking links (`CTA German` / `CTA English`); the application
   generator picks the one matching the application language for the closing
   sentence, the signature, and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 - `cv/*.pdf` the CVs attached to application e-mails. `CV_DE_PATH` and `CV_EN_PATH`
-  default to `cv/lebenslauf-de.pdf` and `cv/cv-en.pdf`, so updating a CV is replacing
+  default to `cv/cv-de.pdf` and `cv/cv-en.pdf`, so updating a CV is replacing
   the file and pushing. Keep them a few MB at most — they go out as e-mail
   attachments, and base64 adds about a third on the wire.
 
