@@ -19,8 +19,10 @@ call.
 
 ## What lives where
 
-Everything the app needs is versioned and rides inside the image. The server owns
-exactly one file, because secrets are the one thing that cannot go in a public repo.
+The server owns nothing. Everything the app needs is either versioned in the repo or
+stored in the `prod` environment on GitHub, and a deploy puts it in place. A fresh
+VPS needs Docker and an empty directory — nothing is hand-placed and nothing has to
+be restored after a rebuild.
 
 | File | Owner | Notes |
 |---|---|---|
@@ -30,8 +32,11 @@ exactly one file, because secrets are the one thing that cannot go in a public r
 | `profile/profile.md` | repo | matching profile and signature block |
 | `profile/constraints.yaml` | repo | deterministic hard rules |
 | `cv/*.pdf` | repo | attached to application e-mails |
-| `.env` | **server only** | secrets; never touched by a deploy |
+| `.env` | GitHub secret `PROJECT_PILOT_ENV` | written to the server on every deploy |
 | database | `pgdata` volume | survives deploys |
+
+Because the deploy writes `.env`, editing it on the server is pointless: the next
+deploy replaces it. Change the secret instead and re-run the workflow.
 
 ## Updating the profile or a CV
 
@@ -56,38 +61,64 @@ its images before committing.
 
 ## One-time server setup
 
-Docker with Compose v2, and a user that can reach the Docker socket.
+Docker with Compose v2, an empty directory, and a user that can reach the Docker
+socket. That is the whole server side.
 
 ```sh
-sudo mkdir -p /opt/stack/project-pilot
-sudo chown "$USER:$USER" /opt/stack/project-pilot
+sudo mkdir -p /opt/stacks/project-pilot
+sudo chown "$USER:$USER" /opt/stacks/project-pilot
 sudo usermod -aG docker "$USER"     # log out and back in for this to take effect
+
+docker compose version              # must work without sudo
 ```
 
-Then the one server-owned file:
+### Networks
 
-```sh
-cd /opt/stack/project-pilot
-# Copy .env.example from the repo and fill in the real values. Leave DATABASE_URL
-# out — compose sets it to reach the postgres service — and set a real
-# POSTGRES_PASSWORD. The CV paths can stay commented out.
-nano .env
-```
+The `app` container joins the shared external network `edge` (alias
+`project-pilot`) so it sits alongside the rest of the stack behind the proxy. It
+serves nothing over it: there is no HTTP server, and Slack runs over an outbound
+Socket Mode connection, so no proxy route or domain is involved.
+
+`postgres` stays on the stack's private `default` network. Nothing outside this
+stack should reach the database, and a second stack publishing its own `postgres`
+service on `edge` would collide on that network's DNS.
+
+If `edge` does not exist yet, the deploy creates it rather than failing.
 
 ## GitHub secrets
 
-**Settings → Secrets and variables → Actions.**
+**Settings → Environments → New environment → `prod`**, then add these to it.
+Repository-level secrets work identically if environment secrets are not available
+on your plan for a private repo — the workflow just reads `secrets.*`.
 
 | Secret | Required | Value |
 |---|---|---|
+| `PROJECT_PILOT_ENV` | yes | the complete contents of `.env` (see below) |
 | `VPS_HOST` | yes | hostname or IP of the VPS |
-| `VPS_USER` | yes | the SSH user these commands ran as |
+| `VPS_USER` | yes | the SSH user the setup commands ran as |
 | `VPS_SSH_KEY` | yes | the **private** deploy key, including the `BEGIN`/`END` lines |
 | `VPS_SSH_KNOWN_HOSTS` | recommended | output of `ssh-keyscan`, pins the host key |
 | `VPS_PORT` | no | SSH port if not 22 |
 
 Optional repository **variable** `VPS_PATH` overrides the target directory
-(default `/opt/stack/project-pilot`).
+(default `/opt/stacks/project-pilot`).
+
+### PROJECT_PILOT_ENV
+
+Fill in a local copy of `.env.example` and paste the whole file as this one secret.
+It is written to `<VPS_PATH>/.env` (mode 600) at the start of every deploy, so it is
+the single place any setting changes — including the ones you tune over time, like
+`MATCH_THRESHOLD`. Keep your local copy: GitHub secrets are write-only, so editing
+one value means pasting the file again.
+
+Two notes on its contents:
+
+- `DATABASE_URL` is ignored even if present. Compose sets it in the service's
+  `environment:`, which takes precedence over `env_file`, so a stray `localhost`
+  line copied from the example is harmless.
+- `POSTGRES_PASSWORD` is read by compose itself to build that URL and to initialize
+  the database. Set a real one before the first deploy: it is baked into the volume
+  on creation, so changing it later means recreating `pgdata`.
 
 Generating the key pair and the host pin:
 
@@ -113,10 +144,15 @@ docker login ghcr.io -u <github-user>
 
 ## What a deploy does
 
-[`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) runs on the server and:
+First the workflow ships `compose.prod.yaml` and the deploy script itself over SSH,
+then writes `PROJECT_PILOT_ENV` to `<VPS_PATH>/.env` with mode 600 — piped over
+stdin, so the values never reach the job log or the server's process list.
+
+Then [`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) runs on the server and:
 
 1. installs the shipped `compose.yaml`;
-2. refuses to continue if `.env` is missing;
+2. refuses to continue if `.env` is missing (a hand-run safety net; the workflow
+   always writes it first);
 3. writes `compose.override.yaml` pinning the image built for this commit;
 4. `docker compose pull` and `up -d --remove-orphans`;
 5. prunes dangling images (tagged `sha-*` images are kept, so rollback stays possible);
@@ -142,7 +178,7 @@ assuming the release is at fault.
 Every commit keeps its own immutable tag, so rolling back is picking an older one:
 
 ```sh
-cd /opt/stack/project-pilot
+cd /opt/stacks/project-pilot
 docker image ls ghcr.io/nikita-petrich/project-pilot     # or the Packages tab on GitHub
 nano compose.override.yaml                               # set an earlier sha-* tag
 docker compose up -d
@@ -155,7 +191,7 @@ stays applied.
 ## Operating the stack
 
 ```sh
-cd /opt/stack/project-pilot
+cd /opt/stacks/project-pilot
 docker compose logs -f app                        # follow the worker
 docker compose ps                                 # health status
 docker compose restart app                        # after editing .env

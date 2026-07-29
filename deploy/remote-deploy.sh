@@ -21,10 +21,11 @@ if [ ! -f compose.yaml ]; then
     exit 1
 fi
 
-# The only file the server owns. Failing here beats a container that boots and then
-# dies on a ConfigError; profile and CVs ride inside the image.
+# The workflow writes this from the PROJECT_PILOT_ENV secret before calling us, so a
+# missing file means a hand-run or a failed write. Failing here beats a container that
+# boots and then dies on a ConfigError; profile and CVs ride inside the image.
 if [ ! -f .env ]; then
-    echo "FATAL: $STACK_DIR/.env is missing — copy .env.example there and fill it in." >&2
+    echo "FATAL: $STACK_DIR/.env is missing — set the PROJECT_PILOT_ENV secret and re-run the deploy." >&2
     exit 1
 fi
 
@@ -37,6 +38,14 @@ services:
   app:
     image: ${IMAGE}
 EOF
+
+# `edge` is external, owned by the proxy stack. Compose aborts with a bare "network
+# edge not found" if it is absent, so create it rather than fail a deploy on a host
+# where the proxy has not been brought up yet.
+if ! docker network inspect edge >/dev/null 2>&1; then
+    echo "shared network 'edge' not found — creating it"
+    docker network create edge >/dev/null
+fi
 
 docker compose pull
 docker compose up -d --remove-orphans

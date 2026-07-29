@@ -106,11 +106,12 @@ local PostgreSQL 16 on `localhost:5432` matching `DATABASE_URL`.
 Container image (Feature 11): `docker build -t project-pilot .`
 
 Deployment: pushing to `main` runs the quality gate, builds the image into GHCR, and
-deploys to the VPS at `/opt/stack/project-pilot` over SSH
+deploys to the VPS at `/opt/stacks/project-pilot` over SSH
 (`.github/workflows/deploy.yml`, see `docs/deployment.md`). The same gate runs on
 branches and PRs via `.github/workflows/ci.yml`. `profile/profile.md` and the CVs in
-`cv/` are versioned and ride inside the image, so updating either is a commit; `.env`
-holds the secrets and is the only file the server owns.
+`cv/` are versioned and ride inside the image, so updating either is a commit; the
+app's `.env` comes from the `PROJECT_PILOT_ENV` secret in the `prod` environment and
+is written to the server on every deploy. The server holds no configuration of its own.
 
 Testing is ON: the `Test: uv run pytest` command above is the opt-in switch, so a
 build step that adds logic-bearing code ships a passing test in the same diff and

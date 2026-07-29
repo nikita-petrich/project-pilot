@@ -1,7 +1,7 @@
 # Deploy to the VPS: prove the gate, build the image into GHCR, let the server pull it.
 #
-# The server never builds and never needs the source tree — it owns exactly one file,
-# .env, because that is the only place secrets live. Setup: docs/deployment.md.
+# The server owns nothing: it never builds, never needs the source tree, and even its
+# .env is written from the prod environment on every run. Setup: docs/deployment.md.
 name: Deploy to VPS
 
 on:
@@ -65,6 +65,9 @@ jobs:
     name: Deploy to VPS
     needs: build
     runs-on: ubuntu-latest
+    # Scopes the VPS credentials and the app's .env to one place and gives the repo a
+    # deployment history. Secrets resolve from the environment first, then the repo.
+    environment: prod
     permissions:
       contents: read
       packages: read
@@ -73,7 +76,7 @@ jobs:
       VPS_HOST: ${{ secrets.VPS_HOST }}
       VPS_USER: ${{ secrets.VPS_USER }}
       VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
-      VPS_PATH: ${{ vars.VPS_PATH || '/opt/stack/project-pilot' }}
+      VPS_PATH: ${{ vars.VPS_PATH || '/opt/stacks/project-pilot' }}
       IMAGE: ${{ needs.build.outputs.image }}
 
     steps:
@@ -104,11 +107,28 @@ jobs:
       - name: Ship compose file and deploy script
         run: |
           set -euo pipefail
-          # Everything else — profile, CVs, migrations — rides inside the image. The
-          # server's own .env is never touched from here.
+          # Everything else — profile, CVs, migrations — rides inside the image; .env
+          # follows in the next step.
           tar czf - compose.prod.yaml deploy/remote-deploy.sh \
             | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
                 "mkdir -p '$VPS_PATH' && tar xzf - -C '$VPS_PATH'"
+
+      - name: Install .env from the prod environment
+        env:
+          APP_ENV: ${{ secrets.PROJECT_PILOT_ENV }}
+        run: |
+          set -euo pipefail
+          test -n "$APP_ENV" || {
+            echo "::error::secret PROJECT_PILOT_ENV is not set in the prod environment"
+            exit 1
+          }
+          # Piped over stdin and never echoed, so the values stay out of the job log
+          # and out of the server's process list. GitHub is the source of truth here:
+          # this overwrites the file on every deploy, so edits made on the server are
+          # replaced rather than merged.
+          printf '%s\n' "$APP_ENV" \
+            | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+                "umask 077 && cat > '$VPS_PATH/.env' && chmod 600 '$VPS_PATH/.env'"
 
       - name: Pull image and restart the stack
         env:

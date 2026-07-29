@@ -1,11 +1,11 @@
 # Production compose for the VPS, shipped by the deploy workflow to
-# /opt/stack/project-pilot/compose.yaml. The exact image tag is pinned next to it in
+# /opt/stacks/project-pilot/compose.yaml. The exact image tag is pinned next to it in
 # the generated compose.override.yaml.
 #
 # The only difference from compose.yaml (build on this host) is where the image comes
 # from: GHCR instead of a local build, so the server needs no source tree. Profile, CVs
-# and migrations all ride inside the image, which leaves .env as the single file the
-# server owns.
+# and migrations all ride inside the image, and .env is written next to this file by the
+# deploy workflow, so nothing here is hand-maintained.
 services:
   postgres:
     image: postgres:16
@@ -21,6 +21,11 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    # Deliberately off `edge`: nothing outside this stack should be able to reach the
+    # database, and a second stack exposing its own `postgres` service there would
+    # collide with this one on the shared network's DNS.
+    networks:
+      - default
 
   app:
     # Overridden per deploy with an immutable sha-* tag; :latest is only the fallback
@@ -43,6 +48,21 @@ services:
       # as a failure. Failures inside the start period do not count against retries.
       start_period: 600s
     restart: unless-stopped
+    networks:
+      # `default` reaches postgres. `edge` is the shared stack network; the worker
+      # serves nothing over it (no HTTP, and Slack runs over an outbound Socket Mode
+      # connection), it just lives alongside the rest of the stack. The alias gives it
+      # a distinctive name there, since a bare `app` would be easy to collide with.
+      default: {}
+      edge:
+        aliases:
+          - project-pilot
 
 volumes:
   pgdata:
+
+networks:
+  # Owned by the proxy stack. The deploy creates it when missing so a fresh host does
+  # not fail with a bare "network edge not found".
+  edge:
+    external: true
