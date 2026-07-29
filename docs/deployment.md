@@ -60,8 +60,8 @@ Docker with Compose v2, and a user that can reach the Docker socket.
 
 ```sh
 sudo mkdir -p /opt/stack/project-pilot
-sudo chown deploy:deploy /opt/stack/project-pilot
-sudo usermod -aG docker deploy       # log out and back in for this to take effect
+sudo chown "$USER:$USER" /opt/stack/project-pilot
+sudo usermod -aG docker "$USER"     # log out and back in for this to take effect
 ```
 
 Then the one server-owned file:
@@ -81,7 +81,7 @@ nano .env
 | Secret | Required | Value |
 |---|---|---|
 | `VPS_HOST` | yes | hostname or IP of the VPS |
-| `VPS_USER` | yes | SSH user, e.g. `deploy` |
+| `VPS_USER` | yes | the SSH user these commands ran as |
 | `VPS_SSH_KEY` | yes | the **private** deploy key, including the `BEGIN`/`END` lines |
 | `VPS_SSH_KNOWN_HOSTS` | recommended | output of `ssh-keyscan`, pins the host key |
 | `VPS_PORT` | no | SSH port if not 22 |
@@ -93,7 +93,7 @@ Generating the key pair and the host pin:
 
 ```sh
 ssh-keygen -t ed25519 -f ~/.ssh/project-pilot-deploy -C "github-actions" -N ""
-ssh-copy-id -i ~/.ssh/project-pilot-deploy.pub deploy@<host>
+ssh-copy-id -i ~/.ssh/project-pilot-deploy.pub <user>@<host>
 
 cat ~/.ssh/project-pilot-deploy     # → VPS_SSH_KEY
 ssh-keyscan -p 22 <host>            # → VPS_SSH_KNOWN_HOSTS
@@ -158,7 +158,7 @@ stays applied.
 cd /opt/stack/project-pilot
 docker compose logs -f app                        # follow the worker
 docker compose ps                                 # health status
-docker compose restart app                        # after editing .env or profile/
+docker compose restart app                        # after editing .env
 docker compose exec app project-pilot stats       # reporting summary
 docker compose exec app project-pilot run-once    # one scan now
 docker compose exec app project-pilot healthcheck # liveness/freshness probe
