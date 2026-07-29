@@ -1,8 +1,7 @@
 # Deploy to the VPS: prove the gate, build the image into GHCR, let the server pull it.
 #
-# The server never builds and never needs the source tree — only compose.yaml, the
-# .env, and the two things that are deliberately not in git: profile/profile.md and
-# the CV PDFs. Setup and secrets: docs/deployment.md.
+# The server never builds and never needs the source tree — it owns exactly one file,
+# .env, because that is the only place secrets live. Setup: docs/deployment.md.
 name: Deploy to VPS
 
 on:
@@ -102,12 +101,12 @@ jobs:
           fi
           chmod 600 ~/.ssh/known_hosts
 
-      - name: Ship compose file, constraints, and deploy script
+      - name: Ship compose file and deploy script
         run: |
           set -euo pipefail
-          # constraints.yaml is versioned, so the repo owns it; profile.md, .env and
-          # cv/ live only on the server and are never touched from here.
-          tar czf - compose.prod.yaml profile/constraints.yaml deploy/remote-deploy.sh \
+          # Everything else — profile, CVs, migrations — rides inside the image. The
+          # server's own .env is never touched from here.
+          tar czf - compose.prod.yaml deploy/remote-deploy.sh \
             | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
                 "mkdir -p '$VPS_PATH' && tar xzf - -C '$VPS_PATH'"
 

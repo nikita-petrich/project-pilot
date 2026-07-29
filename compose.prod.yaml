@@ -2,10 +2,10 @@
 # /opt/stack/project-pilot/compose.yaml. The exact image tag is pinned next to it in
 # the generated compose.override.yaml.
 #
-# Differs from compose.yaml (build on this host) in two ways:
-#   - the image comes from GHCR instead of a local build, so the server needs no source;
-#   - profile/ and cv/ are mounted from the server, because profile.md and the CV PDFs
-#     are gitignored and therefore cannot be baked into an image built in CI.
+# The only difference from compose.yaml (build on this host) is where the image comes
+# from: GHCR instead of a local build, so the server needs no source tree. Profile, CVs
+# and migrations all ride inside the image, which leaves .env as the single file the
+# server owns.
 services:
   postgres:
     image: postgres:16
@@ -32,12 +32,6 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
-    volumes:
-      # profile.md is personal and constraints.yaml is tuned per deploy, so both are
-      # read from the server: editing them needs a restart, not a rebuild.
-      - ./profile:/app/profile:ro
-      # CV PDFs for application e-mails; point CV_DE_PATH / CV_EN_PATH at /app/cv/...
-      - ./cv:/app/cv:ro
     healthcheck:
       test: ["CMD", "project-pilot", "healthcheck"]
       interval: 60s

@@ -19,53 +19,60 @@ call.
 
 ## What lives where
 
-The split matters, because two of the files the app needs are deliberately not in
-git and therefore cannot be baked into an image built by CI.
+Everything the app needs is versioned and rides inside the image. The server owns
+exactly one file, because secrets are the one thing that cannot go in a public repo.
 
 | File | Owner | Notes |
 |---|---|---|
 | the image | GHCR | built per commit, tagged `sha-<short>` plus `latest` |
 | `compose.yaml` | repo (`compose.prod.yaml`) | overwritten on every deploy |
 | `compose.override.yaml` | generated | pins the exact image tag; do not edit |
-| `profile/constraints.yaml` | repo | versioned, so every deploy ships it |
-| `profile/profile.md` | **server only** | gitignored personal profile; never touched by a deploy |
+| `profile/profile.md` | repo | matching profile and signature block |
+| `profile/constraints.yaml` | repo | deterministic hard rules |
+| `cv/*.pdf` | repo | attached to application e-mails |
 | `.env` | **server only** | secrets; never touched by a deploy |
-| `cv/*.pdf` | **server only** | CV attachments; never touched by a deploy |
 | database | `pgdata` volume | survives deploys |
 
-`profile/` and `cv/` are bind-mounted read-only into the container, so editing the
-profile or swapping a CV needs a `docker compose restart app` — not a rebuild.
+## Updating the profile or a CV
+
+Replace the file and push — there is no second mechanism and nothing to do on the
+server:
+
+```sh
+cp ~/new-cv.pdf cv/lebenslauf-de.pdf
+git commit -am "chore: update the German CV" && git push
+```
+
+`CV_DE_PATH` and `CV_EN_PATH` default to `cv/lebenslauf-de.pdf` and `cv/cv-en.pdf`,
+so keeping the filenames means never touching config. A path that does not exist
+just means no attachment, which is why `cv/cv-en.pdf` being absent is harmless until
+you add it.
+
+**Keep CVs small.** They are e-mail attachments, and base64 encoding adds about a
+third on the wire, so a 20 MB PDF arrives as ~28 MB and is refused by most mail
+servers (Gmail caps at 25 MB). Browser-printed CVs are the usual culprit: they embed
+photos at full camera resolution. A few MB is fine; if a PDF is much larger, downscale
+its images before committing.
 
 ## One-time server setup
 
 Docker with Compose v2, and a user that can reach the Docker socket.
 
 ```sh
-sudo mkdir -p /opt/stack/project-pilot/profile /opt/stack/project-pilot/cv
-sudo chown -R deploy:deploy /opt/stack/project-pilot
+sudo mkdir -p /opt/stack/project-pilot
+sudo chown deploy:deploy /opt/stack/project-pilot
 sudo usermod -aG docker deploy       # log out and back in for this to take effect
 ```
 
-Then place the three server-owned pieces in `/opt/stack/project-pilot`:
+Then the one server-owned file:
 
 ```sh
 cd /opt/stack/project-pilot
-# 1. .env — copy .env.example from the repo and fill in the real values.
-#    Leave DATABASE_URL out; compose sets it to reach the postgres service.
-#    Set POSTGRES_PASSWORD to something real, and point the CV paths at the mount:
-#      CV_DE_PATH=/app/cv/lebenslauf-de.pdf
-#      CV_EN_PATH=/app/cv/cv-en.pdf
+# Copy .env.example from the repo and fill in the real values. Leave DATABASE_URL
+# out — compose sets it to reach the postgres service — and set a real
+# POSTGRES_PASSWORD. The CV paths can stay commented out.
 nano .env
-
-# 2. the personal profile (gitignored, so it only ever exists here)
-nano profile/profile.md
-
-# 3. the CV PDFs referenced above
-cp ~/lebenslauf-de.pdf cv/
 ```
-
-The container runs as uid 1000, so the mounted files must be world-readable
-(`chmod 644 profile/profile.md cv/*.pdf`).
 
 ## GitHub secrets
 
@@ -108,8 +115,8 @@ docker login ghcr.io -u <github-user>
 
 [`deploy/remote-deploy.sh`](../deploy/remote-deploy.sh) runs on the server and:
 
-1. installs the shipped `compose.yaml` and `profile/constraints.yaml`;
-2. refuses to continue if `.env` or `profile/profile.md` is missing;
+1. installs the shipped `compose.yaml`;
+2. refuses to continue if `.env` is missing;
 3. writes `compose.override.yaml` pinning the image built for this commit;
 4. `docker compose pull` and `up -d --remove-orphans`;
 5. prunes dangling images (tagged `sha-*` images are kept, so rollback stays possible);
@@ -157,6 +164,6 @@ Day-to-day operations, troubleshooting, and threshold tuning are in
 ## Building on the server instead
 
 The repo still carries `compose.yaml`, which builds the image locally from a
-checkout. That path needs no registry and bakes `profile/profile.md` into the image,
-but it costs server CPU on every change. It is unrelated to this pipeline — do not
-run both in the same directory, since a deploy overwrites `compose.yaml`.
+checkout. That path needs no registry, but it costs server CPU on every change. It is
+unrelated to this pipeline — do not run both in the same directory, since a deploy
+overwrites `compose.yaml`.

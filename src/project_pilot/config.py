@@ -81,8 +81,12 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
 
-    cv_de_path: str = ""
-    cv_en_path: str = ""
+    # Default to the CVs versioned in the repo, so swapping a PDF in cv/ is the whole
+    # update. A path that does not exist simply yields no attachment (see
+    # CvAttachments.for_language), which is why the English default is harmless
+    # until that file is added.
+    cv_de_path: str = "cv/lebenslauf-de.pdf"
+    cv_en_path: str = "cv/cv-en.pdf"
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30

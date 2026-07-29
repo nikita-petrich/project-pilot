@@ -196,12 +196,23 @@ def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyP
         Settings()
 
 
-def test_cv_attachments_default_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cv_attachments_default_to_the_repo_files(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pathlib import Path
+
     monkeypatch.delenv("CV_DE_PATH", raising=False)
     monkeypatch.delenv("CV_EN_PATH", raising=False)
     cvs = Settings().cv_attachments()
+    # Unset means "the CVs committed under cv/", so updating one is a file swap.
+    assert cvs.de == Path("cv/lebenslauf-de.pdf")
+    assert cvs.en == Path("cv/cv-en.pdf")
+
+
+def test_cv_attachments_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CV_DE_PATH", "")
+    monkeypatch.setenv("CV_EN_PATH", "")
+    cvs = Settings().cv_attachments()
     assert cvs.de is None and cvs.en is None
-    assert cvs.for_language("en") is None  # nothing configured → no attachment
+    assert cvs.for_language("de") is None  # explicitly empty → no attachment
 
 
 def test_cv_attachments_pick_language_and_require_existing_file(

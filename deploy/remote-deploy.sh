@@ -21,17 +21,12 @@ if [ ! -f compose.yaml ]; then
     exit 1
 fi
 
-# The three things git deliberately does not carry. Failing here beats a container
-# that boots and then dies on a ConfigError.
+# The only file the server owns. Failing here beats a container that boots and then
+# dies on a ConfigError; profile and CVs ride inside the image.
 if [ ! -f .env ]; then
     echo "FATAL: $STACK_DIR/.env is missing — copy .env.example there and fill it in." >&2
     exit 1
 fi
-if [ ! -f profile/profile.md ]; then
-    echo "FATAL: $STACK_DIR/profile/profile.md is missing — it is gitignored and must live on the server." >&2
-    exit 1
-fi
-mkdir -p cv
 
 # Compose merges this over compose.yaml automatically, so a plain `docker compose up -d`
 # on the server uses the same image this deploy pinned.

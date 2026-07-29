@@ -9,9 +9,9 @@ Actions builds, the server pulls). This page is what to do once it runs.
 ## Prerequisites
 
 - Docker with Compose v2.
-- A filled-in `profile/profile.md` and `profile/constraints.yaml`. Under the Actions
-  deploy they are mounted from the server and a restart picks up edits; when building
-  on the host they are baked into the image, so edits mean rebuild + restart.
+- A filled-in `profile/profile.md` and `profile/constraints.yaml`. Both are versioned
+  and baked into the image, so editing them means commit + deploy (or, when building
+  on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
   `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL`, `OPENAI_API_KEY`,
   `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"), and optionally
@@ -71,9 +71,9 @@ matches are being missed. Restart the app after changing `.env`.
   markup. Update the selector constants at the top of
   `src/project_pilot/ingestion/parser.py`, refresh the fixtures, and rebuild.
 - **Repeated failures**: three consecutive failed runs post one Slack warning.
-- **Profile changes**: under the Actions deploy, `profile/` is mounted from the
-  server — edit it and `docker compose restart app`. When building on the host it is
-  baked into the image, so it takes `docker compose build && docker compose up -d`.
+- **Profile or CV changes**: edit `profile/profile.md` or replace the PDF in `cv/`,
+  then commit and push — the deploy rebuilds the image. When building on the host
+  instead: `docker compose build && docker compose up -d`.
 
 ## Migrations
 

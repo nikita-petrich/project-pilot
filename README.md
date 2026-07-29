@@ -36,18 +36,19 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 ```sh
 uv sync                              # install dependencies (creates .venv)
 cp .env.example .env                 # then fill in the values (see below)
-cp profile/profile.example.md profile/profile.md   # then fill in your real profile
 docker compose -f compose.dev.yaml up -d   # local Postgres on :5432
 uv run project-pilot init-db         # apply migrations
 ```
 
-Fill in the two profile files (they feed the matcher, the hard rules, and the
-application drafts):
+Forking this for yourself? Replace `profile/profile.md` (start from
+`profile/profile.example.md`) and the PDFs in `cv/` with your own.
+
+The two profile files feed the matcher, the hard rules, and the application drafts:
 
 - `profile/profile.md` free-text profile: positioning, skills, desired projects,
-  no-gos, reference projects, and the application signature. **This file is
-  gitignored and stays local** (it holds personal CV/contact data) — a sanitized
-  `profile/profile.example.md` template is tracked instead, like `.env.example`.
+  no-gos, reference projects, and the application signature. It is **versioned
+  on purpose** — this repo is a public portfolio piece, and it holds the same CV
+  and contact block that goes out to clients anyway. Real secrets stay in `.env`.
   Its `Kontakt & Signatur` block holds the values for the e-mail signature (name,
   title, `Telefon`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, plus `Ort` / `Location`
   and `USt-IdNr.`); the layout itself lives in the prompt. It ends with the two
@@ -55,6 +56,10 @@ application drafts):
   generator picks the one matching the application language for the closing
   sentence, the signature, and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
+- `cv/*.pdf` the CVs attached to application e-mails. `CV_DE_PATH` and `CV_EN_PATH`
+  default to `cv/lebenslauf-de.pdf` and `cv/cv-en.pdf`, so updating a CV is replacing
+  the file and pushing. Keep them a few MB at most — they go out as e-mail
+  attachments, and base64 adds about a third on the wire.
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
 gitignored and `.env.example` is the template):
@@ -141,7 +146,8 @@ change how applications are written. The draft posts as **one** message:
   a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
 - **CV attachment** — the sent e-mail attaches your CV automatically, picking the
   language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
-  the letter references it. Leave the paths unset to send without an attachment.
+  the letter references it. Both default to the PDFs in `cv/`; set a path to an empty
+  value to send without an attachment.
 - **Signature** — every draft closes with a signature block in the draft's language:
   the `-- ` separator (RFC 3676), the greeting inside the block, name and title,
   `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link,
