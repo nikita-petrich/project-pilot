@@ -1,0 +1,15 @@
+# Quality gate for everything that is not main. Pushes to main run the same gate
+# inside deploy.yml, so it is excluded here rather than run twice per commit.
+name: CI
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  gate:
+    uses: ./.github/workflows/quality-gate.yml

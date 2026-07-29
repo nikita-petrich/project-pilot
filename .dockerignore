@@ -1,4 +1,6 @@
 .git
+.github
+deploy
 .venv
 __pycache__
 *.py[cod]

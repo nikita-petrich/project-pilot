@@ -105,6 +105,12 @@ local PostgreSQL 16 on `localhost:5432` matching `DATABASE_URL`.
 
 Container image (Feature 11): `docker build -t project-pilot .`
 
+Deployment: pushing to `main` runs the quality gate, builds the image into GHCR, and
+deploys to the VPS at `/opt/stack/project-pilot` over SSH
+(`.github/workflows/deploy.yml`, see `docs/deployment.md`). The same gate runs on
+branches and PRs via `.github/workflows/ci.yml`. `profile/profile.md`, `.env`, and
+the CV PDFs live only on the server and are never shipped by a deploy.
+
 Testing is ON: the `Test: uv run pytest` command above is the opt-in switch, so a
 build step that adds logic-bearing code ships a passing test in the same diff and
 the suite must be green before the step is approved (see `coding-standards.md`).

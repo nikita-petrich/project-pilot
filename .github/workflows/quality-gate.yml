@@ -1,0 +1,56 @@
+# The project's four quality gates as one reusable job, so CI and the deploy
+# pipeline prove the exact same thing. Postgres runs as a service container: the
+# DB-backed tests skip themselves when no database is reachable, and a silently
+# skipped test proves nothing.
+name: Quality gate
+
+on:
+  workflow_call:
+
+jobs:
+  gate:
+    name: lint · format · types · tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pilot
+          POSTGRES_PASSWORD: pilot
+          POSTGRES_DB: project_pilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pilot -d project_pilot"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.17"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Lint
+        run: uv run ruff check
+
+      - name: Format check
+        run: uv run ruff format --check
+
+      - name: Types
+        run: uv run mypy
+
+      - name: Tests
+        run: uv run pytest

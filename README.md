@@ -231,7 +231,13 @@ scanner's watermark stays untouched. One caveat for screenshots: the hard rules 
 text, so an image with no caption skips stage 2 and is judged by the LLM alone —
 a caption is still rule-checked as usual.
 
-## Running on the home server (Docker)
+## Deploying
+
+Pushing to `main` deploys to the VPS: GitHub Actions runs the quality gate, builds
+the image into GHCR, and the server pulls it over SSH. Setup, secrets, and rollback
+are in [`docs/deployment.md`](docs/deployment.md).
+
+To build and run on the host instead, from a checkout:
 
 ```sh
 docker compose build
@@ -239,8 +245,8 @@ docker compose up -d
 docker compose logs -f app
 ```
 
-The app container applies migrations on start, then runs the daemon (with one
-immediate scan). Full operations guide, including the healthcheck and
+Either way the app container applies migrations on start, then runs the daemon (with
+one immediate scan). Full operations guide, including the healthcheck and
 troubleshooting, is in [`docs/operations.md`](docs/operations.md).
 
 ## Threshold tuning

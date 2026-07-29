@@ -1,0 +1,137 @@
+# Deploy to the VPS: prove the gate, build the image into GHCR, let the server pull it.
+#
+# The server never builds and never needs the source tree — only compose.yaml, the
+# .env, and the two things that are deliberately not in git: profile/profile.md and
+# the CV PDFs. Setup and secrets: docs/deployment.md.
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel a running one — a half-applied migration is
+# worse than a queued job.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    uses: ./.github/workflows/quality-gate.yml
+
+  build:
+    name: Build and push image
+    needs: gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.image.outputs.ref }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve image reference
+        id: image
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"          # GHCR rejects uppercase in image names
+          echo "repo=ghcr.io/${repo}" >> "$GITHUB_OUTPUT"
+          echo "ref=ghcr.io/${repo}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          # The sha- tag is what the server pins, so every deploy is immutable and
+          # any older tag is a working rollback target.
+          tags: |
+            ${{ steps.image.outputs.ref }}
+            ${{ steps.image.outputs.repo }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Deploy to VPS
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_PORT: ${{ secrets.VPS_PORT || '22' }}
+      VPS_PATH: ${{ vars.VPS_PATH || '/opt/stack/project-pilot' }}
+      IMAGE: ${{ needs.build.outputs.image }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure SSH
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          test -n "$VPS_HOST" || { echo "::error::secret VPS_HOST is not set"; exit 1; }
+          test -n "$VPS_USER" || { echo "::error::secret VPS_USER is not set"; exit 1; }
+          test -n "$SSH_KEY"  || { echo "::error::secret VPS_SSH_KEY is not set"; exit 1; }
+
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::VPS_SSH_KNOWN_HOSTS is unset — trusting the host key on first sight. See docs/deployment.md."
+            ssh-keyscan -p "$VPS_PORT" "$VPS_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+      - name: Ship compose file, constraints, and deploy script
+        run: |
+          set -euo pipefail
+          # constraints.yaml is versioned, so the repo owns it; profile.md, .env and
+          # cv/ live only on the server and are never touched from here.
+          tar czf - compose.prod.yaml profile/constraints.yaml deploy/remote-deploy.sh \
+            | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+                "mkdir -p '$VPS_PATH' && tar xzf - -C '$VPS_PATH'"
+
+      - name: Pull image and restart the stack
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The token goes over stdin, so it never appears in the server's process list.
+          # It expires with this job; docs/deployment.md covers logging in for manual pulls.
+          printf '%s' "$GHCR_TOKEN" \
+            | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+                "docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
+                 && sh '$VPS_PATH/deploy/remote-deploy.sh' '$IMAGE'"
+
+      # Host and user are secrets and job summaries are not scrubbed, so they stay out.
+      - name: Summary
+        if: success()
+        run: |
+          {
+            echo "### Deployed"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Image | \`$IMAGE\` |"
+            echo "| Path | \`$VPS_PATH\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
