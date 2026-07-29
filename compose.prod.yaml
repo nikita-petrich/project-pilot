@@ -1,0 +1,68 @@
+# Production compose for the VPS, shipped by the deploy workflow to
+# /opt/stacks/project-pilot/compose.yaml. The exact image tag is pinned next to it in
+# the generated compose.override.yaml.
+#
+# The only difference from compose.yaml (build on this host) is where the image comes
+# from: GHCR instead of a local build, so the server needs no source tree. Profile, CVs
+# and migrations all ride inside the image, and .env is written next to this file by the
+# deploy workflow, so nothing here is hand-maintained.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: pilot
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pilot}
+      POSTGRES_DB: project_pilot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pilot -d project_pilot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # Deliberately off `edge`: nothing outside this stack should be able to reach the
+    # database, and a second stack exposing its own `postgres` service there would
+    # collide with this one on the shared network's DNS.
+    networks:
+      - default
+
+  app:
+    # Overridden per deploy with an immutable sha-* tag; :latest is only the fallback
+    # for a manual 'docker compose up -d' without the override file.
+    image: ghcr.io/nikita-petrich/project-pilot:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+    healthcheck:
+      test: ["CMD", "project-pilot", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      # The probe only passes once a scan has finished, and on an empty database the
+      # seed run fetches every listing's detail page with a 2-5 s delay between
+      # requests. A short start period would mark that first, entirely healthy run
+      # as a failure. Failures inside the start period do not count against retries.
+      start_period: 600s
+    restart: unless-stopped
+    networks:
+      # `default` reaches postgres. `edge` is the shared stack network; the worker
+      # serves nothing over it (no HTTP, and Slack runs over an outbound Socket Mode
+      # connection), it just lives alongside the rest of the stack. The alias gives it
+      # a distinctive name there, since a bare `app` would be easy to collide with.
+      default: {}
+      edge:
+        aliases:
+          - project-pilot
+
+volumes:
+  pgdata:
+
+networks:
+  # Owned by the proxy stack. The deploy creates it when missing so a fresh host does
+  # not fail with a bare "network edge not found".
+  edge:
+    external: true

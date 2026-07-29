@@ -1,96 +1,100 @@
-# Profil (LLM-Matching & Bewerbungen) — Beispielvorlage
+# Profile (LLM matching & applications) — example template
 
-> Kopiere diese Datei nach `profile/profile.md` und fülle sie mit deinen echten
-> Daten. `profile/profile.md` ist gitignored und bleibt lokal – echte CV-/
-> Kontaktdaten landen so nie im Repository. Diese Vorlage enthält nur Platzhalter.
+> Copy this file to `profile/profile.md` and fill it with your real data. The
+> committed `profile.md` holds the maintainer's own profile, since this repo is a
+> public portfolio piece; if you fork it, replace that file with yours. Real secrets
+> never belong here — they live in `.env`, which is gitignored.
 >
-> `profile.md` ist die einzige Quelle für Matcher UND Bewerbungs-Generator:
-> - Matcher (Stage 3) beurteilt Fit anhand von Positionierung, Skills und No-gos.
-> - Bewerbungs-Generator zieht Referenzprojekte, Skills und die Signatur von hier.
+> `profile.md` is the single source for BOTH the matcher and the application generator:
+> - The matcher (stage 3) judges fit from positioning, skills, and no-gos.
+> - The application generator pulls reference projects, skills, and the signature from here.
 
-## Wer ich bin
+## Who I am
 
-<Ein bis zwei Absätze: Rolle, Schwerpunkt, Erfahrung, Branchen, Arbeitsweise.>
+<One or two paragraphs: role, focus, experience, industries, working style.>
 
-## Verfügbarkeit & Rahmen
+## Availability & terms
 
-- **Ort:** <Remote / Stadt, max. X Tage onsite>
-- **Verfügbar:** <ab wann · Voll-/Teilzeit>
-- **Erfahrung:** <Jahre>
-- **Satz:** <auf Anfrage / Range>
-- **Qualifikation:** <Abschluss/Zertifizierung>
-- **Sprachen:** <z. B. Deutsch (Muttersprache), Englisch (B2)>
-- **Arbeitsweise:** <Stichworte>
+- **Location:** <remote / city, max. X days on-site>
+- **Available:** <from when · full-time/part-time>
+- **Experience:** <years>
+- **Rate:** <on request / range>
+- **Qualification:** <degree/certification>
+- **Languages:** <e.g. German (native), English (B2)>
+- **Working style:** <keywords>
 
-## Schwerpunkt
+## Focus
 
-<Kern-Themen als Stichworte, z. B. LLM-Integration · RAG · TypeScript · ...>
+<Core topics as keywords, e.g. LLM integration · RAG · TypeScript · ...>
 
-## Core skills / Vollständiger Tech-Stack
+## Core skills / full tech stack
 
-> In Bewerbungen nur Technologien nennen, die *sowohl* in der Projektbeschreibung
-> *als auch* hier vorkommen.
+> In applications, only name technologies that appear *both* in the listing
+> *and* here.
 
-- **KI & LLM:** <...>
-- **Backend & Sprachen:** <...>
+- **AI & LLM:** <...>
+- **Backend & languages:** <...>
 - **Frontend:** <...>
-- **Datenbanken & Daten:** <...>
-- **DevOps, Cloud & Infrastruktur:** <...>
-- **Auth & Security:** <...>
-- **Architektur & Prinzipien:** <...>
+- **Databases & data:** <...>
+- **DevOps, cloud & infrastructure:** <...>
+- **Auth & security:** <...>
+- **Architecture & principles:** <...>
 - **Testing & QA:** <...>
 
 ## Desired projects
 
-- <Welche Projekte/Rollen du suchst>
+- <Which projects/roles you are looking for>
 
 ## No-gos
 
-> Kontext entscheidet – Migration weg von einer Technologie oder eine Rolle an
-> einem anderen Layer kann trotzdem passen. Match an der Rolle, nicht am Begriff.
+> Context decides — migrating away from a technology, or a role at a different
+> layer, can still fit. Match on the role, not on the keyword.
 
-- **<Technologie>** – <Bedingung/Ausnahme>
+- **<technology>** — <condition/exception>
 
-## Referenzprojekte
+## Reference projects
 
-> Für die Referenzauswahl in Bewerbungen (max. 4 nach Relevanz, dann chronologisch).
+> For picking references in applications (max. 4 by relevance, then chronologically).
 
-### 01 · <Projektname> — <Kurzbeschreibung>
-- **Rolle:** <...>
-- **Branche:** <...>
-- **Zeitraum:** <MM/JJJJ – MM/JJJJ>
-- **Ort/Team:** <Ort · Remote/Onsite · Teamgröße · Website/Code optional>
-- **Aufgaben:** <2–5 Kernaufgaben>
-- **Ergebnis:** <messbare Ergebnisse / Impact>
-- **Technologien:** <Tech-Liste>
+### 01 · <project name> — <short description>
+- **Role:** <...>
+- **Industry:** <...>
+- **Period:** <MM/YYYY – MM/YYYY>
+- **Location/team:** <location · remote/on-site · team size · website/code optional>
+- **Responsibilities:** <2–5 core responsibilities>
+- **Outcome:** <measurable results / impact>
+- **Technologies:** <tech list>
 
-<weitere Projekte …>
+<further projects …>
 
-## Kontakt & Signatur
+## Contact & Signature
 
-> Werte-Quelle für den Signaturblock der Bewerbung. Das Layout selbst (Reihenfolge,
-> Leerzeilen, Beschriftungen, DE/EN) steht im Prompt unter „Grußformel und
-> Signatur" — hier stehen nur die Werte, in beliebiger Reihenfolge.
+> Value source for the application's signature block. The layout itself (order,
+> blank lines, labels, DE/EN) lives in the prompt under "Grußformel und Signatur" —
+> only the values belong here, in any order.
 >
-> `Ort` wird in deutschen, `Location` in englischen Bewerbungen ausgegeben; fehlt
-> eine Zeile (z. B. `Ort` oder `USt-IdNr.`), entfällt sie im Signaturblock
-> ersatzlos.
+> The prompt looks these keys up by name, so keep the labels as written: renaming
+> one here means renaming it in
+> `src/project_pilot/application/prompts/application.md` too.
 >
-> Die beiden letzten Zeilen sind die Notion-Calendar-Buchungslinks für das
-> kostenlose Erstgespräch — je einer für deutsche und englische Bewerbungen. Der
-> Bewerbungs-Generator wählt den Link passend zur Bewerbungssprache und setzt ihn
-> in den Abschlusssatz, in den Signaturblock und in die LinkedIn-Nachricht.
-> (`Erstgespräch (DE)` / `Erstgespräch (EN)` funktionieren als Beschriftung ebenso.)
+> `Location German` is used in German applications, `Location English` in English
+> ones; a missing line (e.g. `Location German` or `VAT ID`) is simply dropped from
+> the signature block.
+>
+> The last two lines are the Notion Calendar booking links for the free intro call —
+> one for German and one for English applications. The application generator picks
+> the link matching the application language and places it in the closing sentence,
+> the signature block, and the LinkedIn message.
 
-<Vorname Nachname>
-<Titel>
-E-Mail: <mail@example.com>
-Telefon: <+49 ...>
+<First Last>
+<Title>
+Email: <mail@example.com>
+Phone: <+49 ...>
 Web: <https://example.com>
 LinkedIn: <https://linkedin.com/in/...>
 GitHub: <https://github.com/...>
-Ort: <Stadt, Land>
-Location: <City, Country>
-USt-IdNr.: <DE123456789>
+Location German: <City, Country in German>
+Location English: <City, Country in English>
+VAT ID: <DE123456789>
 CTA German: <https://calendar.notion.so/meet/<handle>/erstgespraech-30-min>
 CTA English: <https://calendar.notion.so/meet/<handle>/initial-consultation-30-min>

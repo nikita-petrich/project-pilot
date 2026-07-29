@@ -1,17 +1,22 @@
-# Operations (home-server deployment)
+# Operations (server deployment)
 
-project-pilot runs as a long-lived Docker container next to its own PostgreSQL,
-on Nik's home server. No ingress or domain is needed.
+project-pilot runs as a long-lived Docker container next to its own PostgreSQL. No
+ingress or domain is needed — Slack Socket Mode needs no inbound port.
+
+How the container gets onto the server is [`deployment.md`](deployment.md) (GitHub
+Actions builds, the server pulls). This page is what to do once it runs.
 
 ## Prerequisites
 
 - Docker with Compose v2.
-- A filled-in `profile/profile.md` and `profile/constraints.yaml` (baked into the
-  image at build time; editing the profile means rebuild + restart).
+- A filled-in `profile/profile.md` and `profile/constraints.yaml`. Both are versioned
+  and baked into the image, so editing them means commit + deploy (or, when building
+  on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
-  `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `OPENAI_API_KEY`, `LLM_MODEL`,
-  `SEARCH_URLS` (sorted "newest first"), and optionally `POSTGRES_PASSWORD`. Do not
-  set `DATABASE_URL` in `.env`; compose sets it to reach the postgres service.
+  `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL`, `OPENAI_API_KEY`,
+  `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"), and optionally
+  `POSTGRES_PASSWORD`. Do not set `DATABASE_URL` in `.env`; compose sets it to reach
+  the postgres service.
 
 ## Build and run
 
@@ -45,7 +50,7 @@ successful scan). `start_period` gives the first scan time to complete.
 ```sh
 docker compose exec app project-pilot stats         # reporting summary
 docker compose exec app project-pilot run-once      # one scan now (exit != 0 on failure)
-docker compose exec app project-pilot test-notify   # send a Telegram test message
+docker compose exec app project-pilot test-notify   # send a Slack test message
 docker compose exec app project-pilot healthcheck   # liveness/freshness probe
 ```
 
@@ -60,15 +65,15 @@ matches are being missed. Restart the app after changing `.env`.
 - **Container is unhealthy**: no successful run in `3 x` the interval. Check
   `docker compose logs app` for a `SourceBlockedError` (cooldown) or config error.
 - **Cooldown**: a 403 or captcha sets a 6-hour cooldown in `source_state`; the
-  worker skips scans until it expires and sends one Telegram warning. If it
+  worker skips scans until it expires and posts one Slack warning. If it
   persists, the site may be blocking automated access (revisit `docs/compliance.md`).
 - **Selector breakage** (`SelectorMismatchError`): freelancermap changed its
   markup. Update the selector constants at the top of
   `src/project_pilot/ingestion/parser.py`, refresh the fixtures, and rebuild.
-- **Repeated failures**: three consecutive failed runs send one Telegram warning.
-- **Profile changes**: edit `profile/`, then `docker compose build && docker
-  compose up -d`. (Alternatively, mount `./profile:/app/profile:ro` in
-  `compose.yaml` to edit without rebuilding, then restart.)
+- **Repeated failures**: three consecutive failed runs post one Slack warning.
+- **Profile or CV changes**: edit `profile/profile.md` or replace the PDF in `cv/`,
+  then commit and push — the deploy rebuilds the image. When building on the host
+  instead: `docker compose build && docker compose up -d`.
 
 ## Migrations
 

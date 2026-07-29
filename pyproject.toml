@@ -85,7 +85,7 @@ known-first-party = ["project_pilot"]
 
 [tool.mypy]
 python_version = "3.13"
-files = ["src", "tests"]
+files = ["src", "tests", "deploy"]
 strict = true
 plugins = ["pydantic.mypy"]
 warn_unreachable = true

@@ -3,10 +3,9 @@
 .env.*
 !.env.example
 
-# Personal profile (local only — never commit real CV / contact data).
-# Copy profile.example.md to profile.md and fill it in; the real file stays local.
-profile/profile.md
-!profile/profile.example.md
+# profile/profile.md and cv/*.pdf are committed on purpose: this repo is a public
+# portfolio piece, and that data is the same CV and contact block Nik hands to
+# clients anyway. Secrets stay out — they live in .env, which is ignored above.
 
 # Logs
 *.log

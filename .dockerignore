@@ -1,4 +1,6 @@
 .git
+.github
+deploy
 .venv
 __pycache__
 *.py[cod]
@@ -18,3 +20,6 @@ docs
 prototypes
 *.md
 !README.md
+# A bare *.md only matches the context root, so this is belt-and-braces: the profile
+# is read at runtime, and losing it to an ignore rule would fail the container at boot.
+!profile/*.md
