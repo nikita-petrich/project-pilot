@@ -133,16 +133,16 @@ jobs:
               < "$rendered"
 
       - name: Pull image and restart the stack
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # The token goes over stdin, so it never appears in the server's process list.
-          # It expires with this job; docs/deployment.md covers logging in for manual pulls.
-          printf '%s' "$GHCR_TOKEN" \
-            | ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
-                "docker login ghcr.io -u '${{ github.actor }}' --password-stdin \
-                 && sh '$VPS_PATH/deploy/remote-deploy.sh' '$IMAGE'"
+          # The image is a PUBLIC GHCR package, pulled anonymously — so the VPS must
+          # never stay logged in to ghcr.io. Logging in here with the ephemeral
+          # GITHUB_TOKEN left an expired credential in the VPS's *shared* Docker
+          # config after every deploy, which then broke other stacks' pulls with
+          # "denied" until a manual `docker logout`. remote-deploy.sh runs
+          # `docker logout ghcr.io` before pulling as a guard.
+          ssh -i ~/.ssh/id_deploy -p "$VPS_PORT" -o BatchMode=yes "$VPS_USER@$VPS_HOST" \
+              "sh '$VPS_PATH/deploy/remote-deploy.sh' '$IMAGE'"
 
       # Host and user are secrets and job summaries are not scrubbed, so they stay out.
       - name: Summary
