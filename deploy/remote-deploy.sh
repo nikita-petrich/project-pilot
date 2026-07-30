@@ -47,6 +47,12 @@ if ! docker network inspect edge >/dev/null 2>&1; then
     docker network create edge >/dev/null
 fi
 
+# The image is a PUBLIC GHCR package: pull it anonymously and make sure no stale
+# login token lingers in the VPS's shared Docker config first. An *expired* token
+# (e.g. an old CI `docker login` with a short-lived GITHUB_TOKEN) makes the
+# registry answer "denied" even for a public image; with no token it pulls fine.
+# Never `docker login ghcr.io` on this VPS.
+docker logout ghcr.io >/dev/null 2>&1 || true
 docker compose pull
 docker compose up -d --remove-orphans
 docker image prune -f >/dev/null 2>&1 || true
