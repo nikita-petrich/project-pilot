@@ -52,5 +52,14 @@ jobs:
       - name: Types
         run: uv run mypy
 
+      # The container runs `upgrade head` on start, so a migration that does not apply
+      # is a crash loop in production. Tests build the schema with create_all and would
+      # never exercise the chain, hence this runs the real thing — before the tests, so
+      # their create_all does not collide with the tables it creates.
+      - name: Migrations apply cleanly
+        env:
+          DATABASE_URL: postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot
+        run: uv run alembic upgrade head
+
       - name: Tests
         run: uv run pytest
