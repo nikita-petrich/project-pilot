@@ -111,6 +111,28 @@ def test_match_blocks_preview_long_description_and_keep_link() -> None:
     assert "open_project" in _action_ids(blocks)  # full text stays behind the link
 
 
+def test_check_blocks_show_the_whole_description_without_a_project_link() -> None:
+    """Pasted text has no "View project" button, so the description is never cut."""
+    long_text = "\n".join(f"Zeile {i}: " + "wort " * 30 for i in range(60))
+    result = CheckResult(
+        title="Senior Data Engineer",
+        stage=EvaluationStage.LLM,
+        verdict=Verdict.MATCH,
+        passed=True,
+        score=88,
+        threshold=60,
+        reason={},
+        message=MatchMessage(title="Senior Data Engineer", url="", score=88, description=long_text),
+        is_llm_error=False,
+    )
+    blocks = format_check_blocks(result)
+    sections = _section_texts(blocks)
+    joined = "".join(sections)
+    assert all(len(text) <= 3000 for text in sections)  # Slack's per-section limit
+    assert "Shortened" not in joined  # no dead end pointing at a button that is absent
+    assert "Zeile 0:" in joined and "Zeile 59:" in joined  # every line survived
+
+
 def test_match_blocks_escape_slack_specials() -> None:
     message = MatchMessage(title="A & B <x>", url="https://x", score=50)
     header = format_match_blocks(message, listing_id=1)[0]["text"]
@@ -130,24 +152,45 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     assert "```Hallo, kurzes Interesse!```" in sections
     ids = _action_ids(blocks)
     assert ids == ["send", "cancel"]
-    # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs).
-    mail_link = "<mailto:pm@firma.de?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>"
+    # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs)
+    # and carries the letter itself, not just the subject.
+    mail_link = (
+        "<mailto:pm@firma.de?subject=Bewerbung%3A%20KI-Projekt"
+        "&body=Sehr%20geehrte%20Damen%20und%20Herren%2C%0Aich%20passe%20gut."
+        "|📧 Open in mail client>"
+    )
     assert mail_link in sections
     send_button = next(e for e in _action_elements(blocks) if e["action_id"] == "send")
     assert send_button["value"] == "7"
+
+
+def test_draft_blocks_mailto_body_is_bounded_and_says_so() -> None:
+    """A mailto must fit one Slack section, so a long letter is cut with a note."""
+    blocks = format_draft_blocks(_draft_view(body="\n".join(f"Zeile {i}" for i in range(600))))
+    mail_section = next(t for t in _section_texts(blocks) if "mailto:" in t)
+    assert len(mail_section) <= 2900
+    assert "Zeile%200" in mail_section  # the letter starts in the mail client
+    contexts = " ".join(
+        str(cast("list[dict[str, object]]", block["elements"])[0]["text"])
+        for block in _blocks_of_type(blocks, "context")
+    )
+    assert "beginning of the letter" in contexts and "Send" in contexts
 
 
 def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() -> None:
     blocks = format_draft_blocks(
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
-    # No Senden (no recipient yet), but the mail-client link is available up front.
-    assert _action_ids(blocks) == ["cancel"]
+    # Send stays visible without a recipient (pressing it answers with the hint),
+    # and the mail-client link is available up front.
+    assert _action_ids(blocks) == ["send", "cancel"]
     sections = "\n".join(_section_texts(blocks))
-    assert "<mailto:?subject=Bewerbung%3A%20KI-Projekt|📧 Open in mail client>" in sections
-    context = _blocks_of_type(blocks, "context")[0]["elements"]
-    assert isinstance(context, list)
-    assert "e-mail address" in str(context[0]["text"])
+    assert "<mailto:?subject=Bewerbung%3A%20KI-Projekt&body=" in sections
+    contexts = " ".join(
+        str(cast("list[dict[str, object]]", block["elements"])[0]["text"])
+        for block in _blocks_of_type(blocks, "context")
+    )
+    assert "e-mail address" in contexts
 
 
 def _all_action_elements(blocks: list[Block]) -> list[dict[str, object]]:
@@ -174,10 +217,33 @@ def test_draft_without_recipient_offers_enrich_when_listing_known() -> None:
         listing_id=42,
     )
     blocks = format_draft_blocks(view)
-    # No Send yet; contact research is offered (the mail-client action is a link, no contact name).
-    assert _action_ids(blocks) == ["enrich", "cancel"]
+    # Contact research is offered next to Send (the mail-client action is a link).
+    assert _action_ids(blocks) == ["send", "enrich", "cancel"]
     enrich = next(e for e in _action_elements(blocks) if e["action_id"] == "enrich")
     assert enrich["value"] == "42"
+
+
+def test_draft_blocks_name_the_cvs_a_send_will_attach() -> None:
+    view = DraftView(
+        application_id=7,
+        title="KI-Projekt",
+        url=None,
+        contact_name=None,
+        recipient="pm@firma.de",
+        subject="Bewerbung",
+        body="Text",
+        linkedin_message="Hi",
+        status=ApplicationStatus.READY,
+        revision_count=0,
+        attachments=("CV-DE.pdf", "CV-DE-Word.docx", "CV-EN.pdf"),
+        missing_attachments=("CV-EN-Word.docx",),
+    )
+    contexts = " ".join(
+        str(cast("list[dict[str, object]]", block["elements"])[0]["text"])
+        for block in _blocks_of_type(format_draft_blocks(view), "context")
+    )
+    assert "CV-DE.pdf, CV-DE-Word.docx, CV-EN.pdf" in contexts
+    assert "Missing in `cv/`: CV-EN-Word.docx" in contexts
 
 
 def _enrichment(*, emails: list[str], phones: list[str]) -> ContactEnrichment:

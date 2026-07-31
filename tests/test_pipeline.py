@@ -81,6 +81,7 @@ class _FakeMatcher:
     async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
         matched = "asyncio" in listing_text.lower()
         verdict = MatchVerdict(
+            project_title="Python-Projekt",
             verdict="match" if matched else "no_match",
             score=80 if matched else 30,
             reasons=["strong fit"] if matched else ["weak fit"],

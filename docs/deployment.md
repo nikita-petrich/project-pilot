@@ -44,14 +44,16 @@ Replace the file and push — there is no second mechanism and nothing to do on 
 server:
 
 ```sh
-cp ~/new-cv.pdf cv/cv-de.pdf
+cp ~/new-cv.pdf cv/CV-DE.pdf
 git commit -am "chore: update the German CV" && git push
 ```
 
-`CV_DE_PATH` and `CV_EN_PATH` default to `cv/cv-de.pdf` and `cv/cv-en.pdf`,
-so keeping the filenames means never touching config. A path that does not exist
-just means no attachment, which is why `cv/cv-en.pdf` being absent is harmless until
-you add it.
+`CV_DE_PATH`, `CV_EN_PATH`, `CV_DE_DOCX_PATH` and `CV_EN_DOCX_PATH` default to
+`cv/CV-DE.pdf`, `cv/CV-EN.pdf`, `cv/CV-DE-Word.docx` and `cv/CV-EN-Word.docx`, so
+keeping the filenames means never touching config — and the name on disk is the name
+the recipient sees. Every one of them is attached to every application; a path that
+does not exist is skipped (and named in the draft's `📎 Attachments` line), which is
+why the files you have not added yet are harmless.
 
 **Keep CVs small.** They are e-mail attachments, and base64 encoding adds about a
 third on the wire, so a 20 MB PDF arrives as ~28 MB and is refused by most mail

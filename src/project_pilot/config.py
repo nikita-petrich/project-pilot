@@ -37,15 +37,31 @@ class SlackConfig:
 
 @dataclass(frozen=True, slots=True)
 class CvAttachments:
-    """Optional CV files attached to application e-mails, chosen by draft language."""
+    """The CV files attached to every application e-mail (PDF and Word, DE and EN).
 
-    de: Path | None
-    en: Path | None
+    All configured CVs ride along on every send — a recruiter forwards whichever
+    format and language their client wants. Only the order follows the draft
+    language, so the matching CV is the first attachment.
+    """
 
-    def for_language(self, language: str | None) -> Path | None:
-        """The CV matching the draft language (English → EN, otherwise the German CV)."""
-        chosen = self.en if language == "en" else self.de
-        return chosen if chosen is not None and chosen.is_file() else None
+    de_pdf: Path | None
+    en_pdf: Path | None
+    de_docx: Path | None
+    en_docx: Path | None
+
+    def _ordered(self, language: str | None) -> tuple[Path | None, ...]:
+        """Every configured path, the draft language's pair first."""
+        german = (self.de_pdf, self.de_docx)
+        english = (self.en_pdf, self.en_docx)
+        return english + german if language == "en" else german + english
+
+    def for_language(self, language: str | None) -> list[Path]:
+        """The existing CV files to attach, matching-language first."""
+        return [path for path in self._ordered(language) if path is not None and path.is_file()]
+
+    def missing(self, language: str | None) -> list[Path]:
+        """Configured CVs that are not on disk — surfaced so a gap never passes silently."""
+        return [path for path in self._ordered(language) if path is not None and not path.is_file()]
 
 
 class Settings(BaseSettings):
@@ -81,12 +97,14 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
 
-    # Default to the CVs versioned in the repo, so swapping a PDF in cv/ is the whole
-    # update. A path that does not exist simply yields no attachment (see
-    # CvAttachments.for_language), which is why the English default is harmless
-    # until that file is added.
-    cv_de_path: str = "cv/cv-de.pdf"
-    cv_en_path: str = "cv/cv-en.pdf"
+    # Default to the CVs versioned in the repo, so swapping a file in cv/ is the whole
+    # update. The file name is what the recipient sees, hence the presentable casing.
+    # A configured path that does not exist is skipped (and reported in the draft),
+    # so the set can be filled in one file at a time.
+    cv_de_path: str = "cv/CV-DE.pdf"
+    cv_en_path: str = "cv/CV-EN.pdf"
+    cv_de_docx_path: str = "cv/CV-DE-Word.docx"
+    cv_en_docx_path: str = "cv/CV-EN-Word.docx"
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -209,10 +227,12 @@ class Settings(BaseSettings):
         )
 
     def cv_attachments(self) -> CvAttachments:
-        """Resolve the configured CV files (either may be unset)."""
+        """Resolve the configured CV files (any of them may be unset)."""
         return CvAttachments(
-            de=Path(self.cv_de_path) if self.cv_de_path else None,
-            en=Path(self.cv_en_path) if self.cv_en_path else None,
+            de_pdf=Path(self.cv_de_path) if self.cv_de_path else None,
+            en_pdf=Path(self.cv_en_path) if self.cv_en_path else None,
+            de_docx=Path(self.cv_de_docx_path) if self.cv_de_docx_path else None,
+            en_docx=Path(self.cv_en_docx_path) if self.cv_en_docx_path else None,
         )
 
 

@@ -27,8 +27,14 @@ logger = logging.getLogger(__name__)
 _SECTION_LIMIT = 2900
 _HEADER_LIMIT = 150
 # Match alerts show a compact description preview; the full text stays one click
-# away behind the "Zum Projekt" link (Slack has no native collapse/expand).
+# away behind the "Zum Projekt" link (Slack has no native collapse/expand). Without
+# such a link (pasted text, uploads) the description is rendered in full instead.
 _DESCRIPTION_PREVIEW = 700
+# Sections one long text may occupy — a message is capped at 50 blocks in total.
+_MAX_CODE_PARTS = 8
+# A mailto: must fit in its own section, so the body it carries is bounded; the
+# complete text always stays available in the copyable block above it.
+_MAILTO_LIMIT = 2600
 
 type Block = dict[str, object]
 
@@ -113,35 +119,46 @@ def _linkedin_search_actions(contact_name: str) -> Block:
     return {"type": "actions", "elements": [button]}
 
 
-def _code_sections(text: str, *, label: str) -> list[Block]:
+def _code_sections(text: str, *, label: str, max_parts: int | None = None) -> list[Block]:
     """Render ``text`` as one or more copyable code-block sections under ``label``.
 
     Long text is split across consecutive sections (Slack caps a section at 3000
-    chars); the pieces render as one continuous block, with no part counter.
+    chars); the pieces render as one continuous block, with no part counter. Nothing
+    is dropped unless a caller sets ``max_parts`` — the application e-mail never
+    does, so it is always complete; only secondary text (a description) is bounded,
+    with a visible marker, to stay inside the 50-block message limit.
     """
     parts = _split_text(text.strip() or "(leer)", _SECTION_LIMIT - len(label) - 12)
+    kept = parts if max_parts is None else parts[:max_parts]
     blocks: list[Block] = []
-    for index, part in enumerate(parts):
+    for index, part in enumerate(kept):
         prefix = f"*{label}*\n" if index == 0 else ""
         blocks.append(_section(f"{prefix}```{_esc(part)}```"))
+    if len(kept) < len(parts):
+        blocks.append(
+            _context(f"… {len(parts) - len(kept)} more block(s) omitted — text unusually long.")
+        )
     return blocks
 
 
-def _description_block(description: str) -> Block:
-    """A compact, copyable description preview; the full text stays behind the link.
+def _description_blocks(description: str, *, url: str | None) -> list[Block]:
+    """The listing description: previewed behind a link, or in full when there is none.
 
-    Slack messages have no native collapse, so a long freelancermap description is
-    trimmed on a word boundary and marked as shortened — the ``Zum Projekt`` link
-    carries the complete text.
+    A scan match links to the source, so a long description is trimmed on a word
+    boundary and the ``View project`` button carries the rest. Pasted text and
+    uploads have no such link — there the full description is rendered, split across
+    sections, because otherwise the cut-off part is simply unreadable.
     """
     text = description.strip()
-    if len(text) > _DESCRIPTION_PREVIEW:
-        cut = text.rfind(" ", _DESCRIPTION_PREVIEW // 2, _DESCRIPTION_PREVIEW)
-        text = text[: cut if cut != -1 else _DESCRIPTION_PREVIEW].rstrip() + " …"
-        suffix = "\n_Shortened — full description via 🔗 View project._"
-    else:
-        suffix = ""
-    return _section(f"*📄 Description*\n```{_esc(text)}```{suffix}")
+    if url:
+        if len(text) > _DESCRIPTION_PREVIEW:
+            cut = text.rfind(" ", _DESCRIPTION_PREVIEW // 2, _DESCRIPTION_PREVIEW)
+            text = text[: cut if cut != -1 else _DESCRIPTION_PREVIEW].rstrip() + " …"
+            suffix = "\n_Shortened — full description via 🔗 View project._"
+        else:
+            suffix = ""
+        return [_section(f"*📄 Description*\n```{_esc(text)}```{suffix}")]
+    return _code_sections(text, label="📄 Description", max_parts=_MAX_CODE_PARTS)
 
 
 def _labeled(label: str, value: str | None) -> str | None:
@@ -191,7 +208,7 @@ def _match_body(message: MatchMessage) -> list[Block]:
         blocks.append(_section(verdict_text))
 
     if message.description:
-        blocks.append(_description_block(message.description))
+        blocks.extend(_description_blocks(message.description, url=message.url))
     return blocks
 
 
@@ -323,15 +340,14 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         blocks.append(_linkedin_search_actions(view.contact_name))
 
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
-        # "Open in mail client" is a mrkdwn mailto link, not a URL button: Slack
-        # clients only open http(s) button URLs and silently drop a mailto click,
-        # while mailto links in text open the OS mail client. It is always offered —
-        # a missing recipient is simply left blank and filled in the mail client.
-        mailto = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}"
-        blocks.append(_section(_link(mailto, "📧 Open in mail client")))
-        actions: list[Block] = []
-        if view.recipient:
-            actions.append(_button("📤 Send", action_id="send", value=str(view.application_id)))
+        blocks.append(_attachment_section(view))
+        blocks.extend(_mail_client_blocks(view))
+        # 📤 Send always shows, with or without a recipient: a hidden button reads as
+        # a broken draft. Pressing it without an address answers with the hint instead
+        # of sending (the service guards it).
+        actions: list[Block] = [
+            _button("📤 Send", action_id="send", value=str(view.application_id))
+        ]
         # No recipient yet: offer contact research so the address can be found instead
         # of typed in blind (the button carries the listing id, not the application id).
         if not view.recipient and view.listing_id is not None:
@@ -348,9 +364,62 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         hints.append(f"🔁 Revision #{view.revision_count}")
     hints.append(
         "✏️ Reply in the thread: free text = revise the draft · a lone e-mail "
-        "address = set the recipient (then 📤 Send appears). Hover a code block to copy."
+        "address = set the recipient. Hover a code block to copy."
     )
     blocks.append(_context(" · ".join(hints)))
+    return blocks
+
+
+def _attachment_section(view: DraftView) -> Block:
+    """What 📤 Send will attach — and, in the same line, what is missing on disk."""
+    if not view.attachments and not view.missing_attachments:
+        return _context("📎 No CV configured — the e-mail is sent without an attachment.")
+    lines = []
+    if view.attachments:
+        lines.append(f"📎 *Attachments:* {_esc(', '.join(view.attachments))}")
+    else:
+        lines.append("📎 *Attachments:* none — no configured CV was found on disk")
+    if view.missing_attachments:
+        lines.append(f"⚠️ Missing in `cv/`: {_esc(', '.join(view.missing_attachments))}")
+    return _context(" · ".join(lines))
+
+
+def _fit_encoded(text: str, budget: int) -> str:
+    """The longest whole-line prefix of ``text`` whose percent-encoding fits ``budget``."""
+    kept: list[str] = []
+    used = 0
+    for line in text.splitlines():
+        used += len(quote(line + "\n"))
+        if used > budget:
+            break
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _mail_client_blocks(view: DraftView) -> list[Block]:
+    """The mailto link, pre-filled with subject and as much body as it can carry.
+
+    A mrkdwn ``mailto:`` link, not a URL button: Slack clients only open http(s)
+    button URLs and silently drop a mailto click, while a link in text opens the OS
+    mail client. It is always offered — a missing recipient is simply left blank and
+    typed there. A mailto can never carry attachments, so the CVs only ride along
+    via 📤 Send.
+    """
+    prefix = f"mailto:{view.recipient or ''}?subject={quote(view.subject)}&body="
+    budget = _MAILTO_LIMIT - len(prefix)
+    encoded = quote(view.body)
+    truncated = len(encoded) > budget
+    if truncated:
+        encoded = quote(_fit_encoded(view.body, budget))
+    blocks = [_section(_link(prefix + encoded, "📧 Open in mail client"))]
+    if truncated:
+        blocks.append(
+            _context(
+                "✉️ The mail client opens with the beginning of the letter (a mailto link "
+                "is length-limited) — copy the full text from the block above, and attach "
+                "the CVs yourself. 📤 Send delivers everything including the attachments."
+            )
+        )
     return blocks
 
 

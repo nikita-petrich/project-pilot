@@ -10,8 +10,11 @@ class MatchVerdict(BaseModel):
 
     All fields are required and there are no numeric range or default constraints,
     so the model round-trips cleanly through OpenAI strict structured outputs.
+    ``project_title`` is what a pasted description gets rendered under when the text
+    carries no headline of its own.
     """
 
+    project_title: str
     verdict: Literal["match", "no_match"]
     score: int
     reasons: list[str]
@@ -26,6 +29,7 @@ class MatchVerdict(BaseModel):
         if detail:
             reasons.append(detail)
         return cls(
+            project_title="",
             verdict="no_match",
             score=0,
             reasons=reasons,

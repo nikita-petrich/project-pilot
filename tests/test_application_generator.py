@@ -17,7 +17,9 @@ from project_pilot.errors import LlmSchemaError
 
 
 def _draft() -> ApplicationDraft:
-    return ApplicationDraft(subject="Bewerbung: X", body="Text", linkedin_message="Hi")
+    return ApplicationDraft(
+        project_title="X-Projekt", subject="Bewerbung: X", body="Text", linkedin_message="Hi"
+    )
 
 
 class _FakeClient:
@@ -81,7 +83,9 @@ async def test_revise_prompt_includes_current_draft_and_instruction() -> None:
     await _generator(client).revise(
         profile_text="p",
         listing_text="l",
-        current=ApplicationDraft(subject="Alt", body="Alter Text", linkedin_message="Li"),
+        current=ApplicationDraft(
+            project_title="Alt-Projekt", subject="Alt", body="Alter Text", linkedin_message="Li"
+        ),
         instruction="Bitte kürzer und auf Englisch",
     )
     prompt = client.calls[0]

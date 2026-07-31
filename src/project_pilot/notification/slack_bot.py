@@ -35,6 +35,7 @@ from project_pilot.errors import (
     assert_defined,
 )
 from project_pilot.evaluation.check import CheckResult
+from project_pilot.ingestion.normalize import extract_listing_title
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.notification.slack import (
     Block,
@@ -78,6 +79,9 @@ DEFAULT_IMAGE_INSTRUCTION = "Revise the draft taking the attached image(s) into 
 # More screenshots than this per message is almost certainly a mistake; cap the
 # vision payload instead of uploading a whole gallery to the LLM.
 _MAX_IMAGES = 5
+
+# How long a channel-anchor label may get before it is cut.
+_LABEL_LIMIT = 150
 
 
 class SlackPoster(Protocol):
@@ -146,6 +150,21 @@ _SLACK_LINK_RE = re.compile(r"<(?:mailto:)?([^|>]+)(?:\|[^>]*)?>")
 
 def _unwrap_slack_links(text: str) -> str:
     return _SLACK_LINK_RE.sub(lambda match: match.group(1), text)
+
+
+def _input_label(argument: str) -> str:
+    """A readable channel-anchor label for a slash-command argument.
+
+    A pasted description would be cut mid-sentence, so the anchor names the listing
+    instead: its own headline when it has one, otherwise its size — the resolved
+    title replaces this label as soon as the check or draft is done.
+    """
+    if argument.lower().startswith(("http://", "https://")):
+        return argument[:_LABEL_LIMIT]
+    heading = extract_listing_title(argument)
+    if heading:
+        return heading[:_LABEL_LIMIT]
+    return f"pasted description ({len(argument)} characters)"
 
 
 def _remember[T](store: dict[str, T], key: str, value: T, limit: int) -> None:
@@ -365,13 +384,18 @@ class SlackBot:
             return
         # A slash command leaves no message in the channel: post one anchor for it and
         # keep every answer (hints, progress, draft) in that anchor's thread.
-        parent = await self._client.post_text(f"📥 Application: {argument[:150]}")
+        parent = await self._client.post_text(f"📥 Application: {_input_label(argument)}")
         if parent is None:
             return
         factory = await self._resolve_apply(argument, thread_ts=parent.ts)
         if factory is None:
             return  # a hint was already posted in the thread
-        await self._post_new_draft(factory, parent.ts, progress="⏳ Creating application draft …")
+        await self._post_new_draft(
+            factory,
+            parent.ts,
+            progress="⏳ Creating application draft …",
+            anchor_ts=parent.ts,
+        )
 
     async def _resolve_apply(
         self, argument: str, *, thread_ts: str | None
@@ -403,7 +427,8 @@ class SlackBot:
             await self._client.post_text(CHECK_USAGE)
             return
         # Same as ``/apply``: one anchor line in the channel, the verdict in its thread.
-        parent = await self._client.post_text(f"🔍 Check: {argument[:150]}")
+        label = _input_label(argument)
+        parent = await self._client.post_text(f"🔍 Check: {label}")
         if parent is None:
             return
         resolved = await self._resolve_check(argument, thread_ts=parent.ts)
@@ -412,10 +437,11 @@ class SlackBot:
         factory, apply_action, apply_value = resolved
         await self._run_check(
             factory,
-            label=argument[:150],
+            label=label,
             apply_action=apply_action,
             apply_value=apply_value,
             thread_ts=parent.ts,
+            anchor_ts=parent.ts,
         )
 
     async def _resolve_check(
@@ -462,12 +488,15 @@ class SlackBot:
         apply_value: str | None,
         target_ts: str | None = None,
         thread_ts: str | None = None,
+        anchor_ts: str | None = None,
     ) -> None:
         """Run the check and render the verdict in place.
 
         ``target_ts`` reuses an existing message (an upload prompt) as the progress
         placeholder instead of posting a new one; ``thread_ts`` is the thread a fresh
         placeholder is posted into, so a verdict never lands loose in the channel.
+        ``anchor_ts`` is the slash command's channel line, relabeled with the
+        resolved project title once it is known.
         """
         progress = f"🔍 Checking against your profile: {label} …"
         if target_ts is None:
@@ -495,6 +524,7 @@ class SlackBot:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
+        await self._relabel_anchor(anchor_ts, "🔍 Check", result.title)
 
     def _remember_check(self, key: str, pending: _PendingCheck) -> None:
         """Keep a checked input so the result's apply button can draft from it later."""
@@ -693,12 +723,24 @@ class SlackBot:
                 progress="✏️ Revising the draft …",
             )
 
+    async def _relabel_anchor(self, anchor_ts: str | None, prefix: str, title: str) -> None:
+        """Rewrite a slash command's channel line with the resolved project title.
+
+        The anchor is posted before the listing is understood, so it starts out with
+        a heuristic label; this replaces it once the real title exists.
+        """
+        if anchor_ts is None or not title.strip():
+            return
+        text = f"{prefix}: {title.strip()[:_LABEL_LIMIT]}"
+        await self._client.update_blocks(self._channel, anchor_ts, status_blocks(text), text)
+
     async def _post_new_draft(
         self,
         factory: Callable[[], Awaitable[DraftView]],
         thread_ts: str,
         *,
         progress: str,
+        anchor_ts: str | None = None,
     ) -> None:
         # Post a progress placeholder immediately, then update it in place to the
         # finished draft — instant feedback without an extra lingering message.
@@ -718,6 +760,7 @@ class SlackBot:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
+        await self._relabel_anchor(anchor_ts, "📥 Application", view.title)
         # Routing key is the thread root, so any reply in this thread reaches the draft.
         await self._service.record_draft_ref(view.application_id, f"{self._channel}:{thread_ts}")
 

@@ -91,7 +91,7 @@ not the `#name`. The bot only serves this one channel.
 ## Environment and running
 
 Put the three values into `.env` (see `.env.example` for the full list, including the
-optional `CV_DE_PATH` / `CV_EN_PATH` for CV attachments):
+optional `CV_*_PATH` values for the CV attachments):
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-…

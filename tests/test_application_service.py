@@ -83,8 +83,13 @@ class _FakeSend:
         return {}
 
 
-def _draft(subject: str = "Bewerbung: KI-Projekt") -> ApplicationDraft:
-    return ApplicationDraft(subject=subject, body="Sehr geehrte Damen", linkedin_message="Hi!")
+def _draft(subject: str = "Bewerbung: KI-Projekt", title: str = "KI-Projekt") -> ApplicationDraft:
+    return ApplicationDraft(
+        project_title=title,
+        subject=subject,
+        body="Sehr geehrte Damen",
+        linkedin_message="Hi!",
+    )
 
 
 def _generator(drafts: list[ApplicationDraft]) -> tuple[ApplicationGenerator, _FakeClient]:
@@ -238,7 +243,7 @@ async def test_draft_for_unknown_listing_raises(
         await _service(session_factory).draft_for_listing(99999)
 
 
-async def test_draft_from_text_uses_first_line_as_title(
+async def test_draft_from_text_uses_the_listings_own_headline_as_title(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     view = await _service(session_factory).draft_from_text(
@@ -247,6 +252,24 @@ async def test_draft_from_text_uses_first_line_as_title(
     assert view.title == "Python Backend für LegalTech"
     assert view.recipient == "kontakt@kanzlei.de"
     assert view.url is None
+
+
+async def test_draft_from_text_without_a_headline_takes_the_generated_title(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A recruiter mail opens with "Hallo," — the model's project_title names it."""
+    service = _service(session_factory, drafts=[_draft(title="Senior Go Developer")])
+    view = await service.draft_from_text("Hallo,\n\nwir haben ein spannendes Projekt für Sie.")
+    assert view.title == "Senior Go Developer"
+
+
+async def test_draft_from_text_falls_back_to_the_first_line(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Neither a headline nor a generated title: the old first-line behaviour."""
+    service = _service(session_factory, drafts=[_draft(title="")])
+    view = await service.draft_from_text("Hallo,\n\nwir haben ein spannendes Projekt für Sie.")
+    assert view.title == "Hallo,"
 
 
 async def test_draft_from_images_forwards_them_and_records_a_marker(
@@ -258,7 +281,8 @@ async def test_draft_from_images_forwards_them_and_records_a_marker(
     )
     image = ImageAttachment(name="listing.png", mime_type="image/png", data=b"\x89PNG")
     view = await service.draft_from_text("", images=[image])
-    assert view.title == "listing.png"  # image-only submission: named after the screenshot
+    # A screenshot has no headline to read, so the model names the project.
+    assert view.title == "KI-Projekt"
     assert client.images == [["listing.png"]]
     stored = await _load_application(session_factory, view.application_id)
     assert "[Project listing attached as image: listing.png]" in stored.listing_text
@@ -352,30 +376,56 @@ async def test_send_marks_sent_exactly_once(
     assert len(send.sent) == 1
 
 
-async def test_send_attaches_the_cv_matching_the_draft_language(
+def _cvs(base: object, *, with_english_docx: bool = True) -> CvAttachments:
+    """Four CV files on disk (bar the optional EN .docx, to cover a missing one)."""
+    from pathlib import Path
+
+    root = Path(str(base))
+    paths = {
+        "de_pdf": root / "CV-DE.pdf",
+        "en_pdf": root / "CV-EN.pdf",
+        "de_docx": root / "CV-DE-Word.docx",
+        "en_docx": root / "CV-EN-Word.docx",
+    }
+    for key, path in paths.items():
+        if key != "en_docx" or with_english_docx:
+            path.write_bytes(b"%PDF")
+    return CvAttachments(**paths)
+
+
+async def test_send_attaches_every_cv_matching_language_first(
     session_factory: async_sessionmaker[AsyncSession],
     tmp_path: object,
 ) -> None:
-    from pathlib import Path
-
-    base = Path(str(tmp_path))
-    cv_de, cv_en = base / "CV-DE.pdf", base / "CV-EN.pdf"
-    cv_de.write_bytes(b"%PDF-DE")
-    cv_en.write_bytes(b"%PDF-EN")
-    attachments = CvAttachments(de=cv_de, en=cv_en)
-
+    """All four CVs ride along; the draft language only decides the order."""
     listing_id = await _store(session_factory, _listing("jobs@firma.de"))
     send = _FakeSend()
     english = _draft()
     english.body = "Dear Sir or Madam, I would be glad to support your project."
     service = _service(
-        session_factory, drafts=[english, english], mailer=_mailer(send), cv_attachments=attachments
+        session_factory,
+        drafts=[english, english],
+        mailer=_mailer(send),
+        cv_attachments=_cvs(tmp_path),
     )
     view = await service.draft_for_listing(listing_id)
     await service.send(view.application_id)
 
     files = [part.get_filename() for part in send.sent[0].iter_attachments()]
-    assert files == ["CV-EN.pdf"]  # English body → English CV
+    assert files == ["CV-EN.pdf", "CV-EN-Word.docx", "CV-DE.pdf", "CV-DE-Word.docx"]
+
+
+async def test_draft_view_names_attachments_and_reports_a_missing_one(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: object,
+) -> None:
+    """The draft says what a send will attach, so a missing file is visible up front."""
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    service = _service(session_factory, cv_attachments=_cvs(tmp_path, with_english_docx=False))
+    view = await service.draft_for_listing(listing_id)
+
+    assert view.attachments == ("CV-DE.pdf", "CV-DE-Word.docx", "CV-EN.pdf")
+    assert view.missing_attachments == ("CV-EN-Word.docx",)
 
 
 async def test_send_without_configured_cv_has_no_attachment(

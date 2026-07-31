@@ -346,8 +346,13 @@ def _buttons(blocks: list[Block]) -> dict[str, str | None]:
 
 
 def _updated_buttons(poster: _FakePoster) -> dict[str, str | None]:
+    """Buttons of the last updated message that has any (a relabeled anchor has none)."""
     assert poster.updates, "no message update happened"
-    return _buttons(poster.updates[-1][2])
+    for _, _, blocks in reversed(poster.updates):
+        buttons = _buttons(blocks)
+        if buttons:
+            return buttons
+    return {}
 
 
 def _prompt_buttons(poster: _FakePoster) -> dict[str, str | None]:
@@ -809,6 +814,34 @@ async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
     assert "project description" in hint and thread == poster.text_ids[0]
 
 
+async def test_slash_check_anchor_names_the_listing_not_the_pasted_text() -> None:
+    """A pasted mail is cut mid-sentence as a channel line, so the anchor names it."""
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    mail = "Hallo,\n\nwir suchen Verstärkung im Team.\nPosition: Senior Go Developer"
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(mail, command="/check")
+    )
+    assert poster.texts[0] == ("🔍 Check: Senior Go Developer", None)
+
+
+async def test_slash_check_anchor_falls_back_to_the_text_size() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    prose = "Wir suchen jemanden, der uns hilft. Bitte melden Sie sich."
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(prose, command="/check")
+    )
+    # No headline to read: the anchor says how much text arrived, then the resolved
+    # title (from the model) replaces it once the verdict is in.
+    assert poster.texts[0] == (f"🔍 Check: pasted description ({len(prose)} characters)", None)
+    assert "🔍 Check: KI-Projekt" in str(poster.updates[-1][2])
+
+
+async def test_slash_apply_relabels_its_anchor_with_the_draft_title() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("Hallo,\n\nbitte bewerben."))
+    assert "📥 Application: KI-Projekt" in str(poster.updates[-1][2])
+
+
 async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
     await _bot(poster, service, checker=checker).dispatch(
@@ -818,8 +851,10 @@ async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
     assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
     # the progress line is the only follow-up, and it lives in the anchor's thread
     assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
-    # the verdict replaces that threaded progress line — nothing lands in the channel
-    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
+    # the verdict replaces that threaded progress line, then the anchor is relabeled
+    # with the resolved project title — nothing new lands in the channel
+    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1], anchor_ts]
+    assert "🔍 Check: KI-Projekt" in str(poster.updates[-1][2])
     assert poster.posted_blocks == []
 
 

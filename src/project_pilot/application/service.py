@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.documents import (
     ImageAttachment,
     annotate_image_listing,
-    image_fallback_title,
+    fallback_listing_title,
 )
 from project_pilot.application.generator import ApplicationGenerator, GeneratedDraft
 from project_pilot.application.mailer import SmtpMailer
@@ -25,6 +25,7 @@ from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
     detect_language,
+    extract_listing_title,
     resolve_contact_name,
 )
 from project_pilot.ingestion.parser import ParsedListing
@@ -95,9 +96,16 @@ class DraftView:
     status: ApplicationStatus
     revision_count: int
     listing_id: int | None = None
+    attachments: tuple[str, ...] = ()
+    missing_attachments: tuple[str, ...] = ()
 
 
-def _to_view(application: Application) -> DraftView:
+def _to_view(
+    application: Application,
+    *,
+    attachments: tuple[str, ...] = (),
+    missing_attachments: tuple[str, ...] = (),
+) -> DraftView:
     return DraftView(
         application_id=application.id,
         title=application.listing_title,
@@ -110,6 +118,8 @@ def _to_view(application: Application) -> DraftView:
         status=application.status,
         revision_count=application.revision_count,
         listing_id=application.listing_id,
+        attachments=attachments,
+        missing_attachments=missing_attachments,
     )
 
 
@@ -153,7 +163,7 @@ class ApplicationService:
                 contact_name=_contact_from_raw(listing.raw or {}, listing.description or ""),
             )
             await repo.add_application(application)
-            return _to_view(application)
+            return self._view(application)
 
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView:
         """Generate a draft for a freshly fetched detail page (``/apply <url>``)."""
@@ -173,7 +183,7 @@ class ApplicationService:
                 contact_name=_contact_from_raw(parsed.raw, parsed.description),
             )
             await repo.add_application(application)
-            return _to_view(application)
+            return self._view(application)
 
     async def draft_from_text(
         self, text: str, *, images: Sequence[ImageAttachment] = ()
@@ -186,10 +196,15 @@ class ApplicationService:
         """
         stripped = text.strip()
         listing_text = annotate_image_listing(stripped, images)
-        title = stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
+        # A recruiter mail opens with "Hallo," — read the real headline out of the
+        # text, and let the model's project_title name it when there is none.
+        heading = extract_listing_title(stripped)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             generated = await self._generate(listing_text, images=images)
+            title = (
+                heading or generated.draft.project_title or fallback_listing_title(stripped, images)
+            )
             application = self._build_application(
                 generated,
                 listing_text=listing_text,
@@ -200,7 +215,7 @@ class ApplicationService:
                 contact_name=resolve_contact_name(None, None, None, text),
             )
             await repo.add_application(application)
-            return _to_view(application)
+            return self._view(application)
 
     async def revise(
         self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
@@ -210,6 +225,7 @@ class ApplicationService:
             repo = Repository(session)
             application = await self._editable(repo, application_id)
             current = ApplicationDraft(
+                project_title=application.listing_title,
                 subject=application.subject,
                 body=application.body,
                 linkedin_message=application.linkedin_message,
@@ -228,7 +244,7 @@ class ApplicationService:
             application.tokens_in = (application.tokens_in or 0) + (generated.tokens_in or 0)
             application.tokens_out = (application.tokens_out or 0) + (generated.tokens_out or 0)
             await session.flush()
-            return _to_view(application)
+            return self._view(application)
 
     async def set_recipient(self, application_id: int, email: str) -> DraftView:
         """Set/replace the recipient address (reply containing a bare e-mail)."""
@@ -242,7 +258,7 @@ class ApplicationService:
             if application.status is ApplicationStatus.AWAITING_EMAIL:
                 application.status = ApplicationStatus.READY
             await session.flush()
-            return _to_view(application)
+            return self._view(application)
 
     async def send(self, application_id: int) -> DraftView:
         """Deliver the e-mail via SMTP; committed status steps guard against double sends."""
@@ -268,11 +284,18 @@ class ApplicationService:
             subject = application.subject
             body = application.body
 
-        # Attach the CV that matches the draft language (English draft → EN CV).
-        cv = None
-        if self._cv_attachments is not None:
-            cv = self._cv_attachments.for_language(detect_language(body))
-        attachments = [cv] if cv is not None else []
+        # Every configured CV rides along (PDF and Word, DE and EN); the draft's
+        # language only decides which one leads.
+        cvs = self._cv_attachments
+        language = detect_language(body)
+        attachments = cvs.for_language(language) if cvs is not None else []
+        missing = cvs.missing(language) if cvs is not None else []
+        if missing:
+            logger.warning(
+                "sending %d without %s (file not found)",
+                application_id,
+                ", ".join(path.name for path in missing),
+            )
 
         # The SMTP call happens outside any unit of work so a slow/failing server
         # never holds a transaction; the outcome is recorded in a follow-up one.
@@ -297,14 +320,14 @@ class ApplicationService:
             application.sent_at = _utcnow()
             application.error = None
             await session.flush()
-            return _to_view(application)
+            return self._view(application)
 
     async def cancel(self, application_id: int) -> DraftView:
         async with session_scope(self._session_factory) as session:
             application = await self._editable(Repository(session), application_id)
             application.status = ApplicationStatus.CANCELLED
             await session.flush()
-            return _to_view(application)
+            return self._view(application)
 
     async def record_draft_ref(self, application_id: int, draft_ref: str) -> None:
         """Remember the Slack message (``channel:ts``) that shows the draft (routing key)."""
@@ -316,13 +339,28 @@ class ApplicationService:
     async def find_by_draft_ref(self, draft_ref: str) -> DraftView | None:
         async with session_scope(self._session_factory) as session:
             application = await Repository(session).get_application_by_draft_ref(draft_ref)
-            return _to_view(application) if application is not None else None
+            return self._view(application) if application is not None else None
 
     async def find_listing_id_by_url(self, url: str) -> int | None:
         url_hash = compute_url_hash(canonicalize_url(url, BASE_URL))
         async with session_scope(self._session_factory) as session:
             listing = await Repository(session).get_listing_by_hash(url_hash)
             return listing.id if listing is not None else None
+
+    def _view(self, application: Application) -> DraftView:
+        """Snapshot for rendering, including the CVs a send would attach.
+
+        Naming them in the draft makes a missing file visible before the send rather
+        than after it — the recipient can only see what was actually on disk.
+        """
+        if self._cv_attachments is None:
+            return _to_view(application)
+        language = detect_language(application.body)
+        return _to_view(
+            application,
+            attachments=tuple(path.name for path in self._cv_attachments.for_language(language)),
+            missing_attachments=tuple(path.name for path in self._cv_attachments.missing(language)),
+        )
 
     async def _generate(
         self, listing_text: str, *, images: Sequence[ImageAttachment] = ()

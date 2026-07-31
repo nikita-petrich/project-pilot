@@ -571,8 +571,13 @@ OUTPUT-REGELN
 
 =============
 
-Gib ausschließlich das strukturierte Objekt mit diesen drei Feldern aus:
+Gib ausschließlich das strukturierte Objekt mit diesen vier Feldern aus:
 
+- `project_title`: die Überschrift der Ausschreibung, also Rolle plus prägender
+  Schwerpunkt (max. 80 Zeichen, ohne Firmenname, ohne „(m/w/d)", in der Sprache der
+  Ausschreibung). Steht eine Überschrift im Text (auch als Zeile „Position:" oder
+  „Projekt:"), übernimm sie; sonst formuliere sie selbst. Niemals leer, niemals eine
+  Grußzeile („Hallo,") und niemals ein ganzer Satz.
 - `subject`: der Betreff (eine Zeile, ohne Präfix „Betreff:", inkl. Referenznummer
   wenn vorhanden)
 - `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur und
