@@ -47,6 +47,27 @@ def _section_texts(blocks: list[Block]) -> list[str]:
     return texts
 
 
+def _code_texts(blocks: list[Block]) -> list[str]:
+    """The native code blocks' contents (rich_text_preformatted = corner copy button)."""
+    texts: list[str] = []
+    for block in _blocks_of_type(blocks, "rich_text"):
+        elements = block["elements"]
+        assert isinstance(elements, list)
+        for element in elements:
+            assert element["type"] == "rich_text_preformatted"
+            texts.append("".join(str(part["text"]) for part in element["elements"]))
+    return texts
+
+
+def _context_texts(blocks: list[Block]) -> list[str]:
+    texts: list[str] = []
+    for block in _blocks_of_type(blocks, "context"):
+        elements = block["elements"]
+        assert isinstance(elements, list)
+        texts.extend(str(cast("dict[str, object]", element)["text"]) for element in elements)
+    return texts
+
+
 def _draft_view(
     *,
     recipient: str | None = "pm@firma.de",
@@ -54,6 +75,7 @@ def _draft_view(
     body: str = "Sehr geehrte Damen und Herren,\nich passe gut.",
     revision_count: int = 1,
     contact_name: str | None = None,
+    company: str | None = None,
 ) -> DraftView:
     return DraftView(
         application_id=7,
@@ -66,6 +88,7 @@ def _draft_view(
         linkedin_message="Hallo, kurzes Interesse!",
         status=status,
         revision_count=revision_count,
+        company=company,
     )
 
 
@@ -96,18 +119,18 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
 
 def test_match_blocks_show_short_description_in_full() -> None:
     message = MatchMessage(title="t", url="https://x", score=1, description="Kurze Beschreibung.")
-    joined = "\n".join(_section_texts(format_match_blocks(message, listing_id=1)))
-    assert "```Kurze Beschreibung.```" in joined
-    assert "Gekürzt" not in joined
+    blocks = format_match_blocks(message, listing_id=1)
+    assert "Kurze Beschreibung." in _code_texts(blocks)
+    assert "Shortened" not in "".join(_context_texts(blocks))
 
 
 def test_match_blocks_preview_long_description_and_keep_link() -> None:
     long_text = "wort " * 400  # ~2000 chars, far over the preview budget
     message = MatchMessage(title="t", url="https://x/proj", score=1, description=long_text)
     blocks = format_match_blocks(message, listing_id=1)
-    desc = next(t for t in _section_texts(blocks) if "Description" in t)
-    assert len(desc) < 900  # compact preview, not the whole description
-    assert "Shortened" in desc and "…" in desc
+    preview = _code_texts(blocks)[0]
+    assert len(preview) < 800 and preview.endswith("…")  # compact preview only
+    assert any("Shortened" in text for text in _context_texts(blocks))
     assert "open_project" in _action_ids(blocks)  # full text stays behind the link
 
 
@@ -126,10 +149,10 @@ def test_check_blocks_show_the_whole_description_without_a_project_link() -> Non
         is_llm_error=False,
     )
     blocks = format_check_blocks(result)
-    sections = _section_texts(blocks)
-    joined = "".join(sections)
-    assert all(len(text) <= 3000 for text in sections)  # Slack's per-section limit
-    assert "Shortened" not in joined  # no dead end pointing at a button that is absent
+    codes = _code_texts(blocks)
+    joined = "".join(codes)
+    assert all(len(text) <= 3000 for text in codes)  # stay inside Slack's limits
+    assert "Shortened" not in "".join(_context_texts(blocks))  # no dead-end pointer
     assert "Zeile 0:" in joined and "Zeile 59:" in joined  # every line survived
 
 
@@ -148,8 +171,9 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     sections = "\n".join(_section_texts(blocks))
     assert "*To:* pm@firma.de" in sections
     assert "*Subject:* `Bewerbung: KI-Projekt`" in sections
-    assert "```Sehr geehrte Damen und Herren,\nich passe gut.```" in sections
-    assert "```Hallo, kurzes Interesse!```" in sections
+    codes = _code_texts(blocks)
+    assert "Sehr geehrte Damen und Herren,\nich passe gut." in codes
+    assert "Hallo, kurzes Interesse!" in codes
     ids = _action_ids(blocks)
     assert ids == ["send", "cancel"]
     # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs)
@@ -270,10 +294,11 @@ def test_contact_blocks_render_emails_phones_message_and_links() -> None:
         _enrichment(emails=["bewerbung@muster-gmbh.de"], phones=["+49 30 1234567"])
     )
     joined = "\n".join(_section_texts(blocks))
-    assert "bewerbung@muster-gmbh.de" in joined
-    assert "+49 30 1234567" in joined
+    codes = "\n".join(_code_texts(blocks))
+    assert "bewerbung@muster-gmbh.de" in codes
+    assert "+49 30 1234567" in codes
     assert "Muster GmbH" in joined
-    assert "Hallo Max," in joined  # the copyable LinkedIn connection message
+    assert "Hallo Max," in codes  # the copyable LinkedIn connection message
     assert _action_ids(blocks) == ["open_li_company", "open_li_people", "open_google"]
 
 
@@ -287,6 +312,17 @@ def test_draft_blocks_offer_linkedin_search_for_contact() -> None:
     button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
     assert button["url"] == (
         "https://www.linkedin.com/search/results/people/?keywords=Anna%20Kleinen"
+    )
+    with_company = format_draft_blocks(
+        _draft_view(contact_name="Anna Kleinen", company="Muster GmbH")
+    )
+    button = next(
+        e for e in _all_action_elements(with_company) if e["action_id"] == "linkedin_search"
+    )
+    # person AND company narrows the people search to the right hit
+    assert button["url"] == (
+        "https://www.linkedin.com/search/results/people/"
+        "?keywords=Anna%20Kleinen%20AND%20Muster%20GmbH"
     )
     text = button["text"]
     assert isinstance(text, dict)
@@ -315,7 +351,7 @@ def test_sent_confirmation_carries_linkedin_text_and_search_button() -> None:
     )
     joined = "\n".join(_section_texts(blocks))
     assert "sent to *pm@firma.de*" in joined
-    assert "```Hallo, kurzes Interesse!```" in joined
+    assert "Hallo, kurzes Interesse!" in _code_texts(blocks)
     button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
     assert "keywords=Anna%20Kleinen" in str(button["url"])
 
@@ -328,13 +364,23 @@ def test_sent_confirmation_without_contact_has_no_button() -> None:
 def test_draft_blocks_split_long_email_without_truncation() -> None:
     body = "\n".join(f"Zeile {i}: " + "wort " * 40 for i in range(300))
     blocks = format_draft_blocks(_draft_view(body=body))
-    for text in _section_texts(blocks):
-        assert len(text) <= 3000  # Slack's per-section limit
-    email_sections = [t for t in _section_texts(blocks) if "```" in t and "LinkedIn" not in t]
-    assert len(email_sections) >= 2  # split across several sections
-    assert all("…" not in t for t in email_sections)  # nothing cut off
-    joined = "".join(email_sections)
+    codes = [t for t in _code_texts(blocks) if "Interesse" not in t]  # the e-mail parts
+    assert len(codes) >= 2  # split across several blocks
+    assert all(len(t) <= 3000 for t in codes)
+    assert all("…" not in t for t in codes)  # nothing cut off
+    joined = "".join(codes)
     assert "Zeile 0:" in joined and "Zeile 299:" in joined
+
+
+def test_draft_blocks_with_body_in_file_point_at_the_text_file() -> None:
+    """When the e-mail went out as a .txt file, the message only points there."""
+    view = _draft_view(body="Sehr geehrte Damen und Herren,\nich passe gut.")
+    blocks = format_draft_blocks(view, body_in_file=True)
+    assert "Sehr geehrte Damen und Herren,\nich passe gut." not in _code_texts(blocks)
+    assert any("text file below" in text for text in _context_texts(blocks))
+    # the LinkedIn message still renders inline, and the buttons are unchanged
+    assert "Hallo, kurzes Interesse!" in _code_texts(blocks)
+    assert _action_ids(blocks) == ["send", "cancel"]
 
 
 def _check_result(
@@ -464,6 +510,22 @@ class _FakeWeb:
     ) -> SlackResponse:
         return _Resp({"ok": True, "ts": ts, "channel": channel})
 
+    async def files_upload_v2(
+        self,
+        *,
+        channel: str,
+        content: str,
+        filename: str,
+        title: str | None = None,
+        thread_ts: str | None = None,
+    ) -> SlackResponse:
+        self.calls.append(
+            {"channel": channel, "filename": filename, "title": title, "thread_ts": thread_ts}
+        )
+        if self.boom:
+            raise RuntimeError("network down")
+        return _Resp({"ok": self.ok, "error": self.error})
+
 
 def _client(web: _FakeWeb) -> SlackClient:
     return SlackClient(channel="C123", web_client=cast("SlackWebClient", web))
@@ -489,3 +551,28 @@ async def test_post_returns_none_on_api_error() -> None:
 
 async def test_post_returns_none_on_transport_error() -> None:
     assert await _client(_FakeWeb(boom=True)).post_text("x") is None
+
+
+async def test_upload_text_sends_the_file_into_the_thread() -> None:
+    web = _FakeWeb()
+    ok = await _client(web).upload_text(
+        content="Sehr geehrte...", filename="E-Mail.txt", title="Bewerbung", thread_ts="1700.42"
+    )
+    assert ok is True
+    call = web.calls[0]
+    assert call["channel"] == "C123"
+    assert call["filename"] == "E-Mail.txt"
+    assert call["thread_ts"] == "1700.42"
+
+
+async def test_upload_text_reports_failure_instead_of_raising() -> None:
+    assert (
+        await _client(_FakeWeb(ok=False, error="missing_scope")).upload_text(
+            content="x", filename="f.txt", title="t"
+        )
+        is False
+    )
+    assert (
+        await _client(_FakeWeb(boom=True)).upload_text(content="x", filename="f.txt", title="t")
+        is False
+    )

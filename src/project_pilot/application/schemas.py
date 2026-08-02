@@ -2,7 +2,9 @@
 
 from pydantic import BaseModel, field_validator
 
-LINKEDIN_LIMIT = 250
+# LinkedIn's own cap for a connection-request note; the message must carry the
+# booking link plus the phone alternative, so the full budget is used.
+LINKEDIN_LIMIT = 300
 TITLE_LIMIT = 120
 
 

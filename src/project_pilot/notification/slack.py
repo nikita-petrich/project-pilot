@@ -1,9 +1,10 @@
 """Slack Block Kit message building and a thin async Web API client wrapper.
 
 One message carries everything: a match posts its full listing plus an apply
-button; a draft posts the complete e-mail (split across ``section`` blocks so it is
-never truncated), the LinkedIn text, an open-in-mail-client link, and Send/Discard
-buttons.
+button; a draft posts the e-mail (as a ``.txt`` file in the thread, falling back to
+inline blocks), the LinkedIn text, an open-in-mail-client link, and Send/Discard
+buttons. Generated texts render as native code blocks, so every one carries
+Slack's copy button in its corner.
 
 All bot chrome (labels, buttons, hints, status) is English; only the generated
 application text follows the project's language.
@@ -105,35 +106,48 @@ def status_blocks(text: str) -> list[Block]:
     return [_section(text)]
 
 
-def linkedin_search_url(name: str) -> str:
-    """LinkedIn people search pre-filled with the contact's name."""
-    return f"https://www.linkedin.com/search/results/people/?keywords={quote(name)}"
+def linkedin_search_url(name: str, company: str | None = None) -> str:
+    """LinkedIn people search for the contact — ``name AND company`` when both known."""
+    keywords = f"{name} AND {company}" if company else name
+    return f"https://www.linkedin.com/search/results/people/?keywords={quote(keywords)}"
 
 
-def _linkedin_search_actions(contact_name: str) -> Block:
+def _linkedin_search_actions(contact_name: str, company: str | None = None) -> Block:
     button = _button(
         f"🔍 {contact_name[:60]} on LinkedIn",
         action_id="linkedin_search",
-        url=linkedin_search_url(contact_name),
+        url=linkedin_search_url(contact_name, company),
     )
     return {"type": "actions", "elements": [button]}
 
 
-def _code_sections(text: str, *, label: str, max_parts: int | None = None) -> list[Block]:
-    """Render ``text`` as one or more copyable code-block sections under ``label``.
+def _preformatted(text: str) -> Block:
+    """A native Slack code block (``rich_text_preformatted``).
 
-    Long text is split across consecutive sections (Slack caps a section at 3000
-    chars); the pieces render as one continuous block, with no part counter. Nothing
-    is dropped unless a caller sets ``max_parts`` — the application e-mail never
-    does, so it is always complete; only secondary text (a description) is bounded,
-    with a visible marker, to stay inside the 50-block message limit.
+    Unlike a mrkdwn ``` fence inside a section, this is the same element Slack
+    renders for user-typed code blocks — including the copy button in the top-right
+    corner on every client that has one.
     """
-    parts = _split_text(text.strip() or "(leer)", _SECTION_LIMIT - len(label) - 12)
+    return {
+        "type": "rich_text",
+        "elements": [
+            {"type": "rich_text_preformatted", "elements": [{"type": "text", "text": text}]}
+        ],
+    }
+
+
+def _code_sections(text: str, *, label: str, max_parts: int | None = None) -> list[Block]:
+    """Render ``text`` as a labeled native code block (copy button in the corner).
+
+    Long text is split across consecutive blocks; the pieces render as one
+    continuous run. Nothing is dropped unless a caller sets ``max_parts`` — the
+    generated texts never do; only secondary text (a description) is bounded, with
+    a visible marker, to stay inside the 50-block message limit.
+    """
+    parts = _split_text(text.strip() or "(leer)", _SECTION_LIMIT)
     kept = parts if max_parts is None else parts[:max_parts]
-    blocks: list[Block] = []
-    for index, part in enumerate(kept):
-        prefix = f"*{label}*\n" if index == 0 else ""
-        blocks.append(_section(f"{prefix}```{_esc(part)}```"))
+    blocks: list[Block] = [_section(f"*{label}*")]
+    blocks.extend(_preformatted(part) for part in kept)
     if len(kept) < len(parts):
         blocks.append(
             _context(f"… {len(parts) - len(kept)} more block(s) omitted — text unusually long.")
@@ -147,17 +161,19 @@ def _description_blocks(description: str, *, url: str | None) -> list[Block]:
     A scan match links to the source, so a long description is trimmed on a word
     boundary and the ``View project`` button carries the rest. Pasted text and
     uploads have no such link — there the full description is rendered, split across
-    sections, because otherwise the cut-off part is simply unreadable.
+    blocks, because otherwise the cut-off part is simply unreadable.
     """
     text = description.strip()
     if url:
+        blocks = [_section("*📄 Description*")]
         if len(text) > _DESCRIPTION_PREVIEW:
             cut = text.rfind(" ", _DESCRIPTION_PREVIEW // 2, _DESCRIPTION_PREVIEW)
             text = text[: cut if cut != -1 else _DESCRIPTION_PREVIEW].rstrip() + " …"
-            suffix = "\n_Shortened — full description via 🔗 View project._"
+            blocks.append(_preformatted(text))
+            blocks.append(_context("_Shortened — full description via 🔗 View project._"))
         else:
-            suffix = ""
-        return [_section(f"*📄 Description*\n```{_esc(text)}```{suffix}")]
+            blocks.append(_preformatted(text))
+        return blocks
     return _code_sections(text, label="📄 Description", max_parts=_MAX_CODE_PARTS)
 
 
@@ -317,8 +333,13 @@ def upload_prompt_fallback_text(label: str) -> str:
     return f"📥 {label} — apply or check?"
 
 
-def format_draft_blocks(view: DraftView) -> list[Block]:
-    """Build the Block Kit draft: full e-mail, LinkedIn, and the review buttons."""
+def format_draft_blocks(view: DraftView, *, body_in_file: bool = False) -> list[Block]:
+    """Build the Block Kit draft: full e-mail, LinkedIn, and the review buttons.
+
+    With ``body_in_file`` the e-mail text is not rendered into the message — it was
+    delivered as a ``.txt`` file in the thread (one unsplit, copyable document), so
+    the draft only points there.
+    """
     header_line = f"📨 Application draft: {view.title}"
     blocks: list[Block] = [_header(header_line)]
 
@@ -327,7 +348,12 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     meta.append(f"*Subject:* `{_esc(view.subject)}`")
     blocks.append(_section("\n".join(meta)))
 
-    blocks.extend(_code_sections(view.body, label="📄 E-mail (copy)"))
+    if body_in_file:
+        blocks.append(
+            _context("📄 Full e-mail: the text file below (the newest file is the current draft).")
+        )
+    else:
+        blocks.extend(_code_sections(view.body, label="📄 E-mail (copy)"))
     blocks.extend(
         _code_sections(
             view.linkedin_message,
@@ -337,7 +363,7 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
     # The search button rides with the LinkedIn text in every state (also after
     # sending, when the outreach actually happens).
     if view.contact_name:
-        blocks.append(_linkedin_search_actions(view.contact_name))
+        blocks.append(_linkedin_search_actions(view.contact_name, view.company))
 
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
         blocks.append(_attachment_section(view))
@@ -364,7 +390,7 @@ def format_draft_blocks(view: DraftView) -> list[Block]:
         hints.append(f"🔁 Revision #{view.revision_count}")
     hints.append(
         "✏️ Reply in the thread: free text = revise the draft · a lone e-mail "
-        "address = set the recipient. Hover a code block to copy."
+        "address = set the recipient. Copy button: top-right corner of each text block."
     )
     blocks.append(_context(" · ".join(hints)))
     return blocks
@@ -416,8 +442,9 @@ def _mail_client_blocks(view: DraftView) -> list[Block]:
         blocks.append(
             _context(
                 "✉️ The mail client opens with the beginning of the letter (a mailto link "
-                "is length-limited) — copy the full text from the block above, and attach "
-                "the CVs yourself. 📤 Send delivers everything including the attachments."
+                "is length-limited) — copy the full text from the e-mail block or text file "
+                "above, and attach the CVs yourself. 📤 Send delivers everything "
+                "including the attachments."
             )
         )
     return blocks
@@ -484,7 +511,7 @@ def sent_confirmation_blocks(view: DraftView) -> list[Block]:
     blocks = [_section(f"✅ Application sent to *{_esc(view.recipient or '')}*")]
     blocks.extend(_code_sections(view.linkedin_message, label="💬 LinkedIn message (copy)"))
     if view.contact_name:
-        blocks.append(_linkedin_search_actions(view.contact_name))
+        blocks.append(_linkedin_search_actions(view.contact_name, view.company))
     return blocks
 
 
@@ -540,6 +567,16 @@ class SlackWebClient(Protocol):
         blocks: list[Block] | None = None,
     ) -> SlackResponse: ...
 
+    async def files_upload_v2(
+        self,
+        *,
+        channel: str,
+        content: str,
+        filename: str,
+        title: str | None = None,
+        thread_ts: str | None = None,
+    ) -> SlackResponse: ...
+
 
 class SlackClient:
     """Posts and updates Slack messages; errors are logged and surface as ``None``."""
@@ -555,6 +592,31 @@ class SlackClient:
 
     async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
         return await self._post(text=text, blocks=None, thread_ts=thread_ts)
+
+    async def upload_text(
+        self, *, content: str, filename: str, title: str, thread_ts: str | None = None
+    ) -> bool:
+        """Upload ``content`` as a text-file snippet — one unsplit, copyable document.
+
+        Requires the ``files:write`` bot scope and a channel *ID* in the config
+        (file uploads do not resolve channel names). Failure is reported as False so
+        the caller can fall back to rendering the text inline.
+        """
+        try:
+            response = await self._web.files_upload_v2(
+                channel=self._channel,
+                content=content,
+                filename=filename,
+                title=title,
+                thread_ts=thread_ts,
+            )
+        except Exception as err:
+            logger.warning("slack file upload failed: %s", err)
+            return False
+        if not response.get("ok"):
+            logger.warning("slack file upload rejected: %s", response.get("error"))
+            return False
+        return True
 
     async def update_blocks(self, channel: str, ts: str, blocks: list[Block], text: str) -> bool:
         """Replace an existing message's blocks in place (draft revisions/send/cancel)."""

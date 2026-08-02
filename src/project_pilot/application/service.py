@@ -96,6 +96,7 @@ class DraftView:
     status: ApplicationStatus
     revision_count: int
     listing_id: int | None = None
+    company: str | None = None
     attachments: tuple[str, ...] = ()
     missing_attachments: tuple[str, ...] = ()
 
@@ -118,6 +119,7 @@ def _to_view(
         status=application.status,
         revision_count=application.revision_count,
         listing_id=application.listing_id,
+        company=application.company,
         attachments=attachments,
         missing_attachments=missing_attachments,
     )
@@ -152,7 +154,8 @@ class ApplicationService:
             recipient = extract_email(
                 "\n".join((listing.description or "", *_iter_strings(listing.raw or {})))
             )
-            generated = await self._generate(listing_text)
+            contact_name = _contact_from_raw(listing.raw or {}, listing.description or "")
+            generated = await self._generate(listing_text, contact_name=contact_name)
             application = self._build_application(
                 generated,
                 listing_text=listing_text,
@@ -160,7 +163,8 @@ class ApplicationService:
                 url=listing.external_url,
                 listing_id=listing.id,
                 recipient=recipient,
-                contact_name=_contact_from_raw(listing.raw or {}, listing.description or ""),
+                contact_name=contact_name,
+                company=_raw_str(listing.raw or {}, "company"),
             )
             await repo.add_application(application)
             return self._view(application)
@@ -172,7 +176,8 @@ class ApplicationService:
             stored = await repo.get_listing_by_hash(parsed.url_hash)
             listing_text = render_listing(parsed)
             recipient = extract_email("\n".join((parsed.description, *_iter_strings(parsed.raw))))
-            generated = await self._generate(listing_text)
+            contact_name = _contact_from_raw(parsed.raw, parsed.description)
+            generated = await self._generate(listing_text, contact_name=contact_name)
             application = self._build_application(
                 generated,
                 listing_text=listing_text,
@@ -180,7 +185,8 @@ class ApplicationService:
                 url=parsed.external_url,
                 listing_id=stored.id if stored is not None else None,
                 recipient=recipient,
-                contact_name=_contact_from_raw(parsed.raw, parsed.description),
+                contact_name=contact_name,
+                company=_raw_str(parsed.raw, "company"),
             )
             await repo.add_application(application)
             return self._view(application)
@@ -199,9 +205,10 @@ class ApplicationService:
         # A recruiter mail opens with "Hallo," — read the real headline out of the
         # text, and let the model's project_title name it when there is none.
         heading = extract_listing_title(stripped)
+        contact_name = resolve_contact_name(None, None, None, text)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            generated = await self._generate(listing_text, images=images)
+            generated = await self._generate(listing_text, images=images, contact_name=contact_name)
             title = (
                 heading or generated.draft.project_title or fallback_listing_title(stripped, images)
             )
@@ -212,7 +219,7 @@ class ApplicationService:
                 url=None,
                 listing_id=None,
                 recipient=extract_email(text),
-                contact_name=resolve_contact_name(None, None, None, text),
+                contact_name=contact_name,
             )
             await repo.add_application(application)
             return self._view(application)
@@ -236,6 +243,7 @@ class ApplicationService:
                 current=current,
                 instruction=instruction,
                 images=images,
+                contact_name=application.contact_name,
             )
             application.subject = generated.draft.subject
             application.body = generated.draft.body
@@ -363,12 +371,17 @@ class ApplicationService:
         )
 
     async def _generate(
-        self, listing_text: str, *, images: Sequence[ImageAttachment] = ()
+        self,
+        listing_text: str,
+        *,
+        images: Sequence[ImageAttachment] = (),
+        contact_name: str | None = None,
     ) -> GeneratedDraft:
         return await self._generator.generate(
             profile_text=self._profile.text,
             listing_text=listing_text,
             images=images,
+            contact_name=contact_name,
         )
 
     def _build_application(
@@ -381,6 +394,7 @@ class ApplicationService:
         listing_id: int | None,
         recipient: str | None,
         contact_name: str | None,
+        company: str | None = None,
     ) -> Application:
         return Application(
             listing_id=listing_id,
@@ -388,6 +402,7 @@ class ApplicationService:
             listing_title=title,
             listing_text=listing_text,
             contact_name=contact_name,
+            company=company,
             recipient_email=recipient,
             subject=generated.draft.subject,
             body=generated.draft.body,

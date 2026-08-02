@@ -44,14 +44,14 @@ Replace the file and push — there is no second mechanism and nothing to do on 
 server:
 
 ```sh
-cp ~/new-cv.pdf cv/CV-DE.pdf
+cp ~/new-cv.pdf cv/CV-German.pdf
 git commit -am "chore: update the German CV" && git push
 ```
 
 `CV_DE_PATH`, `CV_EN_PATH`, `CV_DE_DOCX_PATH` and `CV_EN_DOCX_PATH` default to
-`cv/CV-DE.pdf`, `cv/CV-EN.pdf`, `cv/CV-DE-Word.docx` and `cv/CV-EN-Word.docx`, so
-keeping the filenames means never touching config — and the name on disk is the name
-the recipient sees. Every one of them is attached to every application; a path that
+`cv/CV-German.pdf`, `cv/CV-English.pdf`, `cv/CV-German-Word.docx` and
+`cv/CV-English-Word.docx`, so keeping the filenames means never touching config —
+and the name on disk is the name the recipient sees. Every one of them is attached to every application; a path that
 does not exist is skipped (and named in the draft's `📎 Attachments` line), which is
 why the files you have not added yet are harmless.
 
@@ -133,7 +133,7 @@ Strongly recommended — it starts without them, but not usefully:
 | `POSTGRES_PASSWORD` | otherwise the default `pilot`. Set a real one **before the first deploy**: it is baked into the `pgdata` volume on creation, and changing it later means recreating the volume |
 
 Everything else from `.env.example` is optional (`SMTP_*` for sending applications,
-`ENRICHMENT_*`, `APPLICANT_NAME`, thresholds, `LOG_LEVEL`).
+`ENRICHMENT_*`, thresholds, `LOG_LEVEL`).
 
 Two things the renderer refuses, rather than writing a file a dotenv reader would
 silently misparse: a value spanning several lines, and a value containing `' #'`.

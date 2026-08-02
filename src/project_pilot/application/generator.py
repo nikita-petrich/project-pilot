@@ -50,6 +50,16 @@ class GeneratedDraft:
     latency_ms: int
 
 
+def _contact_section(contact_name: str | None) -> str:
+    """The resolved Ansprechpartner as an explicit input block (empty when unknown).
+
+    The name is also somewhere in the listing text, but handing it over explicitly
+    is what makes the salutation reliably address the person instead of falling
+    back to "Sehr geehrte Damen und Herren".
+    """
+    return f"\n\n## Ansprechpartner\n{contact_name}" if contact_name else ""
+
+
 def load_application_prompt(name: str = PROMPT_VERSION) -> str:
     """Read the single application prompt file (``application.md``, Nik's own prompt)."""
     path = _PROMPTS_DIR / f"{name}.md"
@@ -85,8 +95,13 @@ class ApplicationGenerator:
         profile_text: str,
         listing_text: str,
         images: Sequence[ImageAttachment] = (),
+        contact_name: str | None = None,
     ) -> GeneratedDraft:
-        user = f"## Candidate profile\n{profile_text}\n\n## Project listing\n{listing_text}"
+        user = (
+            f"## Candidate profile\n{profile_text}\n\n"
+            f"## Project listing\n{listing_text}"
+            f"{_contact_section(contact_name)}"
+        )
         return await self._complete(user, images)
 
     async def revise(
@@ -97,10 +112,12 @@ class ApplicationGenerator:
         current: ApplicationDraft,
         instruction: str,
         images: Sequence[ImageAttachment] = (),
+        contact_name: str | None = None,
     ) -> GeneratedDraft:
         user = (
             f"## Candidate profile\n{profile_text}\n\n"
-            f"## Project listing\n{listing_text}\n\n"
+            f"## Project listing\n{listing_text}"
+            f"{_contact_section(contact_name)}\n\n"
             f"## Current draft\nSubject: {current.subject}\n\n{current.body}\n\n"
             f"LinkedIn: {current.linkedin_message}\n\n"
             f"## Revision instruction\n{instruction}"

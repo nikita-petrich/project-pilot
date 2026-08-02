@@ -40,7 +40,7 @@ from project_pilot.ingestion.parser import ParsedListing, parse_detail_page
 from project_pilot.notification.slack import SlackClient, SlackNotifier, SlackWebClient
 from project_pilot.notification.slack_bot import SlackBot, run_socket_mode
 from project_pilot.pipeline import Pipeline, RunOutcome
-from project_pilot.profile_loader import ProfileService
+from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 
@@ -69,7 +69,7 @@ def _slack_client(settings: Settings) -> SlackClient:
 
 
 def _enrichment_service(
-    settings: Settings,
+    settings: Settings, profile: Profile
 ) -> tuple[EnrichmentService, Callable[[], Awaitable[None]]]:
     """Build the enrichment service plus a closer for the fetcher(s) it owns.
 
@@ -96,11 +96,13 @@ def _enrichment_service(
         if settings.enrichment_search == "duckduckgo"
         else NullSearchProvider()
     )
+    # The sender's own name comes from profile.md (Contact & Signature), the same
+    # source the application signature uses — no separate ENV needed.
     service = EnrichmentService(
         fetcher=page_fetcher,
         search=provider,
         max_pages=settings.enrichment_max_pages,
-        sender=settings.applicant_name or None,
+        sender=profile.applicant_name(),
         offer_du=settings.outreach_offer_du,
     )
 
@@ -171,7 +173,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
     enrichment: ListingEnrichmentService | None = None
     enrichment_closer: Callable[[], Awaitable[None]] | None = None
     if settings.has_enrichment():
-        enrichment_service, enrichment_closer = _enrichment_service(settings)
+        enrichment_service, enrichment_closer = _enrichment_service(settings, profile)
         enrichment = ListingEnrichmentService(
             session_factory=session_factory, service=enrichment_service
         )
@@ -299,7 +301,7 @@ async def _run_enrich(
     person: str | None,
     url: str | None,
 ) -> ContactEnrichment:
-    service, closer = _enrichment_service(settings)
+    service, closer = _enrichment_service(settings, ProfileService(Path("profile")).load())
     engine = None
     try:
         if listing_id is not None:

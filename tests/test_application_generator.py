@@ -168,3 +168,30 @@ def test_prompt_looks_up_the_signature_keys_by_name() -> None:
         assert f"<{key}>" in prompt, f"prompt no longer fills <{key}>"
     for key in ("CTA German", "CTA English"):
         assert f"`{key}`" in prompt, f"prompt no longer selects `{key}`"
+
+
+async def test_generate_hands_the_contact_over_explicitly() -> None:
+    client = _FakeClient([DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)])
+    generator = ApplicationGenerator(client, model="m", prompt_template="sys")
+    await generator.generate(profile_text="P", listing_text="L", contact_name="Nina Musterfrau")
+    assert "## Ansprechpartner\nNina Musterfrau" in client.calls[0]
+
+
+async def test_generate_without_contact_adds_no_section() -> None:
+    client = _FakeClient([DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)])
+    generator = ApplicationGenerator(client, model="m", prompt_template="sys")
+    await generator.generate(profile_text="P", listing_text="L")
+    assert "Ansprechpartner" not in client.calls[0]
+
+
+async def test_revise_keeps_the_contact_in_the_prompt() -> None:
+    client = _FakeClient([DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)])
+    generator = ApplicationGenerator(client, model="m", prompt_template="sys")
+    await generator.revise(
+        profile_text="P",
+        listing_text="L",
+        current=_draft(),
+        instruction="kürzer",
+        contact_name="Nina Musterfrau",
+    )
+    assert "## Ansprechpartner\nNina Musterfrau" in client.calls[0]

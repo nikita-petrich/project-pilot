@@ -13,6 +13,7 @@ every state change is guarded in the service layer.
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
@@ -83,6 +84,12 @@ _MAX_IMAGES = 5
 # How long a channel-anchor label may get before it is cut.
 _LABEL_LIMIT = 150
 
+# Drafts whose e-mail went out as a .txt file, keyed by application id with the
+# uploaded body's hash — so a recipient-only update re-renders without uploading a
+# duplicate file, while a revision (new body) uploads a fresh one. Bounded like the
+# other per-message state; losing it on restart only re-inlines/re-uploads.
+_BODY_FILE_LIMIT = 200
+
 
 class SlackPoster(Protocol):
     """The Slack posting surface the bot needs (``SlackClient`` satisfies it)."""
@@ -97,6 +104,10 @@ class SlackPoster(Protocol):
 
     async def update_blocks(
         self, channel: str, ts: str, blocks: list[Block], text: str
+    ) -> bool: ...
+
+    async def upload_text(
+        self, *, content: str, filename: str, title: str, thread_ts: str | None = None
     ) -> bool: ...
 
 
@@ -274,6 +285,7 @@ class SlackBot:
         self._enrichment = enrichment
         self._pending_checks: dict[str, _PendingCheck] = {}
         self._pending_uploads: dict[str, _PendingUpload] = {}
+        self._body_files: dict[str, str] = {}
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -754,7 +766,26 @@ class SlackBot:
             logger.exception("drafting failed")
             await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
-        blocks = format_draft_blocks(view)
+        # The e-mail goes into the thread as one unsplit .txt file (copy/download in
+        # one piece); if the upload fails (scope, channel name) the body is rendered
+        # inline instead, so the draft is never invisible. An unchanged body (e.g. a
+        # recipient-only update) reuses the file already in the thread.
+        key = str(view.application_id)
+        digest = hashlib.sha256(view.body.encode("utf-8")).hexdigest()
+        if self._body_files.get(key) == digest:
+            body_in_file = True
+        else:
+            body_in_file = await self._client.upload_text(
+                content=view.body,
+                filename="E-Mail.txt",
+                title=view.subject,
+                thread_ts=thread_ts,
+            )
+            if body_in_file:
+                _remember(self._body_files, key, digest, _BODY_FILE_LIMIT)
+            else:
+                self._body_files.pop(key, None)
+        blocks = format_draft_blocks(view, body_in_file=body_in_file)
         fallback = draft_fallback_text(view)
         if placeholder is not None:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
@@ -778,7 +809,10 @@ class SlackBot:
             await self._replace(progress, thread_root, f"⚠️ Unexpected error: {err}")
             return
         await self._client.update_blocks(
-            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
+            self._channel,
+            draft_ts,
+            format_draft_blocks(view, body_in_file=self._body_in_file(view.application_id)),
+            draft_fallback_text(view),
         )
         confirmation = sent_confirmation_blocks(view)
         fallback = sent_fallback_text(view)
@@ -826,9 +860,16 @@ class SlackBot:
             await self._client.post_text(f"⚠️ Unexpected error: {err}", thread_ts=thread_root)
             return
         await self._client.update_blocks(
-            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
+            self._channel,
+            draft_ts,
+            format_draft_blocks(view, body_in_file=self._body_in_file(view.application_id)),
+            draft_fallback_text(view),
         )
         await self._client.post_text("❌ Draft discarded.", thread_ts=thread_root)
+
+    def _body_in_file(self, application_id: int) -> bool:
+        """True when this draft's e-mail is already in the thread as a .txt file."""
+        return str(application_id) in self._body_files
 
     async def _replace(
         self, posted: PostedMessage | None, thread_ts: str | None, text: str

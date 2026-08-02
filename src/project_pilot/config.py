@@ -101,10 +101,10 @@ class Settings(BaseSettings):
     # update. The file name is what the recipient sees, hence the presentable casing.
     # A configured path that does not exist is skipped (and reported in the draft),
     # so the set can be filled in one file at a time.
-    cv_de_path: str = "cv/CV-DE.pdf"
-    cv_en_path: str = "cv/CV-EN.pdf"
-    cv_de_docx_path: str = "cv/CV-DE-Word.docx"
-    cv_en_docx_path: str = "cv/CV-EN-Word.docx"
+    cv_de_path: str = "cv/CV-German.pdf"
+    cv_en_path: str = "cv/CV-English.pdf"
+    cv_de_docx_path: str = "cv/CV-German-Word.docx"
+    cv_en_docx_path: str = "cv/CV-English-Word.docx"
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
@@ -115,7 +115,6 @@ class Settings(BaseSettings):
     enrichment_max_pages: int = 6
     enrichment_render: bool = False
     enrichment_render_browser_path: str = ""
-    applicant_name: str = ""
     outreach_offer_du: bool = True
 
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)

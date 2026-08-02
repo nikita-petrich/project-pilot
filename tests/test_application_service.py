@@ -198,10 +198,18 @@ async def test_draft_for_listing_resolves_and_persists_contact_name(
 ) -> None:
     listing = _listing(raw={"company": "Firma GmbH", "firstName": "Anna", "lastName": "Kleinen"})
     listing_id = await _store(session_factory, listing)
-    view = await _service(session_factory).draft_for_listing(listing_id)
+    generator, client = _generator([_draft()])
+    service = ApplicationService(
+        session_factory=session_factory, generator=generator, profile=_profile(), mailer=None
+    )
+    view = await service.draft_for_listing(listing_id)
     assert view.contact_name == "Anna Kleinen"
+    assert view.company == "Firma GmbH"  # feeds the "person AND company" LinkedIn search
+    # the resolved contact travels into the generation prompt for the salutation
+    assert "## Ansprechpartner\nAnna Kleinen" in client.calls[0]
     stored = await _load_application(session_factory, view.application_id)
     assert stored.contact_name == "Anna Kleinen"
+    assert stored.company == "Firma GmbH"
 
 
 async def test_draft_for_listing_agency_contact_falls_back_to_description(
@@ -382,10 +390,10 @@ def _cvs(base: object, *, with_english_docx: bool = True) -> CvAttachments:
 
     root = Path(str(base))
     paths = {
-        "de_pdf": root / "CV-DE.pdf",
-        "en_pdf": root / "CV-EN.pdf",
-        "de_docx": root / "CV-DE-Word.docx",
-        "en_docx": root / "CV-EN-Word.docx",
+        "de_pdf": root / "CV-German.pdf",
+        "en_pdf": root / "CV-English.pdf",
+        "de_docx": root / "CV-German-Word.docx",
+        "en_docx": root / "CV-English-Word.docx",
     }
     for key, path in paths.items():
         if key != "en_docx" or with_english_docx:
@@ -412,7 +420,12 @@ async def test_send_attaches_every_cv_matching_language_first(
     await service.send(view.application_id)
 
     files = [part.get_filename() for part in send.sent[0].iter_attachments()]
-    assert files == ["CV-EN.pdf", "CV-EN-Word.docx", "CV-DE.pdf", "CV-DE-Word.docx"]
+    assert files == [
+        "CV-English.pdf",
+        "CV-English-Word.docx",
+        "CV-German.pdf",
+        "CV-German-Word.docx",
+    ]
 
 
 async def test_draft_view_names_attachments_and_reports_a_missing_one(
@@ -424,8 +437,8 @@ async def test_draft_view_names_attachments_and_reports_a_missing_one(
     service = _service(session_factory, cv_attachments=_cvs(tmp_path, with_english_docx=False))
     view = await service.draft_for_listing(listing_id)
 
-    assert view.attachments == ("CV-DE.pdf", "CV-DE-Word.docx", "CV-EN.pdf")
-    assert view.missing_attachments == ("CV-EN-Word.docx",)
+    assert view.attachments == ("CV-German.pdf", "CV-German-Word.docx", "CV-English.pdf")
+    assert view.missing_attachments == ("CV-English-Word.docx",)
 
 
 async def test_send_without_configured_cv_has_no_attachment(
