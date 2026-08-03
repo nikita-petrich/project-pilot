@@ -67,8 +67,9 @@ async def test_record_run(session: AsyncSession) -> None:
     assert run.id is not None
     assert run.finished_at is None
 
-    finalized = await repo.finalize_run(
-        run,
+    finalized = await repo.record_run_outcome(
+        run.id,
+        started_at=run.started_at,
         status=RunStatus.SUCCESS,
         fetched=4,
         new=2,

@@ -6,7 +6,15 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from project_pilot.models import Evaluation, EvaluationStage, Listing, Run, RunStatus, Verdict
+from project_pilot.models import (
+    Evaluation,
+    EvaluationStage,
+    Listing,
+    Run,
+    RunStatus,
+    SourceState,
+    Verdict,
+)
 
 HEALTH_INTERVAL_MULTIPLE = 3
 
@@ -108,8 +116,23 @@ class ReportingService:
         )
         return await self._session.scalar(stmt)
 
+    async def active_cooldown_until(self) -> datetime | None:
+        """The latest active 403/captcha cooldown boundary, if any source is paused."""
+        return await self._session.scalar(
+            select(func.max(SourceState.cooldown_until)).where(
+                SourceState.cooldown_until > self._now
+            )
+        )
+
     async def is_healthy(self, *, interval_minutes: int) -> bool:
-        """True if the last successful run finished within 3x the scan interval."""
+        """True if the last successful run finished within 3x the scan interval.
+
+        An active cooldown also counts as healthy: the worker is deliberately
+        paused after a 403/captcha, not broken — without this, a by-design pause
+        would flag the container unhealthy for hours.
+        """
+        if await self.active_cooldown_until() is not None:
+            return True
         finished_at = await self.last_successful_run_at()
         if finished_at is None:
             return False
