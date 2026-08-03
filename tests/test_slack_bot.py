@@ -942,3 +942,17 @@ async def test_upload_from_foreign_channel_offers_nothing() -> None:
         "events_api", _file_event("x.txt", channel="C2")
     )
     assert poster.posted_blocks == [] and poster.texts == []
+
+
+async def test_slash_commands_ignore_foreign_channels() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service)
+    for command in ("/apply", "/check"):
+        payload: dict[str, object] = {
+            "command": command,
+            "text": "Python Projekt",
+            "channel_id": "C-other",
+        }
+        await bot.dispatch("slash_commands", payload)
+    assert service.calls == []
+    assert poster.visible_texts() == []  # nothing posted, no tokens spent

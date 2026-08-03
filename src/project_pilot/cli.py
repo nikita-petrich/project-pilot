@@ -62,6 +62,13 @@ def main() -> None:
     )
 
 
+def _load_settings() -> Settings:
+    """Load settings and apply the configured (validated) LOG_LEVEL to the root logger."""
+    settings = load_settings()
+    logging.getLogger().setLevel(settings.log_level.upper())
+    return settings
+
+
 def _slack_client(settings: Settings) -> SlackClient:
     config = settings.require_slack()
     web = cast("SlackWebClient", AsyncWebClient(token=config.bot_token))
@@ -353,7 +360,7 @@ def init_db() -> None:
 @app.command("run-once")
 def run_once() -> None:
     """Run a single scan. Cron-friendly: non-zero exit on a failed run."""
-    settings = load_settings()
+    settings = _load_settings()
     outcome = asyncio.run(_run_once(settings))
     typer.echo(
         f"run {outcome.status.value}: fetched={outcome.fetched} new={outcome.new} "
@@ -367,14 +374,14 @@ def run_once() -> None:
 @app.command("daemon")
 def daemon() -> None:
     """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) plus the Slack bot until SIGTERM."""
-    settings = load_settings()
+    settings = _load_settings()
     asyncio.run(_run_daemon(settings))
 
 
 @app.command("bot")
 def bot() -> None:
     """Run only the Slack bot (Apply buttons, /apply and /check commands, thread review)."""
-    settings = load_settings()
+    settings = _load_settings()
     settings.require_slack()
     asyncio.run(_run_bot(settings))
 
@@ -382,7 +389,7 @@ def bot() -> None:
 @app.command("healthcheck")
 def healthcheck() -> None:
     """Exit 0 if the last successful run is recent (for container healthchecks)."""
-    settings = load_settings()
+    settings = _load_settings()
     if not asyncio.run(_is_healthy(settings)):
         raise typer.Exit(code=1)
     typer.echo("healthy")
@@ -391,7 +398,7 @@ def healthcheck() -> None:
 @app.command("stats")
 def stats() -> None:
     """Print a reporting summary (verdicts, matches per day, no-match terms, tokens)."""
-    settings = load_settings()
+    settings = _load_settings()
     typer.echo(asyncio.run(_build_report(settings)))
 
 
@@ -407,7 +414,7 @@ def enrich(
     url: str = typer.Option(None, "--url", "-u", help="Known company website (skips search)."),
 ) -> None:
     """Find a company's contact data (Impressum/website) plus LinkedIn/Google links."""
-    settings = load_settings()
+    settings = _load_settings()
     try:
         result = asyncio.run(
             _run_enrich(settings, company=company, listing_id=listing_id, person=person, url=url)
@@ -421,7 +428,7 @@ def enrich(
 @app.command("test-notify")
 def test_notify() -> None:
     """Post a test message to the configured Slack channel."""
-    settings = load_settings()
+    settings = _load_settings()
     settings.require_slack()
     sent = asyncio.run(_send_test_notification(settings))
     typer.echo("test notification sent" if sent else "test notification failed")
