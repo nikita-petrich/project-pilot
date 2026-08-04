@@ -75,7 +75,7 @@ async def test_match_returns_verdict_and_metadata() -> None:
     assert result.is_match is True
     assert result.score == 80
     assert result.tokens_in == 100
-    assert result.prompt_version == "match.v3"
+    assert result.prompt_version == "match.v4"
     assert result.is_error is False
     assert client.calls == 1
 
@@ -190,7 +190,7 @@ def test_render_listing_carries_the_reference_number() -> None:
 
 
 def test_load_prompt_reads_every_shipped_version() -> None:
-    for version in ("match.v1", "match.v2"):
+    for version in ("match.v1", "match.v2", "match.v3"):
         text = load_prompt(version)
         assert text.strip()
         assert "match" in text.lower()
@@ -200,6 +200,15 @@ def test_current_prompt_keeps_an_unclear_hybrid_setup_neutral() -> None:
     text = load_prompt().lower()
     assert "hybrid" in text
     assert 'never make it a reason for\n  "no_match"' in text
+
+
+def test_current_prompt_treats_a_listed_technology_as_version_agnostic() -> None:
+    text = load_prompt().lower()
+    assert "react 19" in text
+    assert "next.js 15" in text
+    assert "never put a version number into\n  missing_requirements" in text
+    assert "turbopack" in text
+    assert "headless cms" in text
 
 
 def test_load_prompt_missing_raises() -> None:
