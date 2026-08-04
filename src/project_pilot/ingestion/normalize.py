@@ -140,6 +140,25 @@ _REMOTE_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Headline detection for pasted descriptions (see extract_listing_title).
+_TITLE_SCAN_LINES = 60
+_TITLE_MIN_LEN = 8
+_TITLE_MAX_LEN = 120
+_TITLE_MAX_WORDS = 14
+_TITLE_MAX_STOPWORDS = 1
+_STOPWORDS = _DE_WORDS | _EN_WORDS
+_MARKDOWN_HEADING_RE = re.compile(r"^#{1,6}\s+(?P<value>\S.*)$")
+_TITLE_LABEL_RE = re.compile(
+    r"^(?:projekt(?:titel|bezeichnung|name)?|position|rolle|stelle|jobtitel|job|titel"
+    r"|aufgabe|role|title|project|vacancy)\s*[:\-\u2013]\s*(?P<value>\S.*)$",
+    re.IGNORECASE,
+)
+_GREETING_RE = re.compile(
+    r"^(hallo|hi|hey|moin|servus|guten tag|guten morgen|guten abend|sehr geehrte"
+    r"|liebe[rs]?|dear|hello|good morning|good day)\b",
+    re.IGNORECASE,
+)
+
 
 def looks_like_company(name: str) -> bool:
     """True if ``name`` reads like a company (legal-form/agency suffix), not a person."""
@@ -169,6 +188,84 @@ def resolve_contact_name(
     if structured and not looks_like_company(structured) and structured != company:
         return structured
     return extract_contact_person(text)
+
+
+def extract_listing_title(text: str) -> str | None:
+    """Pull the listing's own headline out of a pasted description (None if it has none).
+
+    Recruiter mails rarely start with the title — they open with "Hallo," and put the
+    role behind a "Position:"/"Projekt:" label. Reading the headline that is actually
+    there beats showing the first line; when nothing here matches, the caller falls
+    back to the LLM-generated title.
+    """
+    lines = [line.strip() for line in text.splitlines()[:_TITLE_SCAN_LINES]]
+
+    for line in lines:  # an explicit markdown heading is the strongest signal
+        heading = _MARKDOWN_HEADING_RE.match(line)
+        if heading is not None:
+            title = _clean_title(_strip_label(heading.group("value")))
+            if title:
+                return title
+
+    for line in lines:  # a real headline sits at the top, ahead of the prose
+        if not line or _GREETING_RE.match(line) or _is_noise(line):
+            continue
+        title = _clean_title(line)
+        if title and _is_heading_like(title):
+            return _clean_title(_strip_label(title))
+        break  # the text opens with prose — look for a labelled line instead
+
+    return _labeled_title(lines)
+
+
+def _labeled_title(lines: list[str]) -> str | None:
+    """The value of the first "Position:"/"Projekt:"-style label among ``lines``."""
+    for line in lines:
+        labeled = _TITLE_LABEL_RE.match(line)
+        if labeled is not None:
+            title = _clean_title(labeled.group("value"))
+            if title:
+                return title
+    return None
+
+
+def _strip_label(value: str) -> str:
+    """Drop a leading "Projekt -"/"Position:" label so only the role name remains."""
+    labeled = _TITLE_LABEL_RE.match(value)
+    return labeled.group("value") if labeled is not None else value
+
+
+def _clean_title(value: str) -> str:
+    """Strip list/markdown decoration and collapse whitespace, capped for display."""
+    return " ".join(value.strip(" \t*_#-•·").split())[:_TITLE_MAX_LEN]
+
+
+def _is_noise(line: str) -> bool:
+    """True for lines that carry no headline: a bare link or a rule/separator."""
+    return line.lower().startswith(("http://", "https://", "www.")) or not any(
+        char.isalnum() for char in line
+    )
+
+
+def _is_heading_like(line: str) -> bool:
+    """True when ``line`` reads like a headline rather than a sentence or a label."""
+    if not _TITLE_MIN_LEN <= len(line) <= _TITLE_MAX_LEN or ":" in line:
+        return False
+    if line[-1] in ".!?,;" or not 1 < len(line.split()) <= _TITLE_MAX_WORDS:
+        return False
+    return not _reads_like_prose(line)
+
+
+def _reads_like_prose(line: str) -> bool:
+    """True when ``line`` is a sentence, not a title.
+
+    Titles name a role ("Senior Data Engineer (m/w/d)"); sentences glue words with
+    articles and prepositions. Hard-wrapped mail bodies produce short prose lines
+    that pass every length check, so stopword density is what separates them — one
+    connector is normal in a title ("AI Engineer für RAG"), several are not.
+    """
+    tokens = re.findall(r"[a-zäöüß]+", line.lower())
+    return sum(1 for token in tokens if token in _STOPWORDS) > _TITLE_MAX_STOPWORDS
 
 
 def is_onsite_only(remote_percent: int | None, location: str | None, description: str) -> bool:

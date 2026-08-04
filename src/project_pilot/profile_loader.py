@@ -1,6 +1,7 @@
 """ProfileService: loads profile.md and constraints.yaml, computes profile_hash."""
 
 import hashlib
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +9,11 @@ import yaml
 from pydantic import BaseModel, Field, ValidationError
 
 from project_pilot.errors import ConfigError
+
+# The "## Contact & Signature" section of profile.md is the single source for the
+# applicant's own data (name, phone, links). Anything that needs it (signature,
+# enrichment messages) reads it from here instead of duplicating it in ENV.
+_SIGNATURE_HEADING_RE = re.compile(r"^##\s+Contact\s*&\s*Signature\s*$", re.IGNORECASE)
 
 
 class ProfileConstraints(BaseModel):
@@ -18,6 +24,22 @@ class ProfileConstraints(BaseModel):
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
 
 
+def _signature_lines(text: str) -> list[str]:
+    """The content lines of the Contact & Signature section (quotes/blanks dropped)."""
+    lines: list[str] = []
+    inside = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if _SIGNATURE_HEADING_RE.match(line):
+            inside = True
+            continue
+        if inside and line.startswith("## "):  # next section starts
+            break
+        if inside and line and not line.startswith(">"):
+            lines.append(line)
+    return lines
+
+
 @dataclass(frozen=True, slots=True)
 class Profile:
     """The in-memory profile loaded at boot; ``profile_hash`` versions each verdict."""
@@ -25,6 +47,22 @@ class Profile:
     text: str
     constraints: ProfileConstraints
     profile_hash: str
+
+    def applicant_name(self) -> str | None:
+        """The applicant's own name: the first plain line of Contact & Signature."""
+        for line in _signature_lines(self.text):
+            if ":" not in line:  # "Key: value" lines are fields, not the name
+                return line
+        return None
+
+    def contact_value(self, key: str) -> str | None:
+        """The value of a ``Key: value`` line (e.g. ``Phone``) in Contact & Signature."""
+        prefix = f"{key.lower()}:"
+        for line in _signature_lines(self.text):
+            if line.lower().startswith(prefix):
+                value = line[len(prefix) :].strip()
+                return value or None
+        return None
 
 
 class ProfileService:

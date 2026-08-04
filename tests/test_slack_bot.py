@@ -69,6 +69,10 @@ def _parsed() -> ParsedListing:
 
 
 def _block_text(block: Block) -> str:
+    if block.get("type") == "rich_text":  # native code blocks (copyable text)
+        elements = block.get("elements")
+        assert isinstance(elements, list)
+        return "".join(str(part["text"]) for element in elements for part in element["elements"])
     text = block.get("text")
     return str(text.get("text")) if isinstance(text, dict) else ""
 
@@ -89,11 +93,13 @@ def _button_elements(blocks: list[Block]) -> list[dict[str, object]]:
 
 
 class _FakePoster:
-    def __init__(self) -> None:
+    def __init__(self, *, upload_ok: bool = True) -> None:
         self.texts: list[tuple[str, str | None]] = []
         self.text_ids: list[str] = []  # the ts each plain post got, for threading assertions
         self.posted_blocks: list[tuple[list[Block], str | None]] = []
         self.updates: list[tuple[str, str, list[Block]]] = []
+        self.uploads: list[tuple[str, str, str | None]] = []  # (filename, content, thread_ts)
+        self.upload_ok = upload_ok
         self._ts = 100
 
     async def post_text(self, text: str, *, thread_ts: str | None = None) -> PostedMessage | None:
@@ -109,15 +115,21 @@ class _FakePoster:
         self.posted_blocks.append((blocks, thread_ts))
         return PostedMessage(channel=CHANNEL, ts=str(self._ts))
 
+    async def upload_text(
+        self, *, content: str, filename: str, title: str, thread_ts: str | None = None
+    ) -> bool:
+        self.uploads.append((filename, content, thread_ts))
+        return self.upload_ok
+
     async def update_blocks(self, channel: str, ts: str, blocks: list[Block], text: str) -> bool:
         self.updates.append((channel, ts, blocks))
         return True
 
     def visible_texts(self) -> list[str]:
-        """Everything the user can read: plain posts plus status-block updates."""
+        """Everything the user can read: plain posts plus status/code-block updates."""
         out = [t for t, _ in self.texts]
         for _, _, blocks in self.updates:
-            out.extend(_block_text(b) for b in blocks if b.get("type") == "section")
+            out.extend(_block_text(b) for b in blocks if b.get("type") in ("section", "rich_text"))
         return out
 
     def draft_rendered(self) -> bool:
@@ -346,8 +358,13 @@ def _buttons(blocks: list[Block]) -> dict[str, str | None]:
 
 
 def _updated_buttons(poster: _FakePoster) -> dict[str, str | None]:
+    """Buttons of the last updated message that has any (a relabeled anchor has none)."""
     assert poster.updates, "no message update happened"
-    return _buttons(poster.updates[-1][2])
+    for _, _, blocks in reversed(poster.updates):
+        buttons = _buttons(blocks)
+        if buttons:
+            return buttons
+    return {}
 
 
 def _prompt_buttons(poster: _FakePoster) -> dict[str, str | None]:
@@ -386,6 +403,47 @@ async def test_apply_action_threads_draft_and_records_root_ref() -> None:
     assert poster.draft_rendered()
     # routing key is the thread root (the match message ts), not the draft's own ts
     assert service.recorded == [(1, "C1:111.1")]
+
+
+async def test_draft_email_is_delivered_as_text_file_in_the_thread() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("interactive", _interactive("apply", "7"))
+    filename, content, thread_ts = poster.uploads[0]
+    assert filename == "E-Mail.txt"
+    assert content == "Sehr geehrte Damen und Herren"  # the full, unsplit letter
+    assert thread_ts == "111.1"  # same thread as the draft
+    # the draft message points at the file instead of inlining the body
+    draft_blocks = next(blocks for _, _, blocks in poster.updates if _is_draft(blocks))
+    assert "text file below" in str(draft_blocks)
+    assert not any(
+        block.get("type") == "rich_text" and "Sehr geehrte" in str(block) for block in draft_blocks
+    )
+
+
+async def test_recipient_update_reuses_the_existing_email_file() -> None:
+    """Setting the recipient re-renders the draft but must not duplicate the file."""
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service)
+    await bot.dispatch("interactive", _interactive("apply", "7"))
+    service.by_ref[f"{CHANNEL}:111.1"] = service.view
+    await bot.on_thread_message(
+        channel=CHANNEL, thread_ts="111.1", text="pm@firma.de", from_bot=False
+    )
+    assert ("set_recipient", (1, "pm@firma.de")) in service.calls
+    assert len(poster.uploads) == 1  # body unchanged → the first file still holds
+    # the re-rendered draft still points at the file instead of inlining
+    assert "text file below" in str(poster.updates[-1][2])
+
+
+async def test_draft_email_falls_back_inline_when_upload_fails() -> None:
+    """No files:write scope (or a channel name): the letter must still be readable."""
+    poster, service = _FakePoster(upload_ok=False), _FakeService()
+    await _bot(poster, service).dispatch("interactive", _interactive("apply", "7"))
+    draft_blocks = next(blocks for _, _, blocks in poster.updates if _is_draft(blocks))
+    assert any(
+        block.get("type") == "rich_text" and "Sehr geehrte" in str(block) for block in draft_blocks
+    )
+    assert "text file below" not in str(draft_blocks)
 
 
 async def test_apply_from_foreign_channel_is_ignored() -> None:
@@ -809,6 +867,34 @@ async def test_slash_apply_unknown_link_hint_lands_in_the_thread() -> None:
     assert "project description" in hint and thread == poster.text_ids[0]
 
 
+async def test_slash_check_anchor_names_the_listing_not_the_pasted_text() -> None:
+    """A pasted mail is cut mid-sentence as a channel line, so the anchor names it."""
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    mail = "Hallo,\n\nwir suchen Verstärkung im Team.\nPosition: Senior Go Developer"
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(mail, command="/check")
+    )
+    assert poster.texts[0] == ("🔍 Check: Senior Go Developer", None)
+
+
+async def test_slash_check_anchor_falls_back_to_the_text_size() -> None:
+    poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
+    prose = "Wir suchen jemanden, der uns hilft. Bitte melden Sie sich."
+    await _bot(poster, service, checker=checker).dispatch(
+        "slash_commands", _slash(prose, command="/check")
+    )
+    # No headline to read: the anchor says how much text arrived, then the resolved
+    # title (from the model) replaces it once the verdict is in.
+    assert poster.texts[0] == (f"🔍 Check: pasted description ({len(prose)} characters)", None)
+    assert "🔍 Check: KI-Projekt" in str(poster.updates[-1][2])
+
+
+async def test_slash_apply_relabels_its_anchor_with_the_draft_title() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    await _bot(poster, service).dispatch("slash_commands", _slash("Hallo,\n\nbitte bewerben."))
+    assert "📥 Application: KI-Projekt" in str(poster.updates[-1][2])
+
+
 async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
     poster, service, checker = _FakePoster(), _FakeService(), _FakeChecker()
     await _bot(poster, service, checker=checker).dispatch(
@@ -818,8 +904,10 @@ async def test_slash_check_anchors_once_and_answers_in_the_thread() -> None:
     assert poster.texts[0] == ("🔍 Check: Python RAG Projekt", None)
     # the progress line is the only follow-up, and it lives in the anchor's thread
     assert [thread for _, thread in poster.texts[1:]] == [anchor_ts]
-    # the verdict replaces that threaded progress line — nothing lands in the channel
-    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1]]
+    # the verdict replaces that threaded progress line, then the anchor is relabeled
+    # with the resolved project title — nothing new lands in the channel
+    assert [ts for _, ts, _ in poster.updates] == [poster.text_ids[1], anchor_ts]
+    assert "🔍 Check: KI-Projekt" in str(poster.updates[-1][2])
     assert poster.posted_blocks == []
 
 

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.documents import (
     ImageAttachment,
     annotate_image_listing,
-    image_fallback_title,
+    fallback_listing_title,
 )
 from project_pilot.db import session_scope
 from project_pilot.errors import ApplicationStateError
@@ -27,6 +27,7 @@ from project_pilot.evaluation.llm import (
     render_listing_entity,
 )
 from project_pilot.evaluation.rules import apply_hard_rules
+from project_pilot.ingestion.normalize import extract_listing_title
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import EvaluationStage, Listing, Verdict
 from project_pilot.notification.messages import MatchMessage, to_match_message
@@ -103,11 +104,15 @@ class CheckService:
         )
 
     async def check_text(self, text: str, *, images: Sequence[ImageAttachment] = ()) -> CheckResult:
-        """Check a pasted description, an uploaded file's text, and/or screenshots."""
+        """Check a pasted description, an uploaded file's text, and/or screenshots.
+
+        A pasted recruiter mail rarely starts with the role, so the headline is read
+        out of the text; when it has none the LLM's ``project_title`` names the result.
+        """
         stripped = text.strip()
-        title = stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
         return await self._evaluate(
-            title=title,
+            title=extract_listing_title(stripped),
+            fallback_title=fallback_listing_title(stripped, images),
             rules_text=stripped,
             listing_text=annotate_image_listing(stripped, images),
             match_source=None,
@@ -117,10 +122,11 @@ class CheckService:
     async def _evaluate(
         self,
         *,
-        title: str,
+        title: str | None,
         rules_text: str,
         listing_text: str,
         match_source: Listing | ParsedListing | None,
+        fallback_title: str = "",
         images: Sequence[ImageAttachment] = (),
     ) -> CheckResult:
         # The rule engine reads text, so it cannot judge a screenshot: with no text
@@ -130,7 +136,7 @@ class CheckService:
             rule = apply_hard_rules(rules_text, self._profile.constraints)
             if not rule.passed:
                 return CheckResult(
-                    title=title,
+                    title=title or fallback_title,
                     stage=EvaluationStage.HARD_RULE,
                     verdict=Verdict.NO_MATCH,
                     passed=False,
@@ -144,15 +150,19 @@ class CheckService:
             profile_text=self._profile.text, listing_text=listing_text, images=images
         )
         passed = is_match_notifiable(llm, self._threshold)
+        # No headline in the text: the model named the project, so use that.
+        resolved = title or llm.verdict.project_title.strip() or fallback_title
         return CheckResult(
-            title=title,
+            title=resolved,
             stage=EvaluationStage.LLM,
             verdict=Verdict.MATCH if llm.is_match else Verdict.NO_MATCH,
             passed=passed,
             score=llm.score,
             threshold=self._threshold,
             reason=llm.reason(),
-            message=self._match_message(title, llm, match_source, listing_text) if passed else None,
+            message=(
+                self._match_message(resolved, llm, match_source, listing_text) if passed else None
+            ),
             is_llm_error=llm.is_error,
         )
 

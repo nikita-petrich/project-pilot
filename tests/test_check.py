@@ -21,10 +21,15 @@ THRESHOLD = 60
 
 
 def _llm(
-    verdict: Literal["match", "no_match"] = "match", score: int = 80, *, is_error: bool = False
+    verdict: Literal["match", "no_match"] = "match",
+    score: int = 80,
+    *,
+    is_error: bool = False,
+    project_title: str = "Python-Projekt",
 ) -> LlmEvaluation:
     return LlmEvaluation(
         verdict=MatchVerdict(
+            project_title=project_title,
             verdict=verdict,
             score=score,
             reasons=["Passt zum Profil"],
@@ -130,9 +135,17 @@ async def test_check_text_forwards_images_and_marks_them_in_the_listing_text() -
     image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")
     result = await _service(matcher).check_text("", images=[image])
     assert result.passed and result.stage is EvaluationStage.LLM
-    assert result.title == "shot.png"  # image-only check: named after the screenshot
+    # A screenshot has no headline to read, so the model names the project.
+    assert result.title == "Python-Projekt"
     assert matcher.images == [["shot.png"]]
     assert matcher.listing_texts == ["[Project listing attached as image: shot.png]"]
+
+
+async def test_image_only_check_falls_back_to_the_file_name_without_a_model_title() -> None:
+    matcher = _FakeMatcher(_llm(score=75, project_title=""))
+    image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")
+    result = await _service(matcher).check_text("", images=[image])
+    assert result.title == "shot.png"
 
 
 async def test_image_only_check_skips_the_text_rule_engine() -> None:

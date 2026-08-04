@@ -36,6 +36,16 @@ def image_fallback_title(images: Sequence[ImageAttachment]) -> str:
     return images[0].name[:120] if images else "Projekt"
 
 
+def fallback_listing_title(text: str, images: Sequence[ImageAttachment]) -> str:
+    """Last-resort name for a submission whose text carries no headline.
+
+    Only reached when the heading heuristic finds nothing *and* the LLM supplied no
+    ``project_title`` (an early hard-rule stop, or an llm_error fallback).
+    """
+    stripped = text.strip()
+    return stripped.splitlines()[0][:120] if stripped else image_fallback_title(images)
+
+
 def annotate_image_listing(text: str, images: Sequence[ImageAttachment]) -> str:
     """Append one marker per attached image to a listing text.
 

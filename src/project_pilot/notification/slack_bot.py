@@ -13,6 +13,7 @@ every state change is guarded in the service layer.
 """
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
@@ -35,6 +36,7 @@ from project_pilot.errors import (
     assert_defined,
 )
 from project_pilot.evaluation.check import CheckResult
+from project_pilot.ingestion.normalize import extract_listing_title
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.notification.slack import (
     Block,
@@ -79,6 +81,15 @@ DEFAULT_IMAGE_INSTRUCTION = "Revise the draft taking the attached image(s) into 
 # vision payload instead of uploading a whole gallery to the LLM.
 _MAX_IMAGES = 5
 
+# How long a channel-anchor label may get before it is cut.
+_LABEL_LIMIT = 150
+
+# Drafts whose e-mail went out as a .txt file, keyed by application id with the
+# uploaded body's hash — so a recipient-only update re-renders without uploading a
+# duplicate file, while a revision (new body) uploads a fresh one. Bounded like the
+# other per-message state; losing it on restart only re-inlines/re-uploads.
+_BODY_FILE_LIMIT = 200
+
 
 class SlackPoster(Protocol):
     """The Slack posting surface the bot needs (``SlackClient`` satisfies it)."""
@@ -93,6 +104,10 @@ class SlackPoster(Protocol):
 
     async def update_blocks(
         self, channel: str, ts: str, blocks: list[Block], text: str
+    ) -> bool: ...
+
+    async def upload_text(
+        self, *, content: str, filename: str, title: str, thread_ts: str | None = None
     ) -> bool: ...
 
 
@@ -146,6 +161,21 @@ _SLACK_LINK_RE = re.compile(r"<(?:mailto:)?([^|>]+)(?:\|[^>]*)?>")
 
 def _unwrap_slack_links(text: str) -> str:
     return _SLACK_LINK_RE.sub(lambda match: match.group(1), text)
+
+
+def _input_label(argument: str) -> str:
+    """A readable channel-anchor label for a slash-command argument.
+
+    A pasted description would be cut mid-sentence, so the anchor names the listing
+    instead: its own headline when it has one, otherwise its size — the resolved
+    title replaces this label as soon as the check or draft is done.
+    """
+    if argument.lower().startswith(("http://", "https://")):
+        return argument[:_LABEL_LIMIT]
+    heading = extract_listing_title(argument)
+    if heading:
+        return heading[:_LABEL_LIMIT]
+    return f"pasted description ({len(argument)} characters)"
 
 
 def _remember[T](store: dict[str, T], key: str, value: T, limit: int) -> None:
@@ -255,6 +285,7 @@ class SlackBot:
         self._enrichment = enrichment
         self._pending_checks: dict[str, _PendingCheck] = {}
         self._pending_uploads: dict[str, _PendingUpload] = {}
+        self._body_files: dict[str, str] = {}
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -365,13 +396,18 @@ class SlackBot:
             return
         # A slash command leaves no message in the channel: post one anchor for it and
         # keep every answer (hints, progress, draft) in that anchor's thread.
-        parent = await self._client.post_text(f"📥 Application: {argument[:150]}")
+        parent = await self._client.post_text(f"📥 Application: {_input_label(argument)}")
         if parent is None:
             return
         factory = await self._resolve_apply(argument, thread_ts=parent.ts)
         if factory is None:
             return  # a hint was already posted in the thread
-        await self._post_new_draft(factory, parent.ts, progress="⏳ Creating application draft …")
+        await self._post_new_draft(
+            factory,
+            parent.ts,
+            progress="⏳ Creating application draft …",
+            anchor_ts=parent.ts,
+        )
 
     async def _resolve_apply(
         self, argument: str, *, thread_ts: str | None
@@ -403,7 +439,8 @@ class SlackBot:
             await self._client.post_text(CHECK_USAGE)
             return
         # Same as ``/apply``: one anchor line in the channel, the verdict in its thread.
-        parent = await self._client.post_text(f"🔍 Check: {argument[:150]}")
+        label = _input_label(argument)
+        parent = await self._client.post_text(f"🔍 Check: {label}")
         if parent is None:
             return
         resolved = await self._resolve_check(argument, thread_ts=parent.ts)
@@ -412,10 +449,11 @@ class SlackBot:
         factory, apply_action, apply_value = resolved
         await self._run_check(
             factory,
-            label=argument[:150],
+            label=label,
             apply_action=apply_action,
             apply_value=apply_value,
             thread_ts=parent.ts,
+            anchor_ts=parent.ts,
         )
 
     async def _resolve_check(
@@ -462,12 +500,15 @@ class SlackBot:
         apply_value: str | None,
         target_ts: str | None = None,
         thread_ts: str | None = None,
+        anchor_ts: str | None = None,
     ) -> None:
         """Run the check and render the verdict in place.
 
         ``target_ts`` reuses an existing message (an upload prompt) as the progress
         placeholder instead of posting a new one; ``thread_ts`` is the thread a fresh
         placeholder is posted into, so a verdict never lands loose in the channel.
+        ``anchor_ts`` is the slash command's channel line, relabeled with the
+        resolved project title once it is known.
         """
         progress = f"🔍 Checking against your profile: {label} …"
         if target_ts is None:
@@ -495,6 +536,7 @@ class SlackBot:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
+        await self._relabel_anchor(anchor_ts, "🔍 Check", result.title)
 
     def _remember_check(self, key: str, pending: _PendingCheck) -> None:
         """Keep a checked input so the result's apply button can draft from it later."""
@@ -693,12 +735,24 @@ class SlackBot:
                 progress="✏️ Revising the draft …",
             )
 
+    async def _relabel_anchor(self, anchor_ts: str | None, prefix: str, title: str) -> None:
+        """Rewrite a slash command's channel line with the resolved project title.
+
+        The anchor is posted before the listing is understood, so it starts out with
+        a heuristic label; this replaces it once the real title exists.
+        """
+        if anchor_ts is None or not title.strip():
+            return
+        text = f"{prefix}: {title.strip()[:_LABEL_LIMIT]}"
+        await self._client.update_blocks(self._channel, anchor_ts, status_blocks(text), text)
+
     async def _post_new_draft(
         self,
         factory: Callable[[], Awaitable[DraftView]],
         thread_ts: str,
         *,
         progress: str,
+        anchor_ts: str | None = None,
     ) -> None:
         # Post a progress placeholder immediately, then update it in place to the
         # finished draft — instant feedback without an extra lingering message.
@@ -712,12 +766,32 @@ class SlackBot:
             logger.exception("drafting failed")
             await self._replace(placeholder, thread_ts, f"⚠️ Unexpected error: {err}")
             return
-        blocks = format_draft_blocks(view)
+        # The e-mail goes into the thread as one unsplit .txt file (copy/download in
+        # one piece); if the upload fails (scope, channel name) the body is rendered
+        # inline instead, so the draft is never invisible. An unchanged body (e.g. a
+        # recipient-only update) reuses the file already in the thread.
+        key = str(view.application_id)
+        digest = hashlib.sha256(view.body.encode("utf-8")).hexdigest()
+        if self._body_files.get(key) == digest:
+            body_in_file = True
+        else:
+            body_in_file = await self._client.upload_text(
+                content=view.body,
+                filename="E-Mail.txt",
+                title=view.subject,
+                thread_ts=thread_ts,
+            )
+            if body_in_file:
+                _remember(self._body_files, key, digest, _BODY_FILE_LIMIT)
+            else:
+                self._body_files.pop(key, None)
+        blocks = format_draft_blocks(view, body_in_file=body_in_file)
         fallback = draft_fallback_text(view)
         if placeholder is not None:
             await self._client.update_blocks(placeholder.channel, placeholder.ts, blocks, fallback)
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_ts)
+        await self._relabel_anchor(anchor_ts, "📥 Application", view.title)
         # Routing key is the thread root, so any reply in this thread reaches the draft.
         await self._service.record_draft_ref(view.application_id, f"{self._channel}:{thread_ts}")
 
@@ -735,7 +809,10 @@ class SlackBot:
             await self._replace(progress, thread_root, f"⚠️ Unexpected error: {err}")
             return
         await self._client.update_blocks(
-            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
+            self._channel,
+            draft_ts,
+            format_draft_blocks(view, body_in_file=self._body_in_file(view.application_id)),
+            draft_fallback_text(view),
         )
         confirmation = sent_confirmation_blocks(view)
         fallback = sent_fallback_text(view)
@@ -783,9 +860,16 @@ class SlackBot:
             await self._client.post_text(f"⚠️ Unexpected error: {err}", thread_ts=thread_root)
             return
         await self._client.update_blocks(
-            self._channel, draft_ts, format_draft_blocks(view), draft_fallback_text(view)
+            self._channel,
+            draft_ts,
+            format_draft_blocks(view, body_in_file=self._body_in_file(view.application_id)),
+            draft_fallback_text(view),
         )
         await self._client.post_text("❌ Draft discarded.", thread_ts=thread_root)
+
+    def _body_in_file(self, application_id: int) -> bool:
+        """True when this draft's e-mail is already in the thread as a .txt file."""
+        return str(application_id) in self._body_files
 
     async def _replace(
         self, posted: PostedMessage | None, thread_ts: str | None, text: str
