@@ -163,10 +163,59 @@ async def test_get_403_is_not_retried() -> None:
 
 
 @respx.mock
-async def test_get_retries_exhausted_returns_last_response() -> None:
-    respx.get(f"{BASE}/down").mock(return_value=httpx.Response(503))
+async def test_get_retries_exhausted_raises_source_unavailable() -> None:
+    route = respx.get(f"{BASE}/down").mock(return_value=httpx.Response(503))
     async with PolitenessClient(
         user_agent=UA, sleeper=_noop, retry_wait=wait_none(), max_attempts=2
     ) as client:
-        response = await client.get(f"{BASE}/down")
-    assert response.status_code == 503
+        with pytest.raises(SourceUnavailableError, match="after 2 attempts"):
+            await client.get(f"{BASE}/down")
+    assert route.call_count == 2
+
+
+@respx.mock
+async def test_check_robots_403_raises_source_blocked() -> None:
+    respx.get(f"{BASE}/robots.txt").mock(return_value=httpx.Response(403))
+    async with PolitenessClient(user_agent=UA, sleeper=_noop) as client:
+        with pytest.raises(SourceBlockedError, match=r"robots\.txt returned HTTP 403"):
+            await client.check_robots([f"{BASE}/projektboerse"])
+
+
+@respx.mock
+async def test_check_robots_404_means_no_rules() -> None:
+    respx.get(f"{BASE}/robots.txt").mock(return_value=httpx.Response(404))
+    async with PolitenessClient(user_agent=UA, sleeper=_noop) as client:
+        await client.check_robots([f"{BASE}/projektboerse"])
+
+
+@respx.mock
+async def test_check_robots_5xx_raises_source_unavailable() -> None:
+    respx.get(f"{BASE}/robots.txt").mock(return_value=httpx.Response(503))
+    async with PolitenessClient(
+        user_agent=UA, sleeper=_noop, retry_wait=wait_none(), max_attempts=2
+    ) as client:
+        with pytest.raises(SourceUnavailableError, match="after 2 attempts"):
+            await client.check_robots([f"{BASE}/projektboerse"])
+
+
+@respx.mock
+async def test_get_enforces_robots_for_later_urls() -> None:
+    respx.get(f"{BASE}/robots.txt").mock(
+        return_value=httpx.Response(200, text="User-agent: *\nDisallow: /projekt/\n")
+    )
+    async with PolitenessClient(user_agent=UA, sleeper=_noop) as client:
+        await client.check_robots([f"{BASE}/projektboerse"])  # the checked URL is allowed
+        with pytest.raises(SourceBlockedError, match=r"robots\.txt disallows"):
+            await client.get(f"{BASE}/projekt/x-1")  # a later disallowed path is refused
+
+
+@respx.mock
+async def test_captcha_mention_in_real_listing_page_is_not_blocked() -> None:
+    body = (
+        "<script class='js-react-on-rails-component'>{}</script>"
+        "<p>Wir suchen Unterstützung bei der hCaptcha-Integration.</p>"
+    )
+    respx.get(f"{BASE}/projekt/captcha-job").mock(return_value=httpx.Response(200, html=body))
+    async with PolitenessClient(user_agent=UA, sleeper=_noop) as client:
+        response = await client.get(f"{BASE}/projekt/captcha-job")
+    assert response.status_code == 200
