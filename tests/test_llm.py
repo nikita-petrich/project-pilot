@@ -46,6 +46,7 @@ class _FakeClient:
 
 def _verdict(verdict: Literal["match", "no_match"] = "match", score: int = 80) -> MatchVerdict:
     return MatchVerdict(
+        project_title="Python-Projekt",
         verdict=verdict,
         score=score,
         reasons=["good fit"],
@@ -74,7 +75,7 @@ async def test_match_returns_verdict_and_metadata() -> None:
     assert result.is_match is True
     assert result.score == 80
     assert result.tokens_in == 100
-    assert result.prompt_version == "match.v2"
+    assert result.prompt_version == "match.v3"
     assert result.is_error is False
     assert client.calls == 1
 

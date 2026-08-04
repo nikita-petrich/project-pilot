@@ -50,3 +50,12 @@ async def test_duckduckgo_search_queries_endpoint_and_parses() -> None:
 
 async def test_null_search_provider_finds_nothing() -> None:
     assert await NullSearchProvider().search("anything") == []
+
+
+def test_parse_ddg_results_drops_non_http_redirect_targets() -> None:
+    html = (
+        '<a class="result__a" href="//duckduckgo.com/l/?uddg=javascript%3Aalert(1)">Bad</a>'
+        '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Ffirma.de%2F">Good</a>'
+    )
+    results = parse_ddg_results(html, limit=5)
+    assert [result.url for result in results] == ["https://firma.de/"]

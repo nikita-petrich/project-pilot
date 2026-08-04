@@ -28,7 +28,10 @@ from project_pilot.models import PostedPrecision, RemoteStatus
 # --- react-on-rails blobs: the one place to adjust when the source structure changes ---
 # Pagination has no server-rendered <a> (the page links live only inside the blob),
 # so the pipeline walks pages by incrementing pagenr (see normalize.next_page_url).
-_REACT_COMPONENT = "script.js-react-on-rails-component"
+# REACT_MARKER also serves the client's captcha heuristic: a page carrying the
+# payload is real content, not a challenge wall.
+REACT_MARKER = "js-react-on-rails-component"
+_REACT_COMPONENT = f"script.{REACT_MARKER}"
 LIST_COMPONENT = "ProjectSearch"
 DETAIL_COMPONENT = "ProjectShow"
 

@@ -167,12 +167,11 @@ def test_unknown_search_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_enrichment_render_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("ENRICHMENT_RENDER", "ENRICHMENT_RENDER_BROWSER_PATH", "APPLICANT_NAME"):
+    for var in ("ENRICHMENT_RENDER", "ENRICHMENT_RENDER_BROWSER_PATH"):
         monkeypatch.delenv(var, raising=False)
     settings = Settings()
     assert settings.enrichment_render is False
     assert settings.enrichment_render_browser_path == ""
-    assert settings.applicant_name == ""
 
 
 def test_outreach_offer_du_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,12 +181,10 @@ def test_outreach_offer_du_defaults_on(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().outreach_offer_du is False
 
 
-def test_enrichment_render_and_applicant_name_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_enrichment_render_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENRICHMENT_RENDER", "true")
-    monkeypatch.setenv("APPLICANT_NAME", "Nik")
     settings = Settings()
     assert settings.enrichment_render is True
-    assert settings.applicant_name == "Nik"
 
 
 def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -199,32 +196,45 @@ def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyP
 def test_cv_attachments_default_to_the_repo_files(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
-    monkeypatch.delenv("CV_DE_PATH", raising=False)
-    monkeypatch.delenv("CV_EN_PATH", raising=False)
+    for name in ("CV_DE_PATH", "CV_EN_PATH", "CV_DE_DOCX_PATH", "CV_EN_DOCX_PATH"):
+        monkeypatch.delenv(name, raising=False)
     cvs = Settings().cv_attachments()
     # Unset means "the CVs committed under cv/", so updating one is a file swap.
-    assert cvs.de == Path("cv/cv-de.pdf")
-    assert cvs.en == Path("cv/cv-en.pdf")
+    assert cvs.de_pdf == Path("cv/CV-German.pdf")
+    assert cvs.en_pdf == Path("cv/CV-English.pdf")
+    assert cvs.de_docx == Path("cv/CV-German-Word.docx")
+    assert cvs.en_docx == Path("cv/CV-English-Word.docx")
 
 
 def test_cv_attachments_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("CV_DE_PATH", "")
-    monkeypatch.setenv("CV_EN_PATH", "")
+    for name in ("CV_DE_PATH", "CV_EN_PATH", "CV_DE_DOCX_PATH", "CV_EN_DOCX_PATH"):
+        monkeypatch.setenv(name, "")
     cvs = Settings().cv_attachments()
-    assert cvs.de is None and cvs.en is None
-    assert cvs.for_language("de") is None  # explicitly empty → no attachment
+    assert cvs.de_pdf is None and cvs.en_pdf is None
+    assert cvs.for_language("de") == []  # explicitly empty → nothing attached
+    assert cvs.missing("de") == []  # and nothing reported as missing either
 
 
-def test_cv_attachments_pick_language_and_require_existing_file(
+def test_cv_attachments_send_every_existing_file_language_first(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
 ) -> None:
+    """Every configured CV goes out; only the order follows the draft language."""
     from pathlib import Path
 
-    de = Path(str(tmp_path)) / "CV-DE.pdf"
-    de.write_bytes(b"%PDF")
-    monkeypatch.setenv("CV_DE_PATH", str(de))
-    monkeypatch.setenv("CV_EN_PATH", str(Path(str(tmp_path)) / "missing.pdf"))
+    base = Path(str(tmp_path))
+    de_pdf = base / "CV-German.pdf"
+    en_pdf = base / "CV-English.pdf"
+    de_docx = base / "CV-German-Word.docx"
+    for path in (de_pdf, en_pdf, de_docx):
+        path.write_bytes(b"%PDF")
+    monkeypatch.setenv("CV_DE_PATH", str(de_pdf))
+    monkeypatch.setenv("CV_EN_PATH", str(en_pdf))
+    monkeypatch.setenv("CV_DE_DOCX_PATH", str(de_docx))
+    monkeypatch.setenv("CV_EN_DOCX_PATH", str(base / "missing.docx"))
     cvs = Settings().cv_attachments()
-    assert cvs.for_language("de") == de
-    assert cvs.for_language(None) == de  # default is the German CV
-    assert cvs.for_language("en") is None  # configured but file absent → skipped
+
+    assert cvs.for_language("de") == [de_pdf, de_docx, en_pdf]
+    assert cvs.for_language(None) == [de_pdf, de_docx, en_pdf]  # unknown → German first
+    assert cvs.for_language("en") == [en_pdf, de_pdf, de_docx]
+    # Configured but absent is reported rather than silently dropped.
+    assert [path.name for path in cvs.missing("de")] == ["missing.docx"]

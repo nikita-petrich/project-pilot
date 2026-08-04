@@ -10,6 +10,7 @@ from project_pilot.models import (
     Listing,
     ListingStatus,
     RunStatus,
+    SourceState,
     Verdict,
 )
 from project_pilot.reporting import ReportingService, format_report
@@ -127,7 +128,7 @@ async def test_build_and_format_report(session: AsyncSession) -> None:
 async def test_is_healthy_with_recent_run(session: AsyncSession) -> None:
     repo = Repository(session)
     run = await repo.start_run()
-    await repo.finalize_run(run, status=RunStatus.SUCCESS)
+    await repo.record_run_outcome(run.id, started_at=run.started_at, status=RunStatus.SUCCESS)
     service = ReportingService(session, now=datetime.now(UTC))
     assert await service.is_healthy(interval_minutes=15) is True
 
@@ -139,7 +140,23 @@ async def test_is_unhealthy_without_run(session: AsyncSession) -> None:
 async def test_is_unhealthy_with_stale_run(session: AsyncSession) -> None:
     repo = Repository(session)
     run = await repo.start_run()
-    await repo.finalize_run(run, status=RunStatus.SUCCESS)
+    await repo.record_run_outcome(run.id, started_at=run.started_at, status=RunStatus.SUCCESS)
     future = datetime.now(UTC) + timedelta(hours=5)
     service = ReportingService(session, now=future)
     assert await service.is_healthy(interval_minutes=15) is False
+
+
+async def test_is_healthy_during_active_cooldown(session: AsyncSession) -> None:
+    session.add(
+        SourceState(source="freelancermap", cooldown_until=datetime.now(UTC) + timedelta(hours=2))
+    )
+    await session.flush()
+    assert await ReportingService(session).is_healthy(interval_minutes=15) is True
+
+
+async def test_expired_cooldown_does_not_mask_unhealthy(session: AsyncSession) -> None:
+    session.add(
+        SourceState(source="freelancermap", cooldown_until=datetime.now(UTC) - timedelta(hours=2))
+    )
+    await session.flush()
+    assert await ReportingService(session).is_healthy(interval_minutes=15) is False

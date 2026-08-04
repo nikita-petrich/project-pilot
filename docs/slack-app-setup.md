@@ -47,6 +47,7 @@ oauth_config:
       - commands
       - channels:history
       - files:read
+      - files:write
 settings:
   event_subscriptions:
     bot_events:
@@ -86,12 +87,13 @@ not the `#name`. The bot only serves this one channel.
 | `commands` | receive the `/apply` and `/check` slash commands |
 | `channels:history` | read thread replies (revisions, recipient address, screenshots) |
 | `files:read` | download an uploaded PDF/text/image file to draft from or check it |
+| `files:write` | deliver each draft's e-mail as one copyable `.txt` file in the thread (without it the text renders inline in blocks) |
 | `connections:write` (app-level) | open the Socket Mode connection |
 
 ## Environment and running
 
 Put the three values into `.env` (see `.env.example` for the full list, including the
-optional `CV_DE_PATH` / `CV_EN_PATH` for CV attachments):
+optional `CV_*_PATH` values for the CV attachments):
 
 ```bash
 SLACK_BOT_TOKEN=xoxb-…

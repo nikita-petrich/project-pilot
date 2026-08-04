@@ -3,7 +3,7 @@
 .env.*
 !.env.example
 
-# profile/profile.md and cv/*.pdf are committed on purpose: this repo is a public
+# profile/profile.md and the CVs in cv/ are committed on purpose: this repo is a public
 # portfolio piece, and that data is the same CV and contact block Nik hands to
 # clients anyway. Secrets stay out — they live in .env, which is ignored above.
 

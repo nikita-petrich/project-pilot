@@ -57,10 +57,15 @@ The two profile files feed the matcher, the hard rules, and the application draf
   generator picks the one matching the application language for the closing
   sentence, the signature, and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
-- `cv/*.pdf` the CVs attached to application e-mails. `CV_DE_PATH` and `CV_EN_PATH`
-  default to `cv/cv-de.pdf` and `cv/cv-en.pdf`, so updating a CV is replacing
-  the file and pushing. Keep them a few MB at most — they go out as e-mail
-  attachments, and base64 adds about a third on the wire.
+- `cv/` the CVs attached to application e-mails — **all of them ride along on every
+  send**, so the recipient can forward whichever format and language they need.
+  `CV_DE_PATH`, `CV_EN_PATH`, `CV_DE_DOCX_PATH` and `CV_EN_DOCX_PATH` default to
+  `cv/CV-German.pdf`, `cv/CV-English.pdf`, `cv/CV-German-Word.docx` and
+  `cv/CV-English-Word.docx`, so
+  updating a CV is replacing the file and pushing. The file name is what the
+  recipient sees. A configured file that is not on disk is skipped and named in the
+  draft's `📎 Attachments` line, so you can add them one at a time. Keep them a few
+  MB at most — base64 adds about a third on the wire.
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
 gitignored and `.env.example` is the template):
@@ -131,8 +136,8 @@ change how applications are written. The draft posts as **one** message:
 - **Full e-mail** in copyable code blocks (split across Block Kit sections when
   long, never truncated), plus the subject and the LinkedIn message. Whenever a
   contact person is known, a **🔍 … on LinkedIn** button under the LinkedIn text
-  opens a LinkedIn people search for that name (also on the post-send
-  confirmation in the thread).
+  opens a LinkedIn people search for `<name> AND <company>` (the company narrows
+  it to the right person; also on the post-send confirmation in the thread).
 - **Recipient** — auto-extracted from the listing when an e-mail address is
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
@@ -140,15 +145,26 @@ change how applications are written. The draft posts as **one** message:
   Attach a screenshot to the reply (with or without text) and it goes to the LLM
   as vision input — e.g. a picture of the client's answer or of the listing detail
   the revision should reflect.
-- **Buttons** — **📤 Senden** delivers the e-mail through your SMTP server
-  (double-taps guarded, failures keep the draft); **❌ Verwerfen** cancels. The
-  **📧 Open in mail client** link above the buttons opens your mail client with
-  subject (and recipient, once known) prefilled — available from the start. It is
-  a text link, not a button, because Slack buttons silently drop `mailto:` URLs.
-- **CV attachment** — the sent e-mail attaches your CV automatically, picking the
-  language that matches the draft (`CV_EN_PATH` for English, otherwise `CV_DE_PATH`);
-  the letter references it. Both default to the PDFs in `cv/`; set a path to an empty
-  value to send without an attachment.
+- **E-mail as a file** — the letter itself arrives in the thread as one `.txt`
+  file (nothing split across blocks): open, copy, or download it in one piece.
+  Each revision uploads a fresh file; the newest one is the current draft. This
+  needs the `files:write` bot scope and a channel *ID* in `SLACK_CHANNEL` — without
+  them the bot falls back to rendering the text inline. All generated texts
+  (LinkedIn message, contact results, inline fallbacks) render as native code
+  blocks, so each has Slack's **copy button in its top-right corner**.
+- **Buttons** — **📤 Send** delivers the e-mail through your SMTP server, CVs
+  attached (double-taps guarded, failures keep the draft); **❌ Discard** cancels.
+  Send is always visible: without a recipient it answers with the hint to reply with
+  the address instead of sending. The **📧 Open in mail client** link above the
+  buttons opens your mail client with the subject, the recipient (once known) and
+  the letter prefilled — available from the start. It is a text link, not a button,
+  because Slack buttons silently drop `mailto:` URLs. A `mailto:` has a length limit
+  and can never carry attachments, so a long letter opens truncated (with a note
+  saying so) and the CVs only go out via **📤 Send**.
+- **CV attachments** — every sent e-mail carries all configured CVs (PDF and Word,
+  DE and EN); the draft language only decides which one leads. The draft names them
+  in a `📎 Attachments` line before you send, including any configured file that is
+  missing on disk. Set a path to an empty value to leave that CV out.
 - **Signature** — every draft closes with a signature block in the draft's language:
   the `-- ` separator (RFC 3676), the greeting inside the block, name and title,
   `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link,
@@ -191,8 +207,9 @@ recipient-less draft) and project-pilot looks the company's contact channel up:
    never exposes phone/e-mail publicly anyway.
 3. **LinkedIn connection message** — every result includes a short, personalized German
    **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
-   request to the Ansprechpartner yourself. Set `APPLICANT_NAME` to sign it, and
-   `OUTREACH_OFFER_DU=true` (the default) to offer first-name terms ("Gerne auch per Du.").
+   request to the Ansprechpartner yourself. It signs with your name from
+   `profile.md` (Contact & Signature); `OUTREACH_OFFER_DU=true` (the default) offers
+   first-name terms ("Gerne auch per Du.").
 
 The result posts in the message's thread (e-mails best-first, phone, named people, the
 connection message, the links) and is stored in `contact_leads`. Reply to a draft's
@@ -231,7 +248,15 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   from the same screenshot.
 
 Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
-lands in its thread; a checked upload is answered in the upload's own thread.
+lands in its thread; a checked upload is answered in the upload's own thread. That
+line names the **listing**, not the first words of what you pasted: the headline is
+read out of the text (a `Position:`/`Projekt:` line counts), and a recruiter mail
+that only opens with "Hallo," is titled by the model instead. The channel line is
+relabelled with that title once the verdict is in.
+
+A pasted description also gets rendered **in full** — a scan match shortens it
+behind its 🔗 View project button, but pasted text and uploads have no such link,
+so the whole description is shown, split across sections.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
 scanner's watermark stays untouched. One caveat for screenshots: the hard rules read

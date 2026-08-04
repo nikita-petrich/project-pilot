@@ -31,7 +31,7 @@
 ## Configuration & Secrets
 
 - One `pydantic-settings` model parses ENV at boot; validation errors ⇒ immediate process abort with a clear message (fail fast)
-- Hard invariants in validation: `SCAN_INTERVAL_MIN >= 15`, `SEARCH_URLS` not empty, Telegram credentials present
+- Hard invariants in validation: `SCAN_INTERVAL_MIN >= 15` at boot; `SEARCH_URLS` not empty and Slack credentials present enforced via the `require_*` helpers by the commands that need them
 - Secrets exclusively via ENV; `.env` in `.gitignore`, `.env.example` is updated in the same commit as any new variable
 
 ## Scraping Behavior (compliance anchored in code)
@@ -52,7 +52,7 @@
 
 - pytest + pytest-asyncio; unit tests for normalization, freshness gate, rule engine (incl. c#/c++/.net word-boundary cases), dedupe/upsert
 - **No live HTTP requests in tests** — HTML/JSON/LLM responses as fixtures under `tests/fixtures/`; HTTP is mocked with `respx`
-- Integration test: full `run_once` with a fixture source, local Postgres (compose.dev.yaml or Testcontainers), and mocked Telegram/LLM
+- Integration test: full `run_once` with a fixture source, local Postgres (compose.dev.yaml or Testcontainers), and mocked Slack/LLM
 - Core modules (`evaluation`, `ingestion/normalize`, dedupe) ≥ 90% coverage; `pytest --cov` gate in the check script
 
 ## Style, Naming, Workflow

@@ -23,7 +23,8 @@ def linkedin_company_url(company: str) -> str:
 
 
 def linkedin_people_url(*, company: str | None, person: str | None) -> str:
-    keywords = " ".join(part for part in (person, company) if part)
+    """People search for ``person AND company`` (boolean AND narrows to the right hit)."""
+    keywords = " AND ".join(part for part in (person, company) if part)
     return f"{_LINKEDIN_PEOPLE}{quote_plus(keywords)}"
 
 

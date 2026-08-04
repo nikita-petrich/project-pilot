@@ -7,6 +7,7 @@ from project_pilot.ingestion.normalize import (
     compute_url_hash,
     detect_language,
     extract_contact_person,
+    extract_listing_title,
     html_to_text,
     is_onsite_only,
     looks_like_company,
@@ -135,3 +136,64 @@ def test_is_onsite_only() -> None:
     # genuine hybrid / remote
     assert is_onsite_only(60, "Berlin", "hybrid") is False
     assert is_onsite_only(None, "Berlin", "onsite") is False  # unknown percent -> keep
+
+
+RECRUITER_MAIL = """Hallo,
+
+Für einen unserer Kunden aus dem Energiesektor suchen wir aktuell einen erfahrenen
+Fullstack TypeScript Developer (m/w/d) mit starkem Angular-Schwerpunkt für die
+Weiterentwicklung einer komplexen Enterprise-Webanwendung.
+
+Rahmendaten:
+Position: Senior Fullstack TypeScript Developer (m/w/d)
+Start: 01.09.2026
+Einsatzort: remote
+"""
+
+
+def test_extract_listing_title_reads_the_label_in_a_recruiter_mail() -> None:
+    # The mail opens with a greeting and prose, so the "Position:" line is the headline.
+    assert extract_listing_title(RECRUITER_MAIL) == (
+        "Senior Fullstack TypeScript Developer (m/w/d)"
+    )
+
+
+def test_extract_listing_title_prefers_a_real_headline_at_the_top() -> None:
+    assert extract_listing_title("Senior Data Engineer (m/w/d)\n\nWir suchen ...") == (
+        "Senior Data Engineer (m/w/d)"
+    )
+    assert extract_listing_title("# AI Engineer für RAG-Plattform\n\nText") == (
+        "AI Engineer für RAG-Plattform"
+    )
+
+
+def test_extract_listing_title_skips_noise_before_the_headline() -> None:
+    assert extract_listing_title("https://x.de/projekt/1\nSenior Backend Developer") == (
+        "Senior Backend Developer"
+    )
+    assert extract_listing_title("-----\nSenior Cloud Architect\nText") == "Senior Cloud Architect"
+
+
+def test_extract_listing_title_strips_a_leading_label_but_keeps_a_real_dash() -> None:
+    assert extract_listing_title("Projekt - Cloud Migration mit AWS\nText") == (
+        "Cloud Migration mit AWS"
+    )
+    assert extract_listing_title("Fullstack Developer - Angular Fokus\nText") == (
+        "Fullstack Developer - Angular Fokus"
+    )
+
+
+def test_extract_listing_title_returns_none_without_a_headline() -> None:
+    # Prose, a bare greeting, and empty text carry no title — the LLM names those.
+    assert (
+        extract_listing_title("Wir suchen jemanden, der uns hilft. Bitte melden Sie sich.") is None
+    )
+    assert extract_listing_title("Hallo,\n\nanbei die Details. Bitte melden.") is None
+    assert extract_listing_title("") is None
+
+
+def test_extract_listing_title_is_capped_and_collapsed() -> None:
+    long_title = "Senior " + "Developer " * 30
+    title = extract_listing_title(f"Position: {long_title}\nText")
+    assert title is not None
+    assert len(title) <= 120 and "  " not in title

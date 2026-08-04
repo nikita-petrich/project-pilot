@@ -111,8 +111,17 @@ class Pipeline:
         self._source = SOURCE_NAME
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
+        """One scan in three phases: scan/evaluate (one unit of work), notify, record.
+
+        Notification runs only after the main unit of work has committed, so a
+        delivered Slack message can never be un-marked by a failed run commit; the
+        run row is finalized in its own short session for the same reason.
+        """
         now = now or _utcnow()
         search_urls = self._settings.require_search_urls()
+        outcome = RunOutcome(status=RunStatus.SUCCESS)
+        run_id: int | None = None
+        blocked = False
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             state = await repo.get_or_create_source_state(self._source)
@@ -120,9 +129,7 @@ class Pipeline:
                 logger.info("source in cooldown until %s; skipping run", state.cooldown_until)
                 return RunOutcome(status=RunStatus.SUCCESS, error="skipped: in cooldown")
 
-            run = await repo.start_run()
-            outcome = RunOutcome(status=RunStatus.SUCCESS)
-            blocked = False
+            run_id = (await repo.start_run()).id
             try:
                 await self._execute(repo, search_urls, now, outcome, state.watermark_at)
             except SourceBlockedError as err:
@@ -144,8 +151,19 @@ class Pipeline:
                 outcome.status = RunStatus.PARTIAL if outcome.errors else RunStatus.SUCCESS
 
             await self._finalize_state(state, outcome, now, blocked=blocked)
-            await repo.finalize_run(
-                run,
+
+        if not outcome.is_seed and not outcome.is_error:
+            await self._notify(now, outcome)
+        await self._record_run(run_id, outcome, now)
+        return outcome
+
+    async def _record_run(self, run_id: int | None, outcome: RunOutcome, now: datetime) -> None:
+        if run_id is None:  # cooldown skip: no run was started
+            return
+        async with session_scope(self._session_factory) as session:
+            await Repository(session).record_run_outcome(
+                run_id,
+                started_at=now,
                 status=outcome.status,
                 fetched=outcome.fetched,
                 new=outcome.new,
@@ -154,7 +172,6 @@ class Pipeline:
                 notified=outcome.notified,
                 error=outcome.error,
             )
-        return outcome
 
     async def _finalize_state(
         self, state: SourceState, outcome: RunOutcome, now: datetime, *, blocked: bool
@@ -206,9 +223,17 @@ class Pipeline:
             await self._finish_seed(repo, created)
         else:
             await self._evaluate(repo, created, watermark, now, outcome)
-            await self._notify(repo, now, outcome)
 
-        await repo.set_watermark(self._source, now)
+        if outcome.errors:
+            # A skipped listing was never stored (or evaluated); advancing the
+            # watermark would drop it from the next run's pagination forever
+            # (lossless-DB rule). The known-hash stop keeps the re-scan cheap.
+            logger.warning(
+                "%d per-listing error(s); watermark held so the next run re-collects",
+                outcome.errors,
+            )
+        else:
+            await repo.set_watermark(self._source, now)
 
     async def _collect_new_summaries(
         self,
@@ -256,11 +281,18 @@ class Pipeline:
                     source=self._source,
                     external_url=summary.external_url,
                 )
-                listing, was_created = await repo.upsert_listing(_to_listing(parsed, summary, now))
+                # Savepoint: a DB failure on this one listing must not poison the
+                # run-wide session for every listing after it.
+                async with repo.savepoint():
+                    listing, was_created = await repo.upsert_listing(
+                        _to_listing(parsed, summary, now)
+                    )
                 if was_created:
                     outcome.new += 1
                     created.append((listing, parsed))
-            except SourceBlockedError:
+            except (SourceBlockedError, SourceUnavailableError):
+                # A dead connection fails every remaining fetch too: abort the run
+                # on the clean path instead of counting each as a listing error.
                 raise
             except Exception as err:
                 outcome.errors += 1
@@ -290,91 +322,122 @@ class Pipeline:
         outcome: RunOutcome,
     ) -> None:
         window = self._settings.analysis_window_min
-        threshold = self._settings.match_threshold
         for listing, parsed in created:
             try:
-                fresh = evaluate_freshness(
-                    posted_at=listing.posted_at,
-                    posted_at_precision=listing.posted_at_precision,
-                    watermark=watermark,
-                    now=now,
-                    window_minutes=window,
-                )
-                if not fresh.is_fresh:
-                    listing.status = ListingStatus.SKIPPED_STALE
-                    await repo.add_evaluation(
-                        Evaluation(
-                            listing_id=listing.id,
-                            stage=EvaluationStage.FRESHNESS,
-                            verdict=Verdict.SKIPPED_STALE,
-                            reason=fresh.reason,
-                        )
+                # Same savepoint rationale as in _fetch_and_store: contain one
+                # listing's DB failure instead of poisoning the shared session.
+                async with repo.savepoint():
+                    evaluated, matched = await self._evaluate_one(
+                        repo, listing, parsed, watermark=watermark, now=now, window=window
                     )
-                    continue
-
-                rule = apply_hard_rules(
-                    f"{listing.title}\n{parsed.description}", self._profile.constraints
-                )
-                if not rule.passed:
-                    listing.status = ListingStatus.EVALUATED
-                    await repo.add_evaluation(
-                        Evaluation(
-                            listing_id=listing.id,
-                            stage=EvaluationStage.HARD_RULE,
-                            verdict=Verdict.NO_MATCH,
-                            reason=rule.reason,
-                            profile_hash=self._profile.profile_hash,
-                        )
-                    )
-                    outcome.evaluated += 1
-                    continue
-
-                llm = await self._matcher.evaluate(
-                    profile_text=self._profile.text, listing_text=render_listing(parsed)
-                )
-                listing.status = ListingStatus.EVALUATED
-                await repo.add_evaluation(
-                    Evaluation(
-                        listing_id=listing.id,
-                        stage=EvaluationStage.LLM,
-                        verdict=Verdict.MATCH if llm.is_match else Verdict.NO_MATCH,
-                        score=llm.score,
-                        reason=llm.reason(),
-                        model=llm.model,
-                        prompt_version=llm.prompt_version,
-                        profile_hash=self._profile.profile_hash,
-                        tokens_in=llm.tokens_in,
-                        tokens_out=llm.tokens_out,
-                        latency_ms=llm.latency_ms,
-                    )
-                )
-                outcome.evaluated += 1
-                if is_match_notifiable(llm, threshold):
-                    outcome.matched += 1
+                outcome.evaluated += evaluated
+                outcome.matched += matched
             except Exception as err:
                 outcome.errors += 1
                 logger.warning("evaluation failed for %s: %s", listing.external_url, err)
 
-    async def _notify(self, repo: Repository, now: datetime, outcome: RunOutcome) -> None:
-        pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
-        if not pending:
-            return
-        if self._notifier is None:
-            logger.info("dry-run: %d match(es) not sent (no notifier configured)", len(pending))
-            return
-        failed = 0
-        for listing in pending:  # one message per match, marked notified only on a successful send
-            message = _to_match_message(listing, now)
-            if message.onsite_only:
-                logger.info("skipping on-site-only match: %s", listing.external_url)
-                continue
-            if await self._notifier.send_match(message, listing_id=listing.id):
-                await repo.mark_notified([listing], now)
-                outcome.notified += 1
-            else:
-                failed += 1
-        if failed:
-            logger.warning("notifier send failed; %d match(es) will retry next run", failed)
+    async def _evaluate_one(
+        self,
+        repo: Repository,
+        listing: Listing,
+        parsed: ParsedListing,
+        *,
+        watermark: datetime | None,
+        now: datetime,
+        window: int,
+    ) -> tuple[int, int]:
+        """Run stages 1-3 for one listing; returns the (evaluated, matched) deltas."""
+        fresh = evaluate_freshness(
+            posted_at=listing.posted_at,
+            posted_at_precision=listing.posted_at_precision,
+            watermark=watermark,
+            now=now,
+            window_minutes=window,
+        )
+        if not fresh.is_fresh:
+            listing.status = ListingStatus.SKIPPED_STALE
+            await repo.add_evaluation(
+                Evaluation(
+                    listing_id=listing.id,
+                    stage=EvaluationStage.FRESHNESS,
+                    verdict=Verdict.SKIPPED_STALE,
+                    reason=fresh.reason,
+                )
+            )
+            return 0, 0
+
+        rule = apply_hard_rules(f"{listing.title}\n{parsed.description}", self._profile.constraints)
+        if not rule.passed:
+            listing.status = ListingStatus.EVALUATED
+            await repo.add_evaluation(
+                Evaluation(
+                    listing_id=listing.id,
+                    stage=EvaluationStage.HARD_RULE,
+                    verdict=Verdict.NO_MATCH,
+                    reason=rule.reason,
+                    profile_hash=self._profile.profile_hash,
+                )
+            )
+            return 1, 0
+
+        llm = await self._matcher.evaluate(
+            profile_text=self._profile.text, listing_text=render_listing(parsed)
+        )
+        listing.status = ListingStatus.EVALUATED
+        await repo.add_evaluation(
+            Evaluation(
+                listing_id=listing.id,
+                stage=EvaluationStage.LLM,
+                verdict=Verdict.MATCH if llm.is_match else Verdict.NO_MATCH,
+                score=llm.score,
+                reason=llm.reason(),
+                model=llm.model,
+                prompt_version=llm.prompt_version,
+                profile_hash=self._profile.profile_hash,
+                tokens_in=llm.tokens_in,
+                tokens_out=llm.tokens_out,
+                latency_ms=llm.latency_ms,
+            )
+        )
+        is_matched = is_match_notifiable(llm, self._settings.match_threshold)
+        return 1, 1 if is_matched else 0
+
+    async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
+        """Send pending match notifications, each made durable as soon as it is sent.
+
+        Runs in its own session after the scan's unit of work has committed, and
+        commits after every successful send: a delivered Slack message can never be
+        rolled back into "unnotified" (which would re-send it — and re-pay its
+        evaluation — on the next run).
+        """
+        async with session_scope(self._session_factory) as session:
+            repo = Repository(session)
+            pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
+            if not pending:
+                return
+            if self._notifier is None:
+                logger.info("dry-run: %d match(es) not sent (no notifier configured)", len(pending))
+                return
+            failed = 0
+            for listing in pending:  # one message per match, marked only on a successful send
+                message = _to_match_message(listing, now)
+                if message.onsite_only:
+                    # Mark it handled so it leaves the pending set after one skip
+                    # instead of being re-loaded and re-skipped on every run.
+                    await repo.mark_notified([listing], now)
+                    logger.info(
+                        "suppressing on-site-only match (marked handled): %s",
+                        listing.external_url,
+                    )
+                    continue
+                if await self._notifier.send_match(message, listing_id=listing.id):
+                    await repo.mark_notified([listing], now)
+                    await session.commit()
+                    outcome.notified += 1
+                else:
+                    failed += 1
+            if failed:
+                logger.warning("notifier send failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:
@@ -386,13 +449,15 @@ def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -
         source=parsed.source,
         external_url=parsed.external_url,
         url_hash=parsed.url_hash,
-        title=parsed.title,
+        # Scraped display values are truncated to their column limits: an oversized
+        # title must not fail the INSERT (the full text survives in `raw`).
+        title=parsed.title[:512],
         description=parsed.description,
         skills=parsed.skills,
         start_date=parsed.start_date,
         start_asap=parsed.start_asap,
         end_date=parsed.end_date,
-        location=parsed.location,
+        location=parsed.location[:256] if parsed.location else None,
         remote_status=parsed.remote_status,
         posted_at=posted_at,
         posted_at_precision=precision,

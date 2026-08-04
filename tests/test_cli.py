@@ -61,3 +61,10 @@ def test_log_level_setting_is_applied(monkeypatch: pytest.MonkeyPatch) -> None:
         assert logging.getLogger().level == logging.WARNING
     finally:
         logging.getLogger().setLevel(previous)
+
+
+def test_enrich_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ENRICHMENT_ENABLED", raising=False)
+    result = runner.invoke(app, ["enrich", "Firma GmbH"])
+    assert result.exit_code == 1
+    assert "ENRICHMENT_ENABLED" in result.output

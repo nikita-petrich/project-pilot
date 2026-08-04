@@ -31,3 +31,11 @@ class RobotsGate:
             parser.parse((text or "").splitlines())
             self._cache[host] = parser
         return parser.can_fetch(self._user_agent, url)
+
+    def crawl_delay(self, url: str) -> float | None:
+        """The cached host's Crawl-delay for this agent (None before ``allowed`` ran)."""
+        parser = self._cache.get(urlsplit(url).netloc)
+        if parser is None:
+            return None
+        delay = parser.crawl_delay(self._user_agent)
+        return float(delay) if delay is not None else None
