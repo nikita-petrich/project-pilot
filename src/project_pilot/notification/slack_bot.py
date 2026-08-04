@@ -18,7 +18,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from project_pilot.application.documents import (
     ImageAttachment,
@@ -53,6 +53,9 @@ from project_pilot.notification.slack import (
     status_blocks,
     upload_prompt_fallback_text,
 )
+
+if TYPE_CHECKING:
+    from slack_sdk.web.async_client import AsyncWebClient
 
 logger = logging.getLogger(__name__)
 
@@ -390,6 +393,8 @@ class SlackBot:
         # open_project / open_li_* / open_google are URL buttons handled by Slack itself.
 
     async def on_slash_apply(self, channel_id: str | None, text: str) -> None:
+        if channel_id != self._channel:  # serve only the configured channel, like buttons/events
+            return
         argument = text.strip()
         if not argument:
             await self._client.post_text(USAGE)
@@ -432,6 +437,8 @@ class SlackBot:
         return fetch_and_draft
 
     async def on_slash_check(self, channel_id: str | None, text: str) -> None:
+        if channel_id != self._channel:  # serve only the configured channel, like buttons/events
+            return
         if self._checker is None:
             return
         argument = text.strip()
@@ -882,19 +889,14 @@ class SlackBot:
 
 
 async def run_socket_mode(  # pragma: no cover - network boundary
-    *, bot: SlackBot, app_token: str, web_client: object, stop: object
+    *, bot: SlackBot, app_token: str, web_client: "AsyncWebClient", stop: asyncio.Event
 ) -> None:
     """Connect Socket Mode and feed envelopes into ``bot.dispatch`` until ``stop``."""
-    import asyncio
-
     from slack_sdk.socket_mode.aiohttp import SocketModeClient
     from slack_sdk.socket_mode.async_client import AsyncBaseSocketModeClient
     from slack_sdk.socket_mode.request import SocketModeRequest
     from slack_sdk.socket_mode.response import SocketModeResponse
-    from slack_sdk.web.async_client import AsyncWebClient
 
-    assert isinstance(web_client, AsyncWebClient)
-    assert isinstance(stop, asyncio.Event)
     socket = SocketModeClient(app_token=app_token, web_client=web_client)
 
     async def _handle(client: AsyncBaseSocketModeClient, request: SocketModeRequest) -> None:

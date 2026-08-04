@@ -54,7 +54,9 @@ class LlmEvaluation:
 
     @property
     def score(self) -> int:
-        return self.verdict.score
+        # MatchVerdict carries no range constraint (OpenAI strict structured
+        # outputs), so the 0..100 contract is enforced here, at consumption.
+        return max(0, min(100, self.verdict.score))
 
     @property
     def is_match(self) -> bool:
@@ -63,7 +65,7 @@ class LlmEvaluation:
     def reason(self) -> dict[str, object]:
         data: dict[str, object] = {
             "verdict": self.verdict.verdict,
-            "score": self.verdict.score,
+            "score": self.score,
             "reasons": list(self.verdict.reasons),
             "matching_skills": list(self.verdict.matching_skills),
             "missing_requirements": list(self.verdict.missing_requirements),

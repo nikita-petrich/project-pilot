@@ -12,7 +12,6 @@ from project_pilot.models import PostedPrecision, RemoteStatus
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 _DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})")
-_NEIN_RE = re.compile(r"\bnein\b")
 
 
 def canonicalize_url(url: str, base: str) -> str:
@@ -27,11 +26,6 @@ def compute_url_hash(canonical_url: str) -> str:
     return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
 
 
-def resolve_url(url: str, base: str) -> str:
-    """Resolve ``url`` against ``base`` keeping its query (for pagination links)."""
-    return urljoin(base, url.strip())
-
-
 def parse_german_date(text: str) -> date | None:
     match = _DATE_RE.search(text)
     if match is None:
@@ -41,23 +35,6 @@ def parse_german_date(text: str) -> date | None:
         return date(year, month, day)
     except ValueError:
         return None
-
-
-def parse_start(text: str) -> tuple[date | None, bool]:
-    """Return (start_date, start_asap): "ab sofort" -> asap, "keine Angabe" -> neither."""
-    lowered = text.strip().lower()
-    if not lowered or "keine angabe" in lowered:
-        return None, False
-    if "sofort" in lowered or "asap" in lowered:
-        return None, True
-    return parse_german_date(text), False
-
-
-def parse_end(text: str) -> date | None:
-    lowered = text.strip().lower()
-    if not lowered or "keine angabe" in lowered or "offen" in lowered:
-        return None
-    return parse_german_date(text)
 
 
 _DE_WORDS = frozenset(
@@ -343,17 +320,6 @@ def next_page_url(url: str) -> str:
         updated.append(("pagenr", "2"))
     query = urlencode(updated)
     return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
-
-
-def remote_status_from_text(text: str) -> RemoteStatus:
-    lowered = text.lower()
-    if "hybrid" in lowered:
-        return RemoteStatus.HYBRID
-    if "vor ort" in lowered or "onsite" in lowered or _NEIN_RE.search(lowered):
-        return RemoteStatus.ONSITE
-    if "remote" in lowered or "homeoffice" in lowered or "home office" in lowered:
-        return RemoteStatus.REMOTE
-    return RemoteStatus.UNKNOWN
 
 
 def parse_posted(

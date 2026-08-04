@@ -250,3 +250,9 @@ def test_build_user_content_encodes_images_as_data_urls() -> None:
         "type": "image_url",
         "image_url": {"url": "data:image/png;base64,iVBORw=="},
     }
+
+
+def test_out_of_range_scores_are_clamped_to_contract() -> None:
+    assert _evaluation(_verdict(score=850)).score == 100
+    assert _evaluation(_verdict(score=-5)).score == 0
+    assert _evaluation(_verdict(score=850)).reason()["score"] == 100

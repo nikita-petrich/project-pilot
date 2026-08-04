@@ -48,6 +48,21 @@ def test_test_notify_requires_slack(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code != 0
 
 
+def test_log_level_setting_is_applied(monkeypatch: pytest.MonkeyPatch) -> None:
+    import logging
+
+    _set_slack(monkeypatch)
+    monkeypatch.setattr("project_pilot.cli.AsyncWebClient", _FakeWeb)
+    monkeypatch.setenv("LOG_LEVEL", "warning")
+    previous = logging.getLogger().level
+    try:
+        result = runner.invoke(app, ["test-notify"])
+        assert result.exit_code == 0
+        assert logging.getLogger().level == logging.WARNING
+    finally:
+        logging.getLogger().setLevel(previous)
+
+
 def test_enrich_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ENRICHMENT_ENABLED", raising=False)
     result = runner.invoke(app, ["enrich", "Firma GmbH"])

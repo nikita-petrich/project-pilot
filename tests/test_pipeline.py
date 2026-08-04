@@ -420,6 +420,7 @@ class _MatchAllMatcher:
     async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
         return LlmEvaluation(
             verdict=MatchVerdict(
+                project_title="Python-Projekt",
                 verdict="match",
                 score=80,
                 reasons=["fits"],

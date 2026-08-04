@@ -2,8 +2,6 @@
 
 from datetime import UTC, date, datetime
 
-import pytest
-
 from project_pilot.ingestion.normalize import (
     canonicalize_url,
     compute_url_hash,
@@ -14,12 +12,9 @@ from project_pilot.ingestion.normalize import (
     is_onsite_only,
     looks_like_company,
     next_page_url,
-    parse_end,
     parse_german_date,
     parse_posted,
-    parse_start,
     remote_status_from_percent,
-    remote_status_from_text,
     resolve_contact_name,
     start_from_parts,
 )
@@ -49,44 +44,9 @@ def test_url_hash_stable_and_hex() -> None:
     assert len(digest) == 64
 
 
-def test_parse_start_asap() -> None:
-    assert parse_start("ab sofort") == (None, True)
-
-
-def test_parse_start_date() -> None:
-    assert parse_start("01.09.2026") == (date(2026, 9, 1), False)
-
-
-def test_parse_start_keine_angabe() -> None:
-    assert parse_start("keine Angabe") == (None, False)
-
-
-def test_parse_end_keine_angabe() -> None:
-    assert parse_end("keine Angabe") is None
-
-
-def test_parse_end_date() -> None:
-    assert parse_end("31.12.2026") == date(2026, 12, 31)
-
-
 def test_parse_german_date_invalid() -> None:
     assert parse_german_date("32.13.2026") is None
     assert parse_german_date("no date here") is None
-
-
-@pytest.mark.parametrize(
-    ("text", "expected"),
-    [
-        ("100 % Remote", RemoteStatus.REMOTE),
-        ("Homeoffice", RemoteStatus.REMOTE),
-        ("Nein, vor Ort", RemoteStatus.ONSITE),
-        ("vor Ort", RemoteStatus.ONSITE),
-        ("Hamburg (hybrid)", RemoteStatus.HYBRID),
-        ("Muenchen", RemoteStatus.UNKNOWN),
-    ],
-)
-def test_remote_status(text: str, expected: RemoteStatus) -> None:
-    assert remote_status_from_text(text) == expected
 
 
 def test_parse_posted_minute_precision() -> None:
