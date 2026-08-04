@@ -4,7 +4,7 @@ from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 from sqlalchemy.orm import selectinload
 
 from project_pilot.models import (
@@ -29,6 +29,10 @@ class Repository:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    def savepoint(self) -> AsyncSessionTransaction:
+        """A nested transaction (SAVEPOINT), so one entry's DB failure stays contained."""
+        return self._session.begin_nested()
 
     async def count_listings(self) -> int:
         count = await self._session.scalar(select(func.count()).select_from(Listing))
@@ -69,10 +73,11 @@ class Repository:
         await self._session.flush()
         return run
 
-    async def finalize_run(
+    async def record_run_outcome(
         self,
-        run: Run,
+        run_id: int,
         *,
+        started_at: datetime,
         status: RunStatus,
         fetched: int = 0,
         new: int = 0,
@@ -81,6 +86,11 @@ class Repository:
         notified: int = 0,
         error: str | None = None,
     ) -> Run:
+        """Finalize the run row by id, recreating it if the main unit of work rolled back."""
+        run = await self._session.get(Run, run_id)
+        if run is None:
+            run = Run(started_at=started_at)
+            self._session.add(run)
         run.status = status
         run.fetched = fetched
         run.new = new

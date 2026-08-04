@@ -1,5 +1,6 @@
 """Integration tests for the pipeline (real Postgres, fixtures, fake clients)."""
 
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -14,9 +15,9 @@ from project_pilot.errors import SourceBlockedError, SourceUnavailableError
 from project_pilot.evaluation.llm import LlmEvaluation
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.ingestion.normalize import compute_url_hash
-from project_pilot.models import Listing, ListingStatus, RunStatus
+from project_pilot.models import Evaluation, EvaluationStage, Listing, ListingStatus, Run, RunStatus
 from project_pilot.notification.messages import MatchMessage
-from project_pilot.pipeline import Pipeline, SourceClient
+from project_pilot.pipeline import Notifier, Pipeline, SourceClient
 from project_pilot.profile_loader import Profile, ProfileConstraints
 from project_pilot.repository import Repository
 
@@ -138,7 +139,7 @@ def _pipeline(
     *,
     client: SourceClient,
     matcher: _FakeMatcher | None = None,
-    notifier: _FakeNotifier | None = None,
+    notifier: Notifier | None = None,
     profile: Profile | None = None,
 ) -> Pipeline:
     return Pipeline(
@@ -411,3 +412,193 @@ async def test_three_consecutive_failures_warn_once(
 
     failure_warnings = [m for m in warns.warnings if "consecutive failed runs" in m]
     assert len(failure_warnings) == 1
+
+
+class _MatchAllMatcher:
+    """Matches every listing at score 80 (drives the on-site suppression test)."""
+
+    async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
+        return LlmEvaluation(
+            verdict=MatchVerdict(
+                verdict="match",
+                score=80,
+                reasons=["fits"],
+                matching_skills=["python"],
+                missing_requirements=[],
+                risk_flags=[],
+            ),
+            model="fake",
+            prompt_version="test",
+            tokens_in=10,
+            tokens_out=5,
+            latency_ms=1,
+            is_error=False,
+        )
+
+
+class _CommitProbeNotifier:
+    """Checks from a separate session that the evaluation is already committed."""
+
+    def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
+        self._session_factory = session_factory
+        self.saw_committed: list[bool] = []
+
+    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
+        async with self._session_factory() as probe:
+            row = await probe.scalar(
+                select(Evaluation).where(
+                    Evaluation.listing_id == listing_id,
+                    Evaluation.stage == EvaluationStage.LLM,
+                )
+            )
+            self.saw_committed.append(row is not None)
+        return True
+
+    async def send_warning(self, text: str) -> bool:
+        return True
+
+
+async def test_watermark_held_on_detail_error_and_gap_closed_next_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    watermark = NOW - timedelta(minutes=10)
+    await _seed_state(session_factory, watermark=watermark)
+    pages = {SEARCH: LIST_HTML, SEARCH_PAGE2: LIST_HTML_PAGE2, DETAIL1: PAGES[DETAIL1]}
+    outcome = await _pipeline(session_factory, client=_FakeClient(pages)).run_once(now=NOW)
+    assert outcome.status is RunStatus.PARTIAL
+    async with session_factory() as db_session:
+        state = await Repository(db_session).get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.watermark_at == watermark  # held: DETAIL2 was never stored
+
+    second = await _pipeline(session_factory, client=_FakeClient(PAGES)).run_once(
+        now=NOW + timedelta(minutes=15)
+    )
+    assert second.new == 1  # the failed listing is re-collected, nothing is lost
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        assert await repo.get_listing_by_hash(compute_url_hash(DETAIL2)) is not None
+        state = await repo.get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.watermark_at == NOW + timedelta(minutes=15)
+
+
+async def test_db_error_on_one_listing_is_contained_and_run_recorded(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    long_slug = "x" * 1100  # canonical URL exceeds the 1024-char column: INSERT fails
+    long_url = f"https://www.freelancermap.de/projekt/{long_slug}"
+    list_html = (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+        '{"currentPage":1,"initialResults":['
+        '{"id":1,"slug":"'
+        + long_slug
+        + '","title":"Broken","created":"2026-07-21T09:12:00+02:00"},'
+        '{"id":12345,"slug":"senior-python-entwickler-backend-12345",'
+        '"title":"Senior Python","created":"2026-07-21T09:12:00+02:00"}'
+        "]}</script>"
+    )
+    pages = {
+        SEARCH: list_html,
+        SEARCH_PAGE2: LIST_HTML_PAGE2,
+        DETAIL1: PAGES[DETAIL1],
+        long_url: PAGES[DETAIL1],
+    }
+    outcome = await _pipeline(session_factory, client=_FakeClient(pages)).run_once(now=NOW)
+    assert outcome.errors == 1
+    assert outcome.new == 1  # the healthy listing was stored despite the DB error
+    assert outcome.status is RunStatus.PARTIAL
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        assert await repo.get_listing_by_hash(compute_url_hash(DETAIL1)) is not None
+        runs = (await db_session.scalars(select(Run))).all()
+        assert len(runs) == 1  # the run row survived the poisoned-entry flush error
+        assert runs[0].status is RunStatus.PARTIAL
+        state = await repo.get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.consecutive_failures == 0
+
+
+async def test_evaluations_are_committed_before_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    probe = _CommitProbeNotifier(session_factory)
+    outcome = await _pipeline(session_factory, client=_FakeClient(PAGES), notifier=probe).run_once(
+        now=NOW
+    )
+    assert outcome.notified == 1
+    assert probe.saw_committed == [True]  # the send saw durable state, not a dirty session
+
+
+async def test_onsite_only_match_is_suppressed_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier(ok=True)
+    pipeline = Pipeline(
+        settings=_settings(),
+        profile=_profile(),
+        session_factory=session_factory,
+        client_factory=lambda: _FakeClient(PAGES),
+        matcher=_MatchAllMatcher(),
+        notifier=notifier,
+    )
+    outcome = await pipeline.run_once(now=NOW)
+    assert outcome.matched == 2
+    assert outcome.notified == 1  # the on-site-only match is suppressed, not sent
+    assert len(notifier.matches) == 1
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        onsite = await repo.get_listing_by_hash(compute_url_hash(DETAIL2))
+        assert onsite is not None
+        assert onsite.notified_at is not None  # marked handled: leaves the pending set
+
+    second_notifier = _FakeNotifier(ok=True)
+    second = Pipeline(
+        settings=_settings(),
+        profile=_profile(),
+        session_factory=session_factory,
+        client_factory=lambda: _FakeClient(PAGES),
+        matcher=_MatchAllMatcher(),
+        notifier=second_notifier,
+    )
+    await second.run_once(now=NOW + timedelta(minutes=15))
+    assert second_notifier.matches == []  # nothing pending anymore
+
+
+async def test_long_title_and_location_are_truncated(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    slug = "long-title-1"
+    url = f"https://www.freelancermap.de/projekt/{slug}"
+    detail = (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectShow">'
+        + json.dumps(
+            {
+                "project": {
+                    "title": "T" * 600,
+                    "created": "2026-07-21T09:12:00+02:00",
+                    "city": "C" * 300,
+                    "description": "Python asyncio backend",
+                }
+            }
+        )
+        + "</script>"
+    )
+    list_html = (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+        '{"currentPage":1,"initialResults":[{"id":2,"slug":"' + slug + '",'
+        '"title":"Long","created":"2026-07-21T09:12:00+02:00"}]}</script>'
+    )
+    pages = {SEARCH: list_html, SEARCH_PAGE2: LIST_HTML_PAGE2, url: detail}
+    outcome = await _pipeline(session_factory, client=_FakeClient(pages)).run_once(now=NOW)
+    assert outcome.errors == 0
+    async with session_factory() as db_session:
+        stored = await Repository(db_session).get_listing_by_hash(compute_url_hash(url))
+        assert stored is not None
+        assert len(stored.title) == 512
+        assert stored.location is not None
+        assert len(stored.location) == 256
