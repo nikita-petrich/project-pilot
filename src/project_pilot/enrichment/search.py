@@ -30,13 +30,16 @@ class NullSearchProvider:
 
 
 def _unwrap_ddg(href: str) -> str | None:
-    """Resolve a DuckDuckGo result href to its real target URL."""
+    """Resolve a DuckDuckGo result href to its real target URL (http/https only)."""
     if href.startswith("//"):
         href = f"https:{href}"
     parts = urlsplit(href)
     if "duckduckgo.com" in parts.netloc and parts.path.startswith("/l/"):
         target = parse_qs(parts.query).get("uddg")
-        return target[0] if target else None
+        if not target:
+            return None
+        href = target[0]  # the unwrapped redirect target needs the same scheme check
+        parts = urlsplit(href)
     return href if parts.scheme in ("http", "https") else None
 
 

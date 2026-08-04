@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from project_pilot.enrichment.fetch import FetchedPage
+from project_pilot.enrichment.fetch import FetchedPage, validate_target
 from project_pilot.enrichment.robots import RobotsGate
 from project_pilot.errors import SourceBlockedError
 
@@ -57,13 +57,23 @@ class PlaywrightFetcher:
         self._delay_pending = False
 
     async def fetch(self, url: str) -> FetchedPage:
-        """Render ``url`` after the polite delay; raise ``SourceBlockedError`` if blocked."""
-        if self._delay_pending:
-            await self._sleeper(self._delay)
-        self._delay_pending = True
+        """Render ``url`` after the polite delay; raise ``SourceBlockedError`` if blocked.
+
+        Same guard order as ``WebFetcher.fetch``: target validation and the robots
+        check run first so the sleep can honor the host's Crawl-delay.
+        """
+        validate_target(url)
         if self._respect_robots and not await self._robots.allowed(url):
             raise SourceBlockedError(f"robots.txt disallows {url}")
+        if self._delay_pending:
+            await self._sleeper(self._effective_delay(url))
+        self._delay_pending = True
         return await self._render(url)
+
+    def _effective_delay(self, url: str) -> float:
+        if not self._respect_robots:
+            return self._delay
+        return max(self._delay, self._robots.crawl_delay(url) or 0.0)
 
     async def _render(self, url: str) -> FetchedPage:  # pragma: no cover - browser boundary
         browser = await self._ensure_browser()

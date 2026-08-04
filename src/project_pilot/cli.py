@@ -410,6 +410,10 @@ def enrich(
 ) -> None:
     """Find a company's contact data (Impressum/website) plus LinkedIn/Google links."""
     settings = load_settings()
+    if not settings.has_enrichment():
+        # The opt-in contract: no outbound search/fetch calls unless enabled.
+        typer.echo("enrich is disabled: set ENRICHMENT_ENABLED=true to allow web lookups")
+        raise typer.Exit(code=1)
     try:
         result = asyncio.run(
             _run_enrich(settings, company=company, listing_id=listing_id, person=person, url=url)
