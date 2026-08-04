@@ -1,5 +1,10 @@
 # project-pilot handover
 
+> **Historical snapshot (MVP handover).** The system has since moved on:
+> notification is now **Slack**, not Telegram (see `blueprint/build-plan.md`
+> features 16–18 and `docs/slack-app-setup.md`); the Telegram setup steps below no
+> longer apply. Current setup and operations: `README.md` and `docs/`.
+
 Built end to end in one session with the ai-blueprint workflow: a Python 3.13
 async worker that watches freelancermap.de, persists every listing losslessly in
 PostgreSQL, evaluates fresh ones (hard rules then an LLM match), and alerts real

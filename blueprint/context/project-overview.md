@@ -2,8 +2,9 @@
 
 > A personal, single-user worker that watches freelancermap.de, persists every
 > listing losslessly, evaluates fresh ones against Nik's profile (hard rules then
-> LLM), and pushes real matches to Telegram within minutes. Backend only.
-> Binding detail spec: `SPEC.md` at the repo root.
+> LLM), and pushes real matches to Slack within minutes. Backend only.
+> Binding detail spec: `SPEC.md` at the repo root (Telegram references there are
+> historical — notification moved to Slack with build-plan feature 17).
 
 ## Problem
 
@@ -20,7 +21,7 @@ property.
 
 Exactly one user: Nik (freelance full-stack and AI engineer). No multi-tenant, no
 registration, no public product. Nik configures the profile and search URLs,
-receives Telegram alerts, and tunes the match threshold over time.
+receives Slack alerts, and tunes the match threshold over time.
 
 ## Features
 
@@ -33,14 +34,16 @@ Build-plan order (MVP 1-12). The headline is the evaluation-plus-alert loop
 4. **Scraper ingestion** - politeness httpx client, centralized selectors, detail fetch only for new listings, watermark pagination, normalization.
 5. **Freshness gate and hard rules** - analysis-window logic and the deterministic 0-token rule engine over `constraints.yaml`.
 6. **LLM matching** - versioned prompt, OpenAI `.parse()` against `MatchVerdict`, evaluation persistence, threshold decision, retry + `llm_error` fallback.
-7. **Telegram notification** - lean Bot API client, compact HTML match message, digest, `notified_at` only after a successful send, `test-notify`.
+7. **Match notification** - compact match message, `notified_at` only after a successful send, `test-notify`. (Built as Telegram; fully replaced by Slack in feature 17.)
 8. **Scheduler and pipeline runner** - `AsyncIOScheduler` 15-min loop, seed-run detection, orchestration of stages 0-3, per-listing isolation, `runs` protocol, cron-friendly `run-once`.
 9. **Resilience and self-monitoring** - tenacity retry (never on 403), 403/captcha cooldown, consecutive-failure warning.
 10. **Reporting basis** - verdict distribution, matches per day, top no-match reasons, token cost, via the `stats` command.
 11. **Docker and home-server deployment** - multi-stage image, `compose.yaml` (app + postgres + volume), healthcheck, migrations on start.
 12. **README and legal** - setup, operation, threshold tuning, troubleshooting, and the compliance finding.
 
-Post-MVP (not built now): 13 Telegram bot commands, 14 re-evaluation with a new profile, 15 queue-based multi-source workers.
+Shipped post-MVP: 16 application autopilot (LLM draft + reviewed SMTP send, `applications` table), 17 Slack replaces Telegram (Block Kit messages, Socket Mode bot with Apply/`/apply`/`/check`/thread review), 18 opt-in contact enrichment (company-website lookup, `contact_leads` table).
+
+Not built: 13 bot commands (`/stats`, `/pause`, …), 14 re-evaluation with a new profile, 15 queue-based multi-source workers.
 
 ## Core rules (binding, from SPEC section 3)
 
@@ -49,7 +52,7 @@ Two separate guarantees drive the whole design:
 - **Lossless DB (completeness).** `source_state` holds a **watermark** (timestamp of the last successful run). Each run paginates the "newest first" search URLs until it only sees known `url_hash` values or entries older than the watermark, so every gap (failure, restart, downtime) is closed on the next run and every listing ever seen lands in `listings`.
 - **Seed run.** On an empty DB the full current inventory is persisted as a reporting baseline with status `skipped_stale` and **zero notifications**.
 - **Analysis only for fresh entries.** `ANALYSIS_WINDOW_MIN` (default 30, = interval x 2) gates evaluation. Freshness signal order: (1) `posted_at` if minute-precise, else (2) gap rule (distance to last successful run <= window). Older new entries are stored `skipped_stale` with a reason JSON. Feature 1 verifies the real time granularity and decides the implementation.
-- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Telegram message and sets `notified_at` after success.
+- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Slack message and sets `notified_at` after success.
 - **Traceability.** Every entry gets a stored verdict with a reason for match **and** no-match, each `evaluations` row carrying `model`, `prompt_version`, `profile_hash`, token counts and latency.
 
 ## Data model
@@ -103,6 +106,11 @@ per evaluation).
 - `cooldown_until` (timestamptz, nullable) - set on 403/captcha
 - `consecutive_failures` (int)
 
+Features 16 and 18 added two further tables: `applications` (one draft/send cycle
+per application: recipient, subject/body, LinkedIn message, status guard against
+double sends, token accounting) and `contact_leads` (append-only enrichment
+lookups: e-mails, phones, persons, research links).
+
 > These shapes are locked; later features (ingestion, evaluation, reporting)
 > depend on them. Change them through an Alembic migration, not ad hoc.
 
@@ -118,7 +126,7 @@ per evaluation).
 - **OpenAI SDK** - `.parse()` with a Pydantic `response_format` for structured match verdicts; model from ENV.
 - **tenacity** - retry with backoff on network/5xx/429, never on 403.
 - **typer** - CLI: `init-db`, `run-once`, `daemon`, `test-notify`, `test-filter`, `stats`.
-- **Telegram Bot API** - lean httpx client (`sendMessage`), no bot framework in the MVP.
+- **Slack (`slack_sdk`)** - Block Kit messages via AsyncWebClient plus a Socket Mode bot (Apply/Find-contact buttons, `/apply`, `/check`, thread review); no public URL needed.
 - **pytest + pytest-asyncio + respx + pytest-cov** - fixtures, no live requests.
 - **ruff + mypy --strict** - lint, format, and typing gate.
 - **Docker + Compose** - containerized worker plus postgres on the home server.
@@ -130,15 +138,15 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 ## UI/UX
 
-No web UI. Telegram is the entire surface:
+No web UI. Slack is the entire surface:
 
-- **Match alert** - compact HTML message: title as link, score, two or three top reasons, start, location/remote.
-- **Digest** - multiple matches in one run are batched.
+- **Match alert** - one Block Kit message per match: title, score, company/contact facts, verdict reasons, description preview, plus 📝 Apply / 🔎 Find contact / 🔗 View project buttons.
+- **Application flow** - drafts, revisions, recipient handling, and the guarded Send button live in the match's thread.
 - **Warnings** - one-time messages on source cooldown (403/captcha) and after consecutive failed runs.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.
 
 ## Open questions
 
 > None blocking. Operational inputs Nik supplies at deploy time (profile content,
-> search URLs, Telegram and OpenAI credentials, later threshold tuning) are
+> search URLs, Slack and OpenAI credentials, later threshold tuning) are
 > tracked as open items in `SPEC.md` section 9 and the handover, not code gaps.
