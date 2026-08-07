@@ -202,8 +202,9 @@ def test_cv_attachments_default_to_the_repo_files(monkeypatch: pytest.MonkeyPatc
     # Unset means "the CVs committed under cv/", so updating one is a file swap.
     assert cvs.de_pdf == Path("cv/CV-German.pdf")
     assert cvs.en_pdf == Path("cv/CV-English.pdf")
-    assert cvs.de_docx == Path("cv/CV-German-Word.docx")
-    assert cvs.en_docx == Path("cv/CV-English-Word.docx")
+    # No Word CVs are versioned, so their slots stay unset and are never reported missing.
+    assert cvs.de_docx is None
+    assert cvs.en_docx is None
 
 
 def test_cv_attachments_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:

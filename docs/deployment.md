@@ -48,12 +48,13 @@ cp ~/new-cv.pdf cv/CV-German.pdf
 git commit -am "chore: update the German CV" && git push
 ```
 
-`CV_DE_PATH`, `CV_EN_PATH`, `CV_DE_DOCX_PATH` and `CV_EN_DOCX_PATH` default to
-`cv/CV-German.pdf`, `cv/CV-English.pdf`, `cv/CV-German-Word.docx` and
-`cv/CV-English-Word.docx`, so keeping the filenames means never touching config —
-and the name on disk is the name the recipient sees. Every one of them is attached to every application; a path that
-does not exist is skipped (and named in the draft's `📎 Attachments` line), which is
-why the files you have not added yet are harmless.
+`CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
+`cv/CV-English.pdf` — the two PDFs versioned in the repo — so keeping the filenames
+means never touching config, and the name on disk is the name the recipient sees.
+The Word slots (`CV_DE_DOCX_PATH`, `CV_EN_DOCX_PATH`) are unset by default; set them
+only if you add a `.docx`. Every configured CV is attached to every application; a
+path that does not exist is skipped (and named in the draft's `📎 Attachments` line),
+which is why a file you have not added yet is harmless.
 
 **Keep CVs small.** They are e-mail attachments, and base64 encoding adds about a
 third on the wire, so a 20 MB PDF arrives as ~28 MB and is refused by most mail

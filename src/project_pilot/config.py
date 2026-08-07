@@ -100,11 +100,12 @@ class Settings(BaseSettings):
     # Default to the CVs versioned in the repo, so swapping a file in cv/ is the whole
     # update. The file name is what the recipient sees, hence the presentable casing.
     # A configured path that does not exist is skipped (and reported in the draft),
-    # so the set can be filled in one file at a time.
+    # so the set can be filled in one file at a time. Only the two PDFs are kept in
+    # the repo; the Word slots stay unset until a .docx is actually added.
     cv_de_path: str = "cv/CV-German.pdf"
     cv_en_path: str = "cv/CV-English.pdf"
-    cv_de_docx_path: str = "cv/CV-German-Word.docx"
-    cv_en_docx_path: str = "cv/CV-English-Word.docx"
+    cv_de_docx_path: str = ""
+    cv_en_docx_path: str = ""
 
     scan_interval_min: int = 15
     analysis_window_min: int = 30
