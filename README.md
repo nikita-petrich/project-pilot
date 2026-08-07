@@ -59,10 +59,11 @@ The two profile files feed the matcher, the hard rules, and the application draf
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
 - `cv/` the CVs attached to application e-mails — **all of them ride along on every
   send**, so the recipient can forward whichever format and language they need.
-  `CV_DE_PATH`, `CV_EN_PATH`, `CV_DE_DOCX_PATH` and `CV_EN_DOCX_PATH` default to
-  `cv/CV-German.pdf`, `cv/CV-English.pdf`, `cv/CV-German-Word.docx` and
-  `cv/CV-English-Word.docx`, so
-  updating a CV is replacing the file and pushing. The file name is what the
+  `CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
+  `cv/CV-English.pdf` — the two PDFs versioned here — so
+  updating a CV is replacing the file and pushing. The Word slots
+  (`CV_DE_DOCX_PATH`, `CV_EN_DOCX_PATH`) are unset by default; point them at a
+  `.docx` only if you add one. The file name is what the
   recipient sees. A configured file that is not on disk is skipped and named in the
   draft's `📎 Attachments` line, so you can add them one at a time. Keep them a few
   MB at most — base64 adds about a third on the wire.
