@@ -1,10 +1,12 @@
 """Slack Block Kit message building and a thin async Web API client wrapper.
 
-One message carries everything: a match posts its full listing plus an apply
-button; a draft posts the e-mail (as a ``.txt`` file in the thread, falling back to
-inline blocks), the LinkedIn text, an open-in-mail-client link, and Send/Discard
-buttons. Generated texts render as native code blocks, so every one carries
-Slack's copy button in its corner.
+A match is two messages: a compact card in the channel (title, score, the few
+facts that decide a yes/no, and the buttons) plus the full listing as its first
+thread reply, so a scan run stays scannable and the detail is one click away. A
+draft posts the e-mail (as a ``.txt`` file in the thread, falling back to inline
+blocks), the LinkedIn text, an open-in-mail-client link, and Send/Discard buttons.
+Generated texts render as native code blocks, so every one carries Slack's copy
+button in its corner.
 
 All bot chrome (labels, buttons, hints, status) is English; only the generated
 application text follows the project's language.
@@ -27,10 +29,13 @@ logger = logging.getLogger(__name__)
 # Slack caps a section's text at 3000 chars and a message at 50 blocks; stay under.
 _SECTION_LIMIT = 2900
 _HEADER_LIMIT = 150
-# Match alerts show a compact description preview; the full text stays one click
-# away behind the "Zum Projekt" link (Slack has no native collapse/expand). Without
-# such a link (pasted text, uploads) the description is rendered in full instead.
+# A one-message verdict (``/check`` on a stored listing) previews the description
+# and keeps the full text one click away behind its "View project" link. Without
+# such a link (pasted text, uploads) the description is rendered in full instead —
+# and so it is in a match thread, whose card already carries the link.
 _DESCRIPTION_PREVIEW = 700
+# The channel card names only the top reasons; the rest lives in the thread reply.
+_SUMMARY_REASONS = 2
 # Sections one long text may occupy — a message is capped at 50 blocks in total.
 _MAX_CODE_PARTS = 8
 # A mailto: must fit in its own section, so the body it carries is bounded; the
@@ -186,17 +191,61 @@ def _labeled_list(label: str, values: list[str], *, limit: int) -> str | None:
     return f"*{label}:* {_esc(', '.join(picked))}" if picked else None
 
 
-def _match_body(message: MatchMessage) -> list[Block]:
-    """The match message's content blocks (everything except the action buttons)."""
+def _client_type(message: MatchMessage) -> str | None:
+    if message.is_endcustomer is None:
+        return None
+    return "Direct client" if message.is_endcustomer else "Agency"
+
+
+def _inline(parts: list[str | None]) -> str | None:
+    """Join the given values into one middot-separated line, dropping the empty ones."""
+    picked = [part for part in parts if part]
+    return "  ·  ".join(picked) if picked else None
+
+
+def _summary_body(message: MatchMessage) -> list[Block]:
+    """The compact channel card: who is hiring, where, the terms, and the top reasons.
+
+    Company and location get a line each and are always rendered — a listing that
+    names neither is itself a signal (agency posts routinely hide the client), so
+    the card says so instead of silently dropping the line.
+    """
     blocks: list[Block] = [_header(f"🎯 {message.title} · {message.score}/100")]
 
-    who = None
-    if message.is_endcustomer is not None:
-        who = "Direct client" if message.is_endcustomer else "Agency"
+    company = f"🏢 *{_esc(message.company)}*" if message.company else "🏢 _Company not stated_"
+    location = f"📍 {_esc(message.location)}" if message.location else "📍 _Location not stated_"
+    lines = [
+        _inline([company, _client_type(message)]),
+        _inline([location, f"🏠 {_esc(message.remote_label)}" if message.remote_label else None]),
+        _inline(
+            [
+                f"📅 {_esc(message.start)}" if message.start else None,
+                f"⏳ {_esc(message.duration_label)}" if message.duration_label else None,
+                f"📊 {_esc(message.workload_label)}" if message.workload_label else None,
+                f"🕒 {_esc(message.posted_ago)}" if message.posted_ago else None,
+            ]
+        ),
+        _labeled_list("✅ Fits", message.reasons, limit=_SUMMARY_REASONS),
+    ]
+    summary = "\n".join(line for line in lines if line)
+    if summary:
+        blocks.append(_section(summary))
+    blocks.append(_context("🧵 All facts, skills, gaps and the description in the thread."))
+    return blocks
+
+
+def _detail_body(message: MatchMessage, *, description_url: str | None) -> list[Block]:
+    """Every listing fact, the full verdict, and the description.
+
+    ``description_url`` is the link a shortened description points at; passing
+    ``None`` renders the description in full (the match thread does, because its
+    card above already carries the ``View project`` button).
+    """
+    blocks: list[Block] = []
     facts = [
         _labeled("🏢 Company", message.company),
         _labeled("👤 Contact", message.contact_name),
-        _labeled("🤝 Client type", who),
+        _labeled("🤝 Client type", _client_type(message)),
         _labeled("📍 Location", message.location),
         _labeled("🏠 Remote", message.remote_label),
         _labeled("💼 Contract", message.contract_type),
@@ -224,13 +273,21 @@ def _match_body(message: MatchMessage) -> list[Block]:
         blocks.append(_section(verdict_text))
 
     if message.description:
-        blocks.extend(_description_blocks(message.description, url=message.url))
+        blocks.extend(_description_blocks(message.description, url=description_url))
     return blocks
 
 
+def _match_body(message: MatchMessage) -> list[Block]:
+    """Header plus the full listing in one message — the shape ``/check`` answers with."""
+    return [
+        _header(f"🎯 {message.title} · {message.score}/100"),
+        *_detail_body(message, description_url=message.url),
+    ]
+
+
 def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
-    """Build the Block Kit message for one matched listing (with an apply button)."""
-    blocks = _match_body(message)
+    """Build the compact channel card for one matched listing (with the buttons)."""
+    blocks = _summary_body(message)
     actions: list[Block] = [
         _button("📝 Apply", action_id="apply", value=str(listing_id)),
         _button("🔎 Find contact", action_id="enrich", value=str(listing_id)),
@@ -239,6 +296,11 @@ def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
     return blocks
+
+
+def format_match_detail_blocks(message: MatchMessage) -> list[Block]:
+    """Build the match's thread reply: every fact, the full verdict, the description."""
+    return _detail_body(message, description_url=None)
 
 
 def _reason_list(reason: dict[str, object], key: str) -> list[str]:
@@ -523,6 +585,10 @@ def match_fallback_text(message: MatchMessage) -> str:
     return f"🎯 New match: {message.title} ({message.score}/100)"
 
 
+def match_detail_fallback_text(message: MatchMessage) -> str:
+    return f"📋 Full listing: {message.title}"
+
+
 def draft_fallback_text(view: DraftView) -> str:
     return f"📨 Application draft: {view.title}"
 
@@ -662,10 +728,22 @@ class SlackNotifier:
         self._client = client
 
     async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
+        """Post the compact card, then the full listing as its first thread reply.
+
+        The alert counts as delivered once the card is posted; a failing detail
+        reply is logged by the client and never revokes the notification.
+        """
         posted = await self._client.post_blocks(
             format_match_blocks(message, listing_id=listing_id), match_fallback_text(message)
         )
-        return posted is not None
+        if posted is None:
+            return False
+        await self._client.post_blocks(
+            format_match_detail_blocks(message),
+            match_detail_fallback_text(message),
+            thread_ts=posted.ts,
+        )
+        return True
 
     async def send_warning(self, text: str) -> bool:
         return await self._client.post_text(text) is not None

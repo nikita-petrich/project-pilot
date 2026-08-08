@@ -21,8 +21,11 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. Posts a Slack alert for matches at or above `MATCH_THRESHOLD`, and stores a
-   reason for every verdict (match and no-match alike) for later reporting.
+4. Posts a Slack alert for matches at or above `MATCH_THRESHOLD` — a compact card
+   in the channel (title, score, client, location/remote, start, duration,
+   workload, age, top reasons, buttons) with the full listing as its first thread
+   reply — and stores a reason for every verdict (match and no-match alike) for
+   later reporting.
 
 ## Requirements
 
@@ -238,9 +241,10 @@ retry); only company pages are rendered, never LinkedIn or Google.
 the same evaluation the scanner uses — hard rules from `constraints.yaml` first
 (0 tokens), then the LLM match against your profile:
 
-- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full match message you know from
-  the scanner (all listing facts, reasons, gaps, risks) including the **📝 Bewerben**
-  button, so the apply flow starts exactly as if the scanner had found it.
+- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full listing (all facts, reasons,
+  gaps, risks) including the **📝 Bewerben** button, so the apply flow starts exactly
+  as if the scanner had found it. The verdict already sits in a thread, so it stays
+  one message instead of being split like a scan match.
 - **No match** — posts the verdict with the failed hard rule (matched blacklist
   term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
 - **Files and screenshots** — upload a PDF, text file, or **image** and press

@@ -1,5 +1,6 @@
 """Tests for Slack Block Kit builders and the SlackClient wrapper."""
 
+from dataclasses import replace
 from typing import cast
 
 from project_pilot.application.service import DraftView
@@ -11,6 +12,7 @@ from project_pilot.notification.slack import (
     Block,
     PostedMessage,
     SlackClient,
+    SlackNotifier,
     SlackResponse,
     SlackWebClient,
     check_fallback_text,
@@ -18,6 +20,9 @@ from project_pilot.notification.slack import (
     format_contact_blocks,
     format_draft_blocks,
     format_match_blocks,
+    format_match_detail_blocks,
+    match_detail_fallback_text,
+    match_fallback_text,
     sent_confirmation_blocks,
 )
 
@@ -92,23 +97,38 @@ def _draft_view(
     )
 
 
-def test_match_blocks_have_apply_button_and_facts() -> None:
-    message = MatchMessage(
-        title="AI Engineer",
-        url="https://x/1",
-        score=90,
-        company="Talent Co",
-        location="Remote",
-        reasons=["LLM/RAG core"],
-        skills=["Python", "RAG"],
-    )
-    blocks = format_match_blocks(message, listing_id=42)
+_MATCH = MatchMessage(
+    title="AI Engineer",
+    url="https://x/1",
+    score=90,
+    company="Talent Co",
+    contact_name="Anna Meier",
+    is_endcustomer=True,
+    location="Remote",
+    workload_label="100%",
+    duration_label="6 mo",
+    start="ASAP",
+    posted_ago="12 min ago",
+    reasons=["LLM/RAG core", "Python-heavy", "Remote"],
+    skills=["Python", "RAG"],
+    missing_requirements=["Kubernetes"],
+)
+
+
+def test_match_card_is_compact_and_carries_the_buttons() -> None:
+    blocks = format_match_blocks(_MATCH, listing_id=42)
     header = _blocks_of_type(blocks, "header")[0]["text"]
     assert isinstance(header, dict)
     assert "AI Engineer" in str(header["text"]) and "90/100" in str(header["text"])
     joined = "\n".join(_section_texts(blocks))
-    assert "*🏢 Company:* Talent Co" in joined
-    assert "LLM/RAG core" in joined
+    assert "🏢 *Talent Co*  ·  Direct client" in joined  # company owns its line
+    assert "📍 Remote" in joined and "⏳ 6 mo" in joined and "🕒 12 min ago" in joined
+    assert "LLM/RAG core" in joined  # the top reasons decide the yes/no at a glance
+    assert "Remote" in joined
+    # everything long stays in the thread: no skills, no gaps, no description
+    assert "🛠 Skills" not in joined and "⚠️ Gaps" not in joined
+    assert not _code_texts(blocks)
+    assert any("thread" in text for text in _context_texts(blocks))
     apply_button = _action_elements(blocks)[0]
     assert apply_button["action_id"] == "apply"
     assert apply_button["value"] == "42"
@@ -117,21 +137,39 @@ def test_match_blocks_have_apply_button_and_facts() -> None:
     assert enrich_button["value"] == "42"  # enrich carries the listing id
 
 
-def test_match_blocks_show_short_description_in_full() -> None:
-    message = MatchMessage(title="t", url="https://x", score=1, description="Kurze Beschreibung.")
-    blocks = format_match_blocks(message, listing_id=1)
-    assert "Kurze Beschreibung." in _code_texts(blocks)
+def test_match_card_names_only_the_top_reasons() -> None:
+    joined = "\n".join(_section_texts(format_match_blocks(_MATCH, listing_id=1)))
+    assert "LLM/RAG core, Python-heavy" in joined and "Python-heavy, Remote" not in joined
+
+
+def test_match_card_says_so_when_company_or_location_are_missing() -> None:
+    """A listing that names neither still shows both lines — the gap is the signal."""
+    message = MatchMessage(title="t", url="https://x", score=5)
+    joined = "\n".join(_section_texts(format_match_blocks(message, listing_id=1)))
+    assert "🏢 _Company not stated_" in joined
+    assert "📍 _Location not stated_" in joined
+    assert "⏳" not in joined and "✅" not in joined  # the rest still drops out
+
+
+def test_match_detail_blocks_carry_the_full_listing() -> None:
+    blocks = format_match_detail_blocks(_MATCH)
+    joined = "\n".join(_section_texts(blocks))
+    assert "*🏢 Company:* Talent Co" in joined
+    assert "*👤 Contact:* Anna Meier" in joined
+    assert "*🛠 Skills:* Python, RAG" in joined
+    assert "*⚠️ Gaps:* Kubernetes" in joined
+    assert not _blocks_of_type(blocks, "header")  # the card above already names it
+    assert not _blocks_of_type(blocks, "actions")  # buttons stay on the card
+
+
+def test_match_detail_blocks_show_the_whole_description() -> None:
+    long_text = "\n".join(f"Zeile {i}: " + "wort " * 30 for i in range(60))
+    blocks = format_match_detail_blocks(replace(_MATCH, description=long_text))
+    codes = _code_texts(blocks)
+    joined = "".join(codes)
+    assert all(len(text) <= 3000 for text in codes)  # stay inside Slack's limits
+    assert "Zeile 0:" in joined and "Zeile 59:" in joined  # nothing cut off
     assert "Shortened" not in "".join(_context_texts(blocks))
-
-
-def test_match_blocks_preview_long_description_and_keep_link() -> None:
-    long_text = "wort " * 400  # ~2000 chars, far over the preview budget
-    message = MatchMessage(title="t", url="https://x/proj", score=1, description=long_text)
-    blocks = format_match_blocks(message, listing_id=1)
-    preview = _code_texts(blocks)[0]
-    assert len(preview) < 800 and preview.endswith("…")  # compact preview only
-    assert any("Shortened" in text for text in _context_texts(blocks))
-    assert "open_project" in _action_ids(blocks)  # full text stays behind the link
 
 
 def test_check_blocks_show_the_whole_description_without_a_project_link() -> None:
@@ -563,6 +601,23 @@ async def test_upload_text_sends_the_file_into_the_thread() -> None:
     assert call["channel"] == "C123"
     assert call["filename"] == "E-Mail.txt"
     assert call["thread_ts"] == "1700.42"
+
+
+async def test_send_match_posts_the_card_then_the_detail_into_its_thread() -> None:
+    web = _FakeWeb()
+    sent = await SlackNotifier(_client(web)).send_match(_MATCH, listing_id=42)
+    assert sent is True
+    card, detail = web.calls
+    assert card["text"] == match_fallback_text(_MATCH)
+    assert card["thread_ts"] is None
+    assert detail["text"] == match_detail_fallback_text(_MATCH)
+    assert detail["thread_ts"] == "1700.42"  # the card's ts = the thread it opened
+
+
+async def test_send_match_reports_failure_and_skips_the_detail() -> None:
+    web = _FakeWeb(ok=False, error="channel_not_found")
+    assert await SlackNotifier(_client(web)).send_match(_MATCH, listing_id=42) is False
+    assert len(web.calls) == 1  # no thread to post the detail into
 
 
 async def test_upload_text_reports_failure_instead_of_raising() -> None:

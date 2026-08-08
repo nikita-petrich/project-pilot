@@ -140,7 +140,7 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 No web UI. Slack is the entire surface:
 
-- **Match alert** - one Block Kit message per match: title, score, company/contact facts, verdict reasons, description preview, plus 📝 Apply / 🔎 Find contact / 🔗 View project buttons.
+- **Match alert** - a compact Block Kit card per match (title, score, client, location/remote, start, duration, workload, age, top reasons) with 📝 Apply / 🔎 Find contact / 🔗 View project buttons; the full listing (all facts, skills, gaps, risks, complete description) follows as the card's first thread reply.
 - **Application flow** - drafts, revisions, recipient handling, and the guarded Send button live in the match's thread.
 - **Warnings** - one-time messages on source cooldown (403/captcha) and after consecutive failed runs.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.
