@@ -204,18 +204,19 @@ def _inline(parts: list[str | None]) -> str | None:
 
 
 def _summary_body(message: MatchMessage) -> list[Block]:
-    """The compact channel card: who is hiring, the terms, and the top reasons."""
+    """The compact channel card: who is hiring, where, the terms, and the top reasons.
+
+    Company and location get a line each and are always rendered — a listing that
+    names neither is itself a signal (agency posts routinely hide the client), so
+    the card says so instead of silently dropping the line.
+    """
     blocks: list[Block] = [_header(f"🎯 {message.title} · {message.score}/100")]
 
+    company = f"🏢 *{_esc(message.company)}*" if message.company else "🏢 _Company not stated_"
+    location = f"📍 {_esc(message.location)}" if message.location else "📍 _Location not stated_"
     lines = [
-        _inline(
-            [
-                f"🏢 *{_esc(message.company)}*" if message.company else None,
-                _client_type(message),
-                f"📍 {_esc(message.location)}" if message.location else None,
-                f"🏠 {_esc(message.remote_label)}" if message.remote_label else None,
-            ]
-        ),
+        _inline([company, _client_type(message)]),
+        _inline([location, f"🏠 {_esc(message.remote_label)}" if message.remote_label else None]),
         _inline(
             [
                 f"📅 {_esc(message.start)}" if message.start else None,

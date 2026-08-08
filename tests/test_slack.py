@@ -121,7 +121,7 @@ def test_match_card_is_compact_and_carries_the_buttons() -> None:
     assert isinstance(header, dict)
     assert "AI Engineer" in str(header["text"]) and "90/100" in str(header["text"])
     joined = "\n".join(_section_texts(blocks))
-    assert "🏢 *Talent Co*" in joined and "Direct client" in joined
+    assert "🏢 *Talent Co*  ·  Direct client" in joined  # company owns its line
     assert "📍 Remote" in joined and "⏳ 6 mo" in joined and "🕒 12 min ago" in joined
     assert "LLM/RAG core" in joined  # the top reasons decide the yes/no at a glance
     assert "Remote" in joined
@@ -142,10 +142,13 @@ def test_match_card_names_only_the_top_reasons() -> None:
     assert "LLM/RAG core, Python-heavy" in joined and "Python-heavy, Remote" not in joined
 
 
-def test_match_card_drops_lines_it_has_no_data_for() -> None:
+def test_match_card_says_so_when_company_or_location_are_missing() -> None:
+    """A listing that names neither still shows both lines — the gap is the signal."""
     message = MatchMessage(title="t", url="https://x", score=5)
-    blocks = format_match_blocks(message, listing_id=1)
-    assert not _section_texts(blocks)  # header, hint and buttons only
+    joined = "\n".join(_section_texts(format_match_blocks(message, listing_id=1)))
+    assert "🏢 _Company not stated_" in joined
+    assert "📍 _Location not stated_" in joined
+    assert "⏳" not in joined and "✅" not in joined  # the rest still drops out
 
 
 def test_match_detail_blocks_carry_the_full_listing() -> None:
