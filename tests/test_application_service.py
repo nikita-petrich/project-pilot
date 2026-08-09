@@ -1,5 +1,6 @@
 """Tests for the application service: draft flow, guards, sending (Postgres-backed)."""
 
+import asyncio
 from collections.abc import Sequence
 from email.message import EmailMessage
 
@@ -571,6 +572,26 @@ async def test_send_blocks_interrupted_sending_state(
         assert row is not None
         row.status = ApplicationStatus.SENDING  # simulate a crash mid-send
         await session.commit()
-    with pytest.raises(ApplicationStateError, match="interrupted"):
+    with pytest.raises(ApplicationStateError, match="in progress"):
         await service.send(view.application_id)
     assert send.sent == []
+
+
+async def test_concurrent_sends_deliver_exactly_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Two simultaneous Send clicks must not both mail the application."""
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    send = _FakeSend()
+    service = _service(session_factory, mailer=_mailer(send))
+    view = await service.draft_for_listing(listing_id)
+    results = await asyncio.gather(
+        service.send(view.application_id),
+        service.send(view.application_id),
+        return_exceptions=True,
+    )
+    delivered = [r for r in results if not isinstance(r, BaseException)]
+    refused = [r for r in results if isinstance(r, ApplicationStateError)]
+    assert len(send.sent) == 1  # the atomic claim let exactly one send through
+    assert len(delivered) == 1
+    assert len(refused) == 1
