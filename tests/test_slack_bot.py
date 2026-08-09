@@ -265,6 +265,7 @@ def _bot(
     file_reader: Callable[[str], Awaitable[bytes]] | None = None,
     checker: _FakeChecker | None = None,
     enrichment: EnrichmentFlow | None = None,
+    allowed_user_ids: frozenset[str] = frozenset(),
 ) -> SlackBot:
     async def fetcher(url: str) -> ParsedListing:
         assert fetched is not None
@@ -278,6 +279,7 @@ def _bot(
         file_reader=file_reader,
         checker=checker,
         enrichment=enrichment,
+        allowed_user_ids=allowed_user_ids,
     )
 
 
@@ -315,6 +317,7 @@ def _interactive(
     channel: str = CHANNEL,
     ts: str = "111.1",
     thread_ts: str | None = None,
+    user: str = "U_NIK",
 ) -> dict[str, object]:
     message: dict[str, object] = {"ts": ts}
     if thread_ts is not None:
@@ -322,15 +325,21 @@ def _interactive(
     return {
         "type": "block_actions",
         "channel": {"id": channel},
+        "user": {"id": user},
         "message": message,
         "actions": [{"action_id": action_id, "value": value}],
     }
 
 
 def _event(
-    text: str, *, channel: str = CHANNEL, thread_ts: str | None = "111.1", bot: bool = False
+    text: str,
+    *,
+    channel: str = CHANNEL,
+    thread_ts: str | None = "111.1",
+    bot: bool = False,
+    user: str = "U_NIK",
 ) -> dict[str, object]:
-    event: dict[str, object] = {"type": "message", "channel": channel, "text": text}
+    event: dict[str, object] = {"type": "message", "channel": channel, "text": text, "user": user}
     if thread_ts is not None:
         event["thread_ts"] = thread_ts
     if bot:
@@ -338,8 +347,8 @@ def _event(
     return {"event": event}
 
 
-def _slash(text: str, command: str = "/apply") -> dict[str, object]:
-    return {"command": command, "text": text, "channel_id": CHANNEL}
+def _slash(text: str, command: str = "/apply", *, user_id: str = "U_NIK") -> dict[str, object]:
+    return {"command": command, "text": text, "channel_id": CHANNEL, "user_id": user_id}
 
 
 def _buttons(blocks: list[Block]) -> dict[str, str | None]:
@@ -451,6 +460,51 @@ async def test_apply_from_foreign_channel_is_ignored() -> None:
     await _bot(poster, service).dispatch("interactive", _interactive("apply", "7", channel="C2"))
     assert service.calls == []
     assert poster.texts == [] and poster.updates == []
+
+
+async def test_button_from_unauthorized_user_is_ignored() -> None:
+    """With an allow-list set, another channel member's Send/Apply must not act."""
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, allowed_user_ids=frozenset({"U_NIK"}))
+    await bot.dispatch("interactive", _interactive("send", "1", user="U_INTRUDER"))
+    assert service.calls == []
+    assert poster.texts == [] and poster.updates == []
+
+
+async def test_button_from_allowed_user_is_honored() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, allowed_user_ids=frozenset({"U_NIK"}))
+    await bot.dispatch("interactive", _interactive("apply", "7", user="U_NIK"))
+    assert ("draft_for_listing", 7) in service.calls
+
+
+async def test_slash_command_from_unauthorized_user_is_ignored() -> None:
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, allowed_user_ids=frozenset({"U_NIK"}))
+    await bot.dispatch("slash_commands", _slash("Python Projekt", user_id="U_INTRUDER"))
+    assert service.calls == []
+    assert poster.texts == []
+
+
+async def test_thread_recipient_change_from_unauthorized_user_is_ignored() -> None:
+    """A bare-email reply can hijack the recipient; an outsider's reply must be dropped."""
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, allowed_user_ids=frozenset({"U_NIK"}))
+    await bot.dispatch("interactive", _interactive("apply", "7", user="U_NIK"))
+    service.by_ref[f"{CHANNEL}:111.1"] = service.view
+    service.calls.clear()
+    await bot.dispatch(
+        "events_api", _event("attacker@evil.com", thread_ts="111.1", user="U_INTRUDER")
+    )
+    assert service.calls == []  # set_recipient never reached the service
+
+
+async def test_empty_allow_list_keeps_channel_only_trust() -> None:
+    """No allow-list configured: any channel member is still served (with a boot warning)."""
+    poster, service = _FakePoster(), _FakeService()
+    bot = _bot(poster, service, allowed_user_ids=frozenset())
+    await bot.dispatch("interactive", _interactive("apply", "7", user="U_ANYONE"))
+    assert ("draft_for_listing", 7) in service.calls
 
 
 async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:

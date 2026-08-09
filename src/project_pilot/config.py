@@ -33,6 +33,10 @@ class SlackConfig:
     bot_token: str
     app_token: str
     channel: str
+    # Slack user ids allowed to drive the bot (buttons, slash commands, thread
+    # replies). Empty means "no allow-list configured" — the bot then serves any
+    # member of the channel, which is only safe in a truly single-member channel.
+    allowed_user_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +90,9 @@ class Settings(BaseSettings):
     slack_bot_token: str = ""
     slack_app_token: str = ""
     slack_channel: str = ""
+    # Comma-separated Slack user ids (e.g. "U012ABC,U345DEF") permitted to operate
+    # the bot. Left empty, the bot falls back to channel-only trust and warns at boot.
+    slack_allowed_user_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     openai_api_key: str = ""
     llm_model: str = ""
@@ -121,7 +128,7 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", mode="before")
+    @field_validator("search_urls", "slack_allowed_user_ids", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
@@ -199,6 +206,7 @@ class Settings(BaseSettings):
             bot_token=self.slack_bot_token,
             app_token=self.slack_app_token,
             channel=self.slack_channel,
+            allowed_user_ids=frozenset(self.slack_allowed_user_ids),
         )
 
     def require_openai(self) -> tuple[str, str]:
