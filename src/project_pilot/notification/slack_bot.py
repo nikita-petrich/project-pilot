@@ -44,6 +44,7 @@ from project_pilot.notification.slack import (
     check_fallback_text,
     contact_fallback_text,
     draft_fallback_text,
+    escape_mrkdwn,
     format_check_blocks,
     format_contact_blocks,
     format_draft_blocks,
@@ -776,7 +777,9 @@ class SlackBot:
         """
         if anchor_ts is None or not title.strip():
             return
-        text = f"{prefix}: {title.strip()[:_LABEL_LIMIT]}"
+        # The title is scraped/LLM text going into an mrkdwn section, so escape it
+        # (an unescaped "<http://x|label>" would render as a forged link).
+        text = f"{prefix}: {escape_mrkdwn(title.strip()[:_LABEL_LIMIT])}"
         await self._client.update_blocks(self._channel, anchor_ts, status_blocks(text), text)
 
     async def _post_new_draft(

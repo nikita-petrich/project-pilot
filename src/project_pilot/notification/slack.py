@@ -45,9 +45,17 @@ _MAILTO_LIMIT = 2600
 type Block = dict[str, object]
 
 
-def _esc(text: str) -> str:
-    """Escape the three characters Slack mrkdwn reserves (``&`` first)."""
+def escape_mrkdwn(text: str) -> str:
+    """Escape the three characters Slack mrkdwn reserves (``&`` first).
+
+    Public so callers outside this module (the bot's status lines) can neutralize
+    scraped/LLM text before it reaches an mrkdwn field, where an unescaped
+    ``<!channel>`` would ping the channel and ``<url|label>`` would forge a link.
+    """
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+_esc = escape_mrkdwn
 
 
 def _header(text: str) -> Block:
@@ -372,7 +380,7 @@ def format_check_blocks(
 
 def check_fallback_text(result: CheckResult) -> str:
     verdict = "match" if result.passed else "no match"
-    return f"🔍 Check: {verdict} — {result.title}"
+    return f"🔍 Check: {verdict} — {_esc(result.title)}"
 
 
 def format_upload_prompt_blocks(label: str, *, key: str, can_check: bool) -> list[Block]:
@@ -578,19 +586,19 @@ def sent_confirmation_blocks(view: DraftView) -> list[Block]:
 
 
 def sent_fallback_text(view: DraftView) -> str:
-    return f"✅ Application sent to {view.recipient or ''}"
+    return f"✅ Application sent to {_esc(view.recipient or '')}"
 
 
 def match_fallback_text(message: MatchMessage) -> str:
-    return f"🎯 New match: {message.title} ({message.score}/100)"
+    return f"🎯 New match: {_esc(message.title)} ({message.score}/100)"
 
 
 def match_detail_fallback_text(message: MatchMessage) -> str:
-    return f"📋 Full listing: {message.title}"
+    return f"📋 Full listing: {_esc(message.title)}"
 
 
 def draft_fallback_text(view: DraftView) -> str:
-    return f"📨 Application draft: {view.title}"
+    return f"📨 Application draft: {_esc(view.title)}"
 
 
 @dataclass(frozen=True, slots=True)
