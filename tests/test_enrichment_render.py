@@ -16,12 +16,18 @@ async def _noop_sleep(_seconds: float) -> None:
     return None
 
 
+async def _public_resolver(_host: str) -> list[str]:
+    return ["93.184.216.34"]
+
+
 @respx.mock
 async def test_render_fetcher_blocks_disallowed_paths_before_launching() -> None:
     respx.get("https://firma.de/robots.txt").mock(
         return_value=httpx.Response(200, text="User-agent: *\nDisallow: /private")
     )
-    fetcher = PlaywrightFetcher(user_agent="test-agent/1.0", sleeper=_noop_sleep)
+    fetcher = PlaywrightFetcher(
+        user_agent="test-agent/1.0", sleeper=_noop_sleep, resolver=_public_resolver
+    )
     try:
         with pytest.raises(SourceBlockedError):
             await fetcher.fetch("https://firma.de/private/data")
