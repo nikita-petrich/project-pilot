@@ -10,6 +10,11 @@ on:
     branches:
       - main
 
+# Least privilege: the gate only checks out and tests, so a compromised step
+# inherits read-only access to the repo and nothing else.
+permissions:
+  contents: read
+
 jobs:
   gate:
     uses: ./.github/workflows/quality-gate.yml

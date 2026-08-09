@@ -4,7 +4,9 @@ FROM python:3.13-slim AS builder
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     UV_PYTHON_DOWNLOADS=0
-COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /uvx /bin/
+# Pin the exact uv patch (matches setup-uv in CI) so image builds are reproducible,
+# rather than tracking the floating 0.8 minor tag.
+COPY --from=ghcr.io/astral-sh/uv:0.8.17 /uv /uvx /bin/
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project

@@ -7,7 +7,10 @@ services:
       POSTGRES_PASSWORD: pilot
       POSTGRES_DB: project_pilot
     ports:
-      - "5432:5432"
+      # Bound to localhost so the dev database is reachable from this machine only,
+      # not from anything else on the LAN (Docker otherwise punches through the host
+      # firewall to publish on all interfaces).
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
 

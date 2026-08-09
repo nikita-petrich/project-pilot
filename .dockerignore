@@ -1,5 +1,7 @@
 .git
 .github
+.claude
+compose*.yaml
 deploy
 .venv
 __pycache__
