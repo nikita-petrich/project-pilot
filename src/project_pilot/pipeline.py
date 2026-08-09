@@ -38,7 +38,12 @@ from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
 
-MAX_LIST_PAGES = 2
+# A normal run stops on page 1 (the newest listing is already known or older than
+# the watermark). This deep cap only engages after an outage, when many pages of
+# genuinely new listings have accumulated, so the lossless-DB guarantee is kept
+# instead of being silently truncated at 2 pages. Politeness delays bound the rate;
+# exhausting even this cap is surfaced (never silent) and holds the watermark.
+MAX_LIST_PAGES = 25
 COOLDOWN_HOURS = 6
 FAILURE_WARNING_THRESHOLD = 3
 
@@ -81,6 +86,7 @@ class RunOutcome:
     errors: int = 0
     error: str | None = None
     is_seed: bool = False
+    pagination_truncated: bool = False
 
     @property
     def is_error(self) -> bool:
@@ -232,6 +238,15 @@ class Pipeline:
                 "%d per-listing error(s); watermark held so the next run re-collects",
                 outcome.errors,
             )
+        elif outcome.pagination_truncated:
+            # We stopped because of the page cap, not because we reached already-known
+            # listings, so listings may lie beyond the last page fetched. Hold the
+            # watermark rather than claim we caught up, and make the gap visible.
+            logger.warning(
+                "list pagination hit the %d-page cap before reaching known listings; "
+                "watermark held so the next run re-collects the backlog",
+                MAX_LIST_PAGES,
+            )
         else:
             await repo.set_watermark(self._source, now)
 
@@ -261,6 +276,10 @@ class Pipeline:
                 if decision.should_stop:
                     break
                 page_url = next_page_url(page_url)
+            else:
+                # The loop ran the full cap without an early break, i.e. without ever
+                # reaching a known/older listing: the newest-first pages are truncated.
+                outcome.pagination_truncated = True
         return list(collected.values())
 
     async def _fetch_and_store(

@@ -233,6 +233,72 @@ async def test_source_blocked_marks_run_error(
     assert outcome.status is RunStatus.ERROR
 
 
+def _endless_list_html(pagenr: int) -> str:
+    slug = f"endless-{pagenr}"
+    return (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+        f'{{"currentPage":{pagenr},"initialResults":[{{"id":{1000 + pagenr},'
+        f'"slug":"{slug}","title":"Endless {pagenr}","created":"2026-07-21T09:12:00+02:00"}}]}}'
+        "</script>"
+    )
+
+
+def _endless_detail_html(slug: str) -> str:
+    return (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectShow">'
+        f'{{"project":{{"slug":"{slug}","title":"{slug}",'
+        '"created":"2026-07-21T09:12:00+02:00","startText":"ab sofort","city":"Remote",'
+        '"country":{"nameDe":"Deutschland"},"contractType":{"remoteInPercent":100},'
+        '"skills":{"enabled":[{"localizedName":"Python"}]},'
+        '"description":"<p>Endless.</p>"}}</script>'
+    )
+
+
+class _EndlessClient:
+    """Every list page holds a brand-new listing, so pagination never stops early."""
+
+    def __init__(self) -> None:
+        self.list_pages_fetched = 0
+
+    async def check_robots(self, urls: list[str]) -> None:
+        return None
+
+    async def get(self, url: str) -> _Resp:
+        if "/projekt/" in url:
+            return _Resp(_endless_detail_html(url.rsplit("/", 1)[-1]))
+        pagenr = 1
+        _, _, query = url.partition("pagenr=")
+        if query:
+            pagenr = int(query.split("&", 1)[0])
+        self.list_pages_fetched += 1
+        return _Resp(_endless_list_html(pagenr))
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_pagination_cap_is_surfaced_and_holds_watermark(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A backlog deeper than the page cap must not silently advance the watermark."""
+    from project_pilot.pipeline import MAX_LIST_PAGES
+
+    watermark = NOW - timedelta(minutes=10)
+    await _seed_state(session_factory, watermark=watermark)
+    client = _EndlessClient()
+    pipeline = _pipeline(session_factory, client=client)
+    outcome = await pipeline.run_once(now=NOW)
+    # The loop stopped at the cap, not on a known/older listing.
+    assert outcome.pagination_truncated is True
+    assert client.list_pages_fetched == MAX_LIST_PAGES
+    assert outcome.new == MAX_LIST_PAGES
+    # Watermark held at its old value so the next run re-collects the backlog.
+    async with session_factory() as db_session:
+        state = await Repository(db_session).get_source_state(SOURCE_NAME)
+        assert state is not None
+        assert state.watermark_at == watermark
+
+
 async def test_notification_retry_on_next_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
