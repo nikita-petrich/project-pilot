@@ -16,7 +16,7 @@ import asyncio
 import socket
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from ipaddress import ip_address
+from ipaddress import IPv6Address, ip_address, ip_network
 from typing import Protocol, Self
 from urllib.parse import urlsplit
 
@@ -36,6 +36,11 @@ _MAX_RESPONSE_BYTES = 2_000_000
 # this is either a loop or an attempt to walk us somewhere.
 _MAX_REDIRECTS = 5
 
+# NAT64 prefixes embed an IPv4 destination inside an IPv6 address that
+# ``is_global`` wrongly reports as public (e.g. 64:ff9b::169.254.169.254). On a
+# NAT64/DNS64 network that routes to the embedded IPv4, so refuse the whole range.
+_NAT64_NETS = (ip_network("64:ff9b::/96"), ip_network("64:ff9b:1::/48"))
+
 
 async def system_resolver(host: str) -> list[str]:
     """Resolve ``host`` to every A/AAAA address via the system resolver."""
@@ -51,6 +56,17 @@ def _reject_non_global(address: str, host: str) -> None:
         raise EnrichmentError(f"unparseable address {address!r} for host {host!r}") from err
     if not parsed.is_global:
         raise EnrichmentError(f"refusing non-public address {address} for host {host!r}")
+    if isinstance(parsed, IPv6Address):
+        # ``is_global`` misses IPv6 forms that carry an IPv4 destination: NAT64, and
+        # 6to4/IPv4-mapped embeddings. Refuse NAT64 outright and re-check any embedded
+        # IPv4 so e.g. 64:ff9b::169.254.169.254 or ::ffff:10.0.0.1 cannot slip through.
+        if any(parsed in net for net in _NAT64_NETS):
+            raise EnrichmentError(f"refusing NAT64 address {address} for host {host!r}")
+        embedded = parsed.ipv4_mapped or parsed.sixtofour
+        if embedded is not None and not embedded.is_global:
+            raise EnrichmentError(
+                f"refusing address {address} embedding non-public IPv4 {embedded}"
+            )
 
 
 async def validate_target(url: str, resolver: HostResolver = system_resolver) -> None:
@@ -73,7 +89,7 @@ async def validate_target(url: str, resolver: HostResolver = system_resolver) ->
     if not host:
         raise EnrichmentError(f"missing host in {url!r}")
     try:
-        literal = ip_address(host)
+        ip_address(host)
     except ValueError:
         addresses = await resolver(host)
         if not addresses:
@@ -81,8 +97,9 @@ async def validate_target(url: str, resolver: HostResolver = system_resolver) ->
         for address in addresses:
             _reject_non_global(address, host)
         return
-    if not literal.is_global:
-        raise EnrichmentError(f"refusing non-public address {host!r}")
+    # A literal host runs through the same full check (is_global + NAT64 + embedded
+    # IPv4) as a resolved one, so an IPv6 literal cannot skip the NAT64 guard.
+    _reject_non_global(host, host)
 
 
 @dataclass(frozen=True, slots=True)

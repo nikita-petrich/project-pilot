@@ -90,6 +90,11 @@ async def test_fetch_can_ignore_robots() -> None:
         "http://127.0.0.1:8080/",
         "http://169.254.169.254/latest/meta-data/",
         "http://[::1]/",
+        # NAT64 literal embedding the cloud metadata IP: is_global reports it public,
+        # but it routes to 169.254.169.254 on a NAT64 network.
+        "http://[64:ff9b::a9fe:a9fe]/latest/meta-data/",
+        # IPv4-mapped IPv6 literal embedding a private address.
+        "http://[::ffff:10.0.0.1]/",
     ],
 )
 async def test_fetch_refuses_unsafe_targets(url: str) -> None:
@@ -97,6 +102,16 @@ async def test_fetch_refuses_unsafe_targets(url: str) -> None:
     try:
         with pytest.raises(EnrichmentError):
             await fetcher.fetch(url)
+    finally:
+        await fetcher.aclose()
+
+
+async def test_fetch_refuses_host_resolving_to_nat64_metadata() -> None:
+    """A hostname whose AAAA is a NAT64-wrapped metadata IP must be refused."""
+    fetcher = _fetcher(resolver=_private_resolver("64:ff9b::a9fe:a9fe"))
+    try:
+        with pytest.raises(EnrichmentError, match="NAT64"):
+            await fetcher.fetch("https://intern.firma.de/impressum")
     finally:
         await fetcher.aclose()
 
