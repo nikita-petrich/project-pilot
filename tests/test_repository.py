@@ -1,6 +1,6 @@
 """Tests for the Repository data-access layer (skipped when Postgres is absent)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -93,3 +93,35 @@ async def test_watermark_roundtrip(session: AsyncSession) -> None:
     fetched = await repo.get_source_state("freelancermap")
     assert fetched is not None
     assert fetched.watermark_at == when
+
+
+async def _add_llm_match(
+    repo: Repository, url_hash: str, *, first_seen_at: datetime, score: int = 80
+) -> None:
+    listing = _listing(url_hash)
+    listing.first_seen_at = first_seen_at
+    listing.last_seen_at = first_seen_at
+    stored, _ = await repo.upsert_listing(listing)
+    await repo.add_evaluation(
+        Evaluation(
+            listing_id=stored.id,
+            stage=EvaluationStage.LLM,
+            verdict=Verdict.MATCH,
+            score=score,
+            reason={"reasons": ["fit"]},
+        )
+    )
+
+
+async def test_unnotified_matches_recency_bound(session: AsyncSession) -> None:
+    """A recency bound keeps a lowered threshold from resurfacing ancient matches."""
+    repo = Repository(session)
+    now = datetime(2026, 8, 9, 12, 0, tzinfo=UTC)
+    await _add_llm_match(repo, "recent", first_seen_at=now - timedelta(hours=1))
+    await _add_llm_match(repo, "ancient", first_seen_at=now - timedelta(days=30))
+
+    unbounded = await repo.get_unnotified_matches(min_score=60)
+    assert {listing.url_hash for listing in unbounded} == {"recent", "ancient"}
+
+    bounded = await repo.get_unnotified_matches(min_score=60, not_before=now - timedelta(days=2))
+    assert {listing.url_hash for listing in bounded} == {"recent"}

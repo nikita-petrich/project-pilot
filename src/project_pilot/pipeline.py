@@ -46,6 +46,10 @@ logger = logging.getLogger(__name__)
 MAX_LIST_PAGES = 25
 COOLDOWN_HOURS = 6
 FAILURE_WARNING_THRESHOLD = 3
+# Only matches first seen within this window are (re)sent. It comfortably covers
+# retrying a failed send across an outage, while stopping a lowered MATCH_THRESHOLD
+# from retro-flooding the channel with every historical below-threshold listing.
+NOTIFY_MAX_AGE = timedelta(days=2)
 
 
 def _utcnow() -> datetime:
@@ -431,7 +435,9 @@ class Pipeline:
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            pending = await repo.get_unnotified_matches(min_score=self._settings.match_threshold)
+            pending = await repo.get_unnotified_matches(
+                min_score=self._settings.match_threshold, not_before=now - NOTIFY_MAX_AGE
+            )
             if not pending:
                 return
             if self._notifier is None:

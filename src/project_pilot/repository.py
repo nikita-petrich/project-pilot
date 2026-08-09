@@ -120,21 +120,29 @@ class Repository:
         await self._session.flush()
         return state
 
-    async def get_unnotified_matches(self, *, min_score: int) -> Sequence[Listing]:
+    async def get_unnotified_matches(
+        self, *, min_score: int, not_before: datetime | None = None
+    ) -> Sequence[Listing]:
         """Listings with a notifiable LLM match that have not been notified yet.
 
         Covers this run's new matches and any that a prior run failed to send, so a
-        failed notification is retried on the next run.
+        failed notification is retried on the next run. ``not_before`` bounds the set
+        by ``first_seen_at`` so that lowering ``MATCH_THRESHOLD`` (or configuring
+        Slack after notifier-less runs) does not retro-flood the channel with every
+        historical listing that was below the old threshold.
         """
+        conditions = [
+            Listing.notified_at.is_(None),
+            Evaluation.stage == EvaluationStage.LLM,
+            Evaluation.verdict == Verdict.MATCH,
+            Evaluation.score >= min_score,
+        ]
+        if not_before is not None:
+            conditions.append(Listing.first_seen_at >= not_before)
         stmt = (
             select(Listing)
             .join(Evaluation, Evaluation.listing_id == Listing.id)
-            .where(
-                Listing.notified_at.is_(None),
-                Evaluation.stage == EvaluationStage.LLM,
-                Evaluation.verdict == Verdict.MATCH,
-                Evaluation.score >= min_score,
-            )
+            .where(*conditions)
             .options(selectinload(Listing.evaluations))
             .order_by(Listing.first_seen_at)
         )
