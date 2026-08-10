@@ -1,6 +1,7 @@
 """Stage 3 LLM matching via OpenAI structured outputs."""
 
 import base64
+import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,11 +13,14 @@ from openai import AsyncOpenAI
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.schemas import MatchVerdict
+from project_pilot.health import HealthIssue, HealthKind, classify_llm_error, llm_issue
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import Listing
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
+
+logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "match.v5"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -42,6 +46,29 @@ class StructuredLlmClient(Protocol):
     ) -> LlmResponse: ...
 
 
+class LlmProbe(Protocol):
+    """The smallest possible liveness call, used as a preflight before real work."""
+
+    async def ping(self, *, model: str) -> None: ...
+
+
+async def probe_llm(probe: LlmProbe, *, model: str) -> HealthIssue | None:
+    """Prove the configured model answers at all; returns the issue instead of raising.
+
+    Run before the first scan, this turns a bad deploy (wrong ``LLM_MODEL``, empty
+    account, rotated key) into an alert within seconds, rather than waiting for the
+    first fresh listing to reach stage 3 — which at night can be hours away.
+    """
+    try:
+        await probe.ping(model=model)
+    except Exception as err:
+        issue = classify_llm_error(err, model=model)
+        logger.error("LLM preflight failed: %s (%s)", issue.summary, issue.detail)
+        return issue
+    logger.info("LLM preflight ok: model %s answers", model)
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class LlmEvaluation:
     verdict: MatchVerdict
@@ -51,6 +78,9 @@ class LlmEvaluation:
     tokens_out: int | None
     latency_ms: int
     is_error: bool
+    # Set whenever `is_error` is true: why the call failed, in operator terms, so the
+    # pipeline can alert with the real cause instead of a generic "llm_error".
+    issue: HealthIssue | None = None
 
     @property
     def score(self) -> int:
@@ -200,14 +230,19 @@ class LlmMatcher:
             f"<<<LISTING\n{listing_text}\n>>>LISTING"
         )
         started = perf_counter()
-        detail = "no response"
-        for _ in range(2):
+        issue = llm_issue(HealthKind.UNKNOWN, model=self._model, detail="no response")
+        for attempt in (1, 2):
             try:
                 response = await self._client.complete(
                     model=self._model, system=self._prompt_template, user=user, images=images
                 )
             except Exception as err:
-                detail = f"llm call failed: {err}"
+                issue = classify_llm_error(err, model=self._model)
+                logger.warning("LLM call failed (attempt %d): %s", attempt, issue.detail)
+                if not issue.is_retryable:
+                    # A wrong model name or an empty account fails identically on the
+                    # second call: stop paying for it and report the real cause.
+                    break
                 continue
             if response.verdict is not None:
                 return LlmEvaluation(
@@ -219,15 +254,19 @@ class LlmMatcher:
                     latency_ms=_elapsed_ms(started),
                     is_error=False,
                 )
-            detail = "schema violation (empty parse)"
+            issue = llm_issue(
+                HealthKind.SCHEMA, model=self._model, detail="schema violation (empty parse)"
+            )
+            logger.warning("LLM returned no parsable verdict (attempt %d)", attempt)
         return LlmEvaluation(
-            verdict=MatchVerdict.llm_error_fallback(detail),
+            verdict=MatchVerdict.llm_error_fallback(f"{issue.kind.value}: {issue.detail}"),
             model=self._model,
             prompt_version=self._prompt_version,
             tokens_in=None,
             tokens_out=None,
             latency_ms=_elapsed_ms(started),
             is_error=True,
+            issue=issue,
         )
 
 
@@ -238,6 +277,14 @@ class OpenAiStructuredClient:
         self, api_key: str, *, client: AsyncOpenAI | None = None
     ) -> None:  # pragma: no cover
         self._client = client or AsyncOpenAI(api_key=api_key)
+
+    async def ping(self, *, model: str) -> None:  # pragma: no cover
+        """Smallest real call there is: proves the model, the key and the credit at once."""
+        await self._client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            max_completion_tokens=1,
+        )
 
     async def complete(
         self,

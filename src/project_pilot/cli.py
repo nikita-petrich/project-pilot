@@ -140,9 +140,8 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     def client_factory() -> PolitenessClient:
         return PolitenessClient(user_agent=settings.user_agent())
 
-    matcher = LlmMatcher(
-        OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
-    )
+    llm_client = OpenAiStructuredClient(api_key)
+    matcher = LlmMatcher(llm_client, model=model, prompt_template=load_prompt())
 
     notifier = SlackNotifier(_slack_client(settings)) if settings.has_slack() else None
 
@@ -153,6 +152,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         client_factory=client_factory,
         matcher=matcher,
         notifier=notifier,
+        llm_probe=llm_client,
     )
 
     async def closer() -> None:
@@ -266,6 +266,10 @@ async def _run_daemon(settings: Settings) -> None:
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
     bot_runtime: BotRuntime | None = _build_bot(settings) if settings.has_slack() else None
     try:
+        # Preflight before any work: a wrong LLM_MODEL, a rotated key or an empty
+        # account is announced within seconds of the deploy instead of staying hidden
+        # behind runs that silently score every listing as llm_error.
+        await pipeline.check_llm()
         await pipeline.run_once()  # initial run so the healthcheck has a baseline
         if bot_runtime is None:
             await runner.run_forever()

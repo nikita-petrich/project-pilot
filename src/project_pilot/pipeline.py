@@ -12,8 +12,15 @@ from project_pilot.config import SOURCE_NAME, Settings
 from project_pilot.db import session_scope
 from project_pilot.errors import SourceBlockedError, SourceUnavailableError
 from project_pilot.evaluation.freshness import evaluate_freshness
-from project_pilot.evaluation.llm import LlmEvaluation, is_match_notifiable, render_listing
+from project_pilot.evaluation.llm import (
+    LlmEvaluation,
+    LlmProbe,
+    is_match_notifiable,
+    probe_llm,
+    render_listing,
+)
 from project_pilot.evaluation.rules import apply_hard_rules
+from project_pilot.health import LLM_COMPONENT, HealthAlerter, HealthIssue
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import next_page_url
 from project_pilot.ingestion.parser import (
@@ -91,6 +98,11 @@ class RunOutcome:
     error: str | None = None
     is_seed: bool = False
     pagination_truncated: bool = False
+    # Stage 3 health. An llm_error is a *stored verdict*, not a run failure, so it
+    # never shows up in `errors` — these two are what make it visible.
+    llm_ok: int = 0
+    llm_errors: int = 0
+    llm_issue: HealthIssue | None = None
 
     @property
     def is_error(self) -> bool:
@@ -110,6 +122,8 @@ class Pipeline:
         matcher: Matcher,
         notifier: Notifier | None,
         base_url: str = BASE_URL,
+        llm_probe: LlmProbe | None = None,
+        alerter: HealthAlerter | None = None,
     ) -> None:
         self._settings = settings
         self._profile = profile
@@ -119,6 +133,8 @@ class Pipeline:
         self._notifier = notifier
         self._base_url = base_url
         self._source = SOURCE_NAME
+        self._llm_probe = llm_probe
+        self._alerter = alerter or HealthAlerter(self._send_operator_message)
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
@@ -162,10 +178,39 @@ class Pipeline:
 
             await self._finalize_state(state, outcome, now, blocked=blocked)
 
+        await self._report_llm_health(outcome, now)
         if not outcome.is_seed and not outcome.is_error:
             await self._notify(now, outcome)
         await self._record_run(run_id, outcome, now)
         return outcome
+
+    async def check_llm(self, *, now: datetime | None = None) -> HealthIssue | None:
+        """Preflight the LLM and alert on the result; returns the issue, never raises."""
+        if self._llm_probe is None:
+            return None
+        issue = await probe_llm(self._llm_probe, model=self._settings.llm_model)
+        await self.report_llm_issue(issue, now=now)
+        return issue
+
+    async def report_llm_issue(
+        self, issue: HealthIssue | None, *, now: datetime | None = None
+    ) -> None:
+        """Publish stage 3's health: alert on a problem, announce recovery, else stay quiet."""
+        if issue is not None:
+            await self._alerter.failed(issue, now=now or _utcnow())
+        else:
+            await self._alerter.recovered(LLM_COMPONENT)
+
+    async def _report_llm_health(self, outcome: RunOutcome, now: datetime) -> None:
+        """A run that only produced llm_errors looks successful — say so out loud.
+
+        Stays silent when the run reached stage 3 for nothing at all (no fresh
+        listings): no evidence either way is not evidence of recovery.
+        """
+        if outcome.llm_issue is not None:
+            await self.report_llm_issue(outcome.llm_issue, now=now)
+        elif outcome.llm_ok:
+            await self.report_llm_issue(None, now=now)
 
     async def _record_run(self, run_id: int | None, outcome: RunOutcome, now: datetime) -> None:
         if run_id is None:  # cooldown skip: no run was started
@@ -204,10 +249,14 @@ class Pipeline:
             state.cooldown_until = None
 
     async def _warn(self, text: str) -> None:
+        await self._send_operator_message(f"⚠️ {text}")
+
+    async def _send_operator_message(self, text: str) -> None:
+        """Deliver an operator message verbatim (the caller owns the wording and icon)."""
         if self._notifier is not None:
-            await self._notifier.send_warning(f"⚠️ {text}")
+            await self._notifier.send_warning(text)
         else:
-            logger.warning("warning (no notifier): %s", text)
+            logger.warning("operator message (no notifier): %s", text)
 
     async def _execute(
         self,
@@ -351,7 +400,13 @@ class Pipeline:
                 # listing's DB failure instead of poisoning the shared session.
                 async with repo.savepoint():
                     evaluated, matched = await self._evaluate_one(
-                        repo, listing, parsed, watermark=watermark, now=now, window=window
+                        repo,
+                        listing,
+                        parsed,
+                        watermark=watermark,
+                        now=now,
+                        window=window,
+                        outcome=outcome,
                     )
                 outcome.evaluated += evaluated
                 outcome.matched += matched
@@ -368,6 +423,7 @@ class Pipeline:
         watermark: datetime | None,
         now: datetime,
         window: int,
+        outcome: RunOutcome,
     ) -> tuple[int, int]:
         """Run stages 1-3 for one listing; returns the (evaluated, matched) deltas."""
         fresh = evaluate_freshness(
@@ -406,6 +462,12 @@ class Pipeline:
         llm = await self._matcher.evaluate(
             profile_text=self._profile.text, listing_text=render_listing(parsed)
         )
+        if llm.is_error:
+            outcome.llm_errors += 1
+            # The last cause wins: within one run they are the same failure anyway.
+            outcome.llm_issue = llm.issue
+        else:
+            outcome.llm_ok += 1
         listing.status = ListingStatus.EVALUATED
         await repo.add_evaluation(
             Evaluation(
