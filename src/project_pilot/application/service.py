@@ -275,22 +275,23 @@ class ApplicationService:
                 "SMTP is not configured (set SMTP_HOST/SMTP_USER/SMTP_PASSWORD)"
             )
         async with session_scope(self._session_factory) as session:
-            application = await self._editable(Repository(session), application_id)
-            if application.status is ApplicationStatus.SENDING:
-                raise ApplicationStateError(
-                    "A send attempt was interrupted - check your Sent folder. "
-                    "Discard this draft or create a new one."
-                )
+            repo = Repository(session)
+            application = await self._editable(repo, application_id)
             if not application.recipient_email:
                 raise ApplicationStateError(
                     "Recipient missing - reply to the draft with the e-mail address"
                 )
-            # Committed before the SMTP call: a crash mid-send leaves 'sending'
-            # behind, which blocks a blind retry instead of double-sending.
-            application.status = ApplicationStatus.SENDING
             recipient = application.recipient_email
             subject = application.subject
             body = application.body
+            # Atomic READY -> SENDING so two concurrent Send clicks cannot both
+            # deliver; the loser sees the claim fail. Committed before the SMTP call,
+            # so a crash mid-send leaves 'sending' behind (blocks a blind retry).
+            if not await repo.claim_for_send(application_id):
+                raise ApplicationStateError(
+                    "A send is already in progress for this draft - "
+                    "check your Sent folder before retrying."
+                )
 
         # Every configured CV rides along (PDF and Word, DE and EN); the draft's
         # language only decides which one leads.
@@ -323,12 +324,17 @@ class ApplicationService:
             raise
 
         async with session_scope(self._session_factory) as session:
-            application = await self._editable(Repository(session), application_id)
-            application.status = ApplicationStatus.SENT
-            application.sent_at = _utcnow()
-            application.error = None
+            # The send routine owns the SENDING -> SENT transition, so it reads the
+            # row directly rather than through ``_editable`` (which now refuses a
+            # SENDING row to protect the in-flight delivery from other actions).
+            sent = await Repository(session).get_application(application_id)
+            if sent is None:  # pragma: no cover - the row was just updated
+                raise ApplicationStateError(f"Draft {application_id} not found")
+            sent.status = ApplicationStatus.SENT
+            sent.sent_at = _utcnow()
+            sent.error = None
             await session.flush()
-            return self._view(application)
+            return self._view(sent)
 
     async def cancel(self, application_id: int) -> DraftView:
         async with session_scope(self._session_factory) as session:
@@ -423,4 +429,11 @@ class ApplicationService:
             raise ApplicationStateError("This application has already been sent")
         if application.status is ApplicationStatus.CANCELLED:
             raise ApplicationStateError("This draft has been discarded")
+        if application.status is ApplicationStatus.SENDING:
+            # A send is mid-flight (or one crashed and left this behind): editing,
+            # cancelling, or re-sending now would corrupt the in-flight delivery.
+            raise ApplicationStateError(
+                "A send is in progress for this draft - check your Sent folder. "
+                "Discard it or create a new one if the send did not complete."
+            )
         return application

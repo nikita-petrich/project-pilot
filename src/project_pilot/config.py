@@ -1,6 +1,7 @@
 """Application configuration via pydantic-settings (parsed and validated at boot)."""
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated
 
@@ -8,6 +9,8 @@ from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from project_pilot.errors import ConfigError
+
+logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
@@ -21,7 +24,7 @@ class SmtpConfig:
     host: str
     port: int
     username: str
-    password: str
+    password: str = field(repr=False)  # keep the secret out of reprs/tracebacks
     sender: str
     use_starttls: bool
 
@@ -30,9 +33,13 @@ class SmtpConfig:
 class SlackConfig:
     """Validated Slack settings: bot token (Web API), app token (Socket Mode), channel."""
 
-    bot_token: str
-    app_token: str
-    channel: str
+    bot_token: str = field(repr=False)
+    app_token: str = field(repr=False)
+    channel: str = ""
+    # Slack user ids allowed to drive the bot (buttons, slash commands, thread
+    # replies). Empty means "no allow-list configured" — the bot then serves any
+    # member of the channel, which is only safe in a truly single-member channel.
+    allowed_user_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,20 +87,27 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    database_url: str = "postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot"
+    # DATABASE_URL embeds the DB password, so keep it (and the secrets below) out of
+    # any repr/traceback of Settings with repr=False.
+    database_url: str = Field(
+        default="postgresql+asyncpg://pilot:pilot@localhost:5432/project_pilot", repr=False
+    )
     contact_mail: str = "you@example.com"
 
-    slack_bot_token: str = ""
-    slack_app_token: str = ""
+    slack_bot_token: str = Field(default="", repr=False)
+    slack_app_token: str = Field(default="", repr=False)
     slack_channel: str = ""
+    # Comma-separated Slack user ids (e.g. "U012ABC,U345DEF") permitted to operate
+    # the bot. Left empty, the bot falls back to channel-only trust and warns at boot.
+    slack_allowed_user_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
-    openai_api_key: str = ""
+    openai_api_key: str = Field(default="", repr=False)
     llm_model: str = ""
 
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
-    smtp_password: str = ""
+    smtp_password: str = Field(default="", repr=False)
     smtp_from: str = ""
     smtp_starttls: bool = True
 
@@ -121,7 +135,7 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", mode="before")
+    @field_validator("search_urls", "slack_allowed_user_ids", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
@@ -199,6 +213,7 @@ class Settings(BaseSettings):
             bot_token=self.slack_bot_token,
             app_token=self.slack_app_token,
             channel=self.slack_channel,
+            allowed_user_ids=frozenset(self.slack_allowed_user_ids),
         )
 
     def require_openai(self) -> tuple[str, str]:
@@ -217,6 +232,14 @@ class Settings(BaseSettings):
     def require_smtp(self) -> SmtpConfig:
         if not self.has_smtp():
             raise ConfigError("SMTP_HOST, SMTP_USER and SMTP_PASSWORD must all be set")
+        if not self.smtp_starttls and self.smtp_port != 465:
+            # Port 465 is implicit TLS; on any other port STARTTLS is what encrypts
+            # the session, so turning it off sends credentials and the e-mail in clear.
+            logger.warning(
+                "SMTP_STARTTLS is off on port %s: credentials and the application "
+                "e-mail would be sent unencrypted",
+                self.smtp_port,
+            )
         return SmtpConfig(
             host=self.smtp_host,
             port=self.smtp_port,

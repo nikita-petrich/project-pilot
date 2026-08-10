@@ -44,6 +44,7 @@ from project_pilot.notification.slack import (
     check_fallback_text,
     contact_fallback_text,
     draft_fallback_text,
+    escape_mrkdwn,
     format_check_blocks,
     format_contact_blocks,
     format_draft_blocks,
@@ -278,6 +279,7 @@ class SlackBot:
         file_reader: FileReader | None = None,
         checker: CheckFlow | None = None,
         enrichment: EnrichmentFlow | None = None,
+        allowed_user_ids: frozenset[str] = frozenset(),
     ) -> None:
         self._client = client
         self._channel = channel
@@ -286,9 +288,22 @@ class SlackBot:
         self._file_reader = file_reader
         self._checker = checker
         self._enrichment = enrichment
+        self._allowed_user_ids = allowed_user_ids
         self._pending_checks: dict[str, _PendingCheck] = {}
         self._pending_uploads: dict[str, _PendingUpload] = {}
         self._body_files: dict[str, str] = {}
+
+    def _authorized(self, user_id: str | None) -> bool:
+        """Whether ``user_id`` may drive the bot.
+
+        With an allow-list configured, only its members pass — this is what stops
+        another channel member (or a Slack Connect guest) from pressing Send and
+        mailing an application under Nik's identity. With no allow-list, the bot
+        falls back to channel-only trust (a boot-time warning flags the gap).
+        """
+        if not self._allowed_user_ids:
+            return True
+        return user_id is not None and user_id in self._allowed_user_ids
 
     async def dispatch(self, envelope_type: str, payload: dict[str, object]) -> None:
         """Parse a Socket Mode envelope and route it (defensive: never raises on shape)."""
@@ -301,6 +316,9 @@ class SlackBot:
 
     async def _dispatch_interactive(self, payload: dict[str, object]) -> None:
         if payload.get("type") != "block_actions":
+            return
+        if not self._authorized(_text(_mapping(payload.get("user")).get("id"))):
+            logger.warning("ignoring block action from unauthorized user")
             return
         channel = _text(_mapping(payload.get("channel")).get("id"))
         message = _mapping(payload.get("message"))
@@ -321,6 +339,12 @@ class SlackBot:
         if event.get("type") != "message":
             return
         from_bot = bool(event.get("bot_id"))
+        # Human replies must clear the allow-list; a bare-email reply can set the
+        # recipient, so an unauthorized reply must never reach the service. Bot
+        # messages carry no user id and are dropped later as non-actionable anyway.
+        if not from_bot and not self._authorized(_text(event.get("user"))):
+            logger.warning("ignoring thread message from unauthorized user")
+            return
         files = event.get("files")
         if not from_bot and isinstance(files, list) and files:
             await self.on_file_share(
@@ -340,6 +364,9 @@ class SlackBot:
         )
 
     async def _dispatch_command(self, payload: dict[str, object]) -> None:
+        if not self._authorized(_text(payload.get("user_id"))):
+            logger.warning("ignoring slash command from unauthorized user")
+            return
         command = _text(payload.get("command"))
         channel_id = _text(payload.get("channel_id"))
         text = _text(payload.get("text")) or ""
@@ -750,7 +777,9 @@ class SlackBot:
         """
         if anchor_ts is None or not title.strip():
             return
-        text = f"{prefix}: {title.strip()[:_LABEL_LIMIT]}"
+        # The title is scraped/LLM text going into an mrkdwn section, so escape it
+        # (an unescaped "<http://x|label>" would render as a forged link).
+        text = f"{prefix}: {escape_mrkdwn(title.strip()[:_LABEL_LIMIT])}"
         await self._client.update_blocks(self._channel, anchor_ts, status_blocks(text), text)
 
     async def _post_new_draft(

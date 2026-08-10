@@ -3,12 +3,13 @@
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 from sqlalchemy.orm import selectinload
 
 from project_pilot.models import (
     Application,
+    ApplicationStatus,
     ContactLead,
     Evaluation,
     EvaluationStage,
@@ -119,21 +120,29 @@ class Repository:
         await self._session.flush()
         return state
 
-    async def get_unnotified_matches(self, *, min_score: int) -> Sequence[Listing]:
+    async def get_unnotified_matches(
+        self, *, min_score: int, not_before: datetime | None = None
+    ) -> Sequence[Listing]:
         """Listings with a notifiable LLM match that have not been notified yet.
 
         Covers this run's new matches and any that a prior run failed to send, so a
-        failed notification is retried on the next run.
+        failed notification is retried on the next run. ``not_before`` bounds the set
+        by ``first_seen_at`` so that lowering ``MATCH_THRESHOLD`` (or configuring
+        Slack after notifier-less runs) does not retro-flood the channel with every
+        historical listing that was below the old threshold.
         """
+        conditions = [
+            Listing.notified_at.is_(None),
+            Evaluation.stage == EvaluationStage.LLM,
+            Evaluation.verdict == Verdict.MATCH,
+            Evaluation.score >= min_score,
+        ]
+        if not_before is not None:
+            conditions.append(Listing.first_seen_at >= not_before)
         stmt = (
             select(Listing)
             .join(Evaluation, Evaluation.listing_id == Listing.id)
-            .where(
-                Listing.notified_at.is_(None),
-                Evaluation.stage == EvaluationStage.LLM,
-                Evaluation.verdict == Verdict.MATCH,
-                Evaluation.score >= min_score,
-            )
+            .where(*conditions)
             .options(selectinload(Listing.evaluations))
             .order_by(Listing.first_seen_at)
         )
@@ -155,6 +164,26 @@ class Repository:
 
     async def get_application(self, application_id: int) -> Application | None:
         return await self._session.get(Application, application_id)
+
+    async def claim_for_send(self, application_id: int) -> bool:
+        """Atomically move a READY application to SENDING; True if this caller won.
+
+        A conditional ``UPDATE ... WHERE status = 'ready'`` is the double-send guard:
+        under READ COMMITTED, Postgres re-checks the predicate after taking the row
+        lock, so of two concurrent Send clicks exactly one flips the row and the
+        other sees zero rows updated (already SENDING) and is refused.
+        """
+        result = await self._session.execute(
+            update(Application)
+            .where(
+                Application.id == application_id,
+                Application.status == ApplicationStatus.READY,
+            )
+            .values(status=ApplicationStatus.SENDING)
+            .returning(Application.id)
+        )
+        await self._session.flush()
+        return result.first() is not None
 
     async def get_application_by_draft_ref(self, draft_ref: str) -> Application | None:
         result = await self._session.scalars(

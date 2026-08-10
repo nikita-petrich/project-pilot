@@ -17,12 +17,17 @@ from typing import TYPE_CHECKING
 
 import httpx
 
-from project_pilot.enrichment.fetch import FetchedPage, validate_target
+from project_pilot.enrichment.fetch import (
+    FetchedPage,
+    HostResolver,
+    system_resolver,
+    validate_target,
+)
 from project_pilot.enrichment.robots import RobotsGate
-from project_pilot.errors import SourceBlockedError
+from project_pilot.errors import EnrichmentError, SourceBlockedError
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, Playwright
+    from playwright.async_api import Browser, Playwright, Request, Route
 
 type Sleeper = Callable[[float], Awaitable[None]]
 
@@ -39,6 +44,7 @@ class PlaywrightFetcher:
         respect_robots: bool = True,
         executable_path: str | None = None,
         sleeper: Sleeper = asyncio.sleep,
+        resolver: HostResolver = system_resolver,
         robots_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._user_agent = user_agent
@@ -47,9 +53,12 @@ class PlaywrightFetcher:
         self._respect_robots = respect_robots
         self._executable_path = executable_path or None
         self._sleeper = sleeper
+        self._resolver = resolver
         self._owns_robots_client = robots_client is None
+        # follow_redirects=False: a validated company site must not be able to 302 its
+        # robots.txt onto an internal host (blind SSRF), matching the httpx fetcher.
         self._robots_client = robots_client or httpx.AsyncClient(
-            headers={"User-Agent": user_agent}, timeout=timeout, follow_redirects=True
+            headers={"User-Agent": user_agent}, timeout=timeout, follow_redirects=False
         )
         self._robots = RobotsGate(user_agent, self._fetch_robots)
         self._playwright: Playwright | None = None
@@ -62,7 +71,7 @@ class PlaywrightFetcher:
         Same guard order as ``WebFetcher.fetch``: target validation and the robots
         check run first so the sleep can honor the host's Crawl-delay.
         """
-        validate_target(url)
+        await validate_target(url, self._resolver)
         if self._respect_robots and not await self._robots.allowed(url):
             raise SourceBlockedError(f"robots.txt disallows {url}")
         if self._delay_pending:
@@ -78,14 +87,30 @@ class PlaywrightFetcher:
     async def _render(self, url: str) -> FetchedPage:  # pragma: no cover - browser boundary
         browser = await self._ensure_browser()
         context = await browser.new_context(user_agent=self._user_agent)
+        # Validate every top-level navigation the browser makes (server redirects and
+        # client-side navigations included), so an intermediate hop cannot reach an
+        # internal target before the final-URL check runs. Sub-resources are left alone.
+        await context.route("**/*", self._guard_navigation)
         try:
             page = await context.new_page()
             response = await page.goto(url, timeout=self._timeout_ms, wait_until="domcontentloaded")
             if response is not None and response.status == 403:
                 raise SourceBlockedError(f"HTTP 403 for {url}")
+            await validate_target(page.url, self._resolver)
             return FetchedPage(url=page.url, text=await page.content())
         finally:
             await context.close()
+
+    async def _guard_navigation(  # pragma: no cover - browser boundary
+        self, route: "Route", request: "Request"
+    ) -> None:
+        if request.resource_type == "document":
+            try:
+                await validate_target(request.url, self._resolver)
+            except EnrichmentError:
+                await route.abort()
+                return
+        await route.continue_()
 
     async def _ensure_browser(self) -> "Browser":  # pragma: no cover - browser boundary
         if self._browser is None:

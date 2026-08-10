@@ -16,6 +16,11 @@ concurrency:
   group: deploy-vps
   cancel-in-progress: false
 
+# Default the token to read-only; the build and deploy jobs widen it to exactly
+# the scope they need (packages: write / read) in their own blocks below.
+permissions:
+  contents: read
+
 jobs:
   gate:
     uses: ./.github/workflows/quality-gate.yml

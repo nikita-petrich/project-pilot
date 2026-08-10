@@ -11,6 +11,7 @@ import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import cast
+from urllib.parse import urlsplit
 
 import httpx
 import typer
@@ -31,7 +32,7 @@ from project_pilot.enrichment.render import PlaywrightFetcher
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
 from project_pilot.enrichment.service import EnrichmentService
-from project_pilot.errors import EnrichmentError
+from project_pilot.errors import EnrichmentError, ProjectPilotError
 from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
@@ -44,12 +45,21 @@ from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 
+logger = logging.getLogger(__name__)
+
 app = typer.Typer(
     name="project-pilot",
     help="Personal freelancermap.de listing pilot.",
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+def _is_slack_file_url(url: str) -> bool:
+    """True only for Slack's own file hosts (where the bot token may be sent)."""
+    host = urlsplit(url).hostname or ""
+    return host == "slack.com" or host.endswith(".slack.com")
+
 
 type BotRuntime = tuple[SlackBot, AsyncWebClient, str, Callable[[], Awaitable[None]]]
 
@@ -203,11 +213,25 @@ def _build_bot(settings: Settings) -> BotRuntime:
             await politeness.aclose()
 
     async def read_slack_file(url: str) -> bytes:
+        # The bot token is a bearer credential; only ever attach it to Slack's own
+        # file hosts. A crafted file event could otherwise point the download URL at
+        # an attacker host and capture the xoxb- token from the Authorization header.
+        if not _is_slack_file_url(url):
+            raise ProjectPilotError(f"refusing to send the Slack token to non-Slack host: {url}")
         headers = {"Authorization": f"Bearer {config.bot_token}"}
+        # httpx drops the Authorization header on cross-host redirects, so a redirect
+        # to Slack's file CDN keeps working without leaking the token off-Slack.
         async with httpx.AsyncClient(timeout=30.0) as http:
             response = await http.get(url, headers=headers, follow_redirects=True)
             response.raise_for_status()
             return response.content
+
+    if not config.allowed_user_ids:
+        logger.warning(
+            "SLACK_ALLOWED_USER_IDS is unset: the bot trusts every member of %s. "
+            "Set it to your Slack user id so only you can trigger applications.",
+            config.channel,
+        )
 
     slack_bot = SlackBot(
         client=client,
@@ -217,6 +241,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
         file_reader=read_slack_file,
         checker=checker,
         enrichment=enrichment,
+        allowed_user_ids=config.allowed_user_ids,
     )
 
     async def closer() -> None:

@@ -50,6 +50,16 @@ def test_parse_list_page_raises_when_component_missing() -> None:
         parse_list_page("<html><body>nothing here</body></html>", BASE)
 
 
+def test_parse_list_page_raises_when_results_key_missing() -> None:
+    """A renamed/removed results key is a markup change, not a silent empty page."""
+    html = (
+        '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
+        '{"currentPage":1,"results":[]}</script>'
+    )
+    with pytest.raises(SelectorMismatchError):
+        parse_list_page(html, BASE)
+
+
 def test_parse_detail_asap_remote() -> None:
     parsed = parse_detail_page(
         _fixture("freelancermap_detail_asap_remote.html"),

@@ -51,7 +51,11 @@ class _ProjectSearch(BaseModel):
 
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
-    initial_results: list[_ListItem] = Field(default_factory=list, alias="initialResults")
+    # Required (no default): a page that genuinely has no results still carries
+    # ``"initialResults": []``. A *missing* key means the markup changed, which must
+    # raise SelectorMismatchError, not silently parse as an empty page (which would
+    # turn every scan into a zero-fetch "success" and advance the watermark).
+    initial_results: list[_ListItem] = Field(alias="initialResults")
 
 
 class _Country(BaseModel):

@@ -204,6 +204,14 @@ def test_match_blocks_escape_slack_specials() -> None:
     assert "A &amp; B &lt;x&gt;" in joined
 
 
+def test_match_fallback_text_escapes_hostile_title() -> None:
+    """The notification-preview text is mrkdwn, so a crafted title must not inject."""
+    message = MatchMessage(title="<!channel> <http://evil|win>", url="https://x", score=50)
+    fallback = match_fallback_text(message)
+    assert "<!channel>" not in fallback
+    assert "&lt;!channel&gt;" in fallback
+
+
 def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     blocks = format_draft_blocks(_draft_view())
     sections = "\n".join(_section_texts(blocks))

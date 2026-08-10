@@ -1,0 +1,14 @@
+# Keep the supply chain fresh. GitHub Actions and base images are the highest-value
+# surface (a hijacked action tag runs in the deploy job that holds every app secret),
+# so Dependabot proposes version bumps for them on a schedule.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"

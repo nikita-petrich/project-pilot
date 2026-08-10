@@ -7,6 +7,10 @@ name: Quality gate
 on:
   workflow_call:
 
+# Least privilege for the reusable gate: checkout + test need only read access.
+permissions:
+  contents: read
+
 jobs:
   gate:
     name: lint · format · types · tests

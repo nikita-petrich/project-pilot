@@ -1,4 +1,4 @@
-"""Tests for the polite WebFetcher (HTTP mocked with respx, never live)."""
+"""Tests for the polite WebFetcher (HTTP mocked with respx, DNS faked, never live)."""
 
 import httpx
 import pytest
@@ -12,7 +12,20 @@ async def _noop_sleep(_seconds: float) -> None:
     return None
 
 
+async def _public_resolver(_host: str) -> list[str]:
+    """Resolve every host to a public address, so respx-mocked hosts never hit DNS."""
+    return ["93.184.216.34"]
+
+
+def _private_resolver(address: str) -> object:
+    async def resolve(_host: str) -> list[str]:
+        return [address]
+
+    return resolve
+
+
 def _fetcher(**kwargs: object) -> WebFetcher:
+    kwargs.setdefault("resolver", _public_resolver)
     return WebFetcher(user_agent="test-agent/1.0", sleeper=_noop_sleep, **kwargs)  # type: ignore[arg-type]
 
 
@@ -77,6 +90,11 @@ async def test_fetch_can_ignore_robots() -> None:
         "http://127.0.0.1:8080/",
         "http://169.254.169.254/latest/meta-data/",
         "http://[::1]/",
+        # NAT64 literal embedding the cloud metadata IP: is_global reports it public,
+        # but it routes to 169.254.169.254 on a NAT64 network.
+        "http://[64:ff9b::a9fe:a9fe]/latest/meta-data/",
+        # IPv4-mapped IPv6 literal embedding a private address.
+        "http://[::ffff:10.0.0.1]/",
     ],
 )
 async def test_fetch_refuses_unsafe_targets(url: str) -> None:
@@ -88,17 +106,42 @@ async def test_fetch_refuses_unsafe_targets(url: str) -> None:
         await fetcher.aclose()
 
 
+async def test_fetch_refuses_host_resolving_to_nat64_metadata() -> None:
+    """A hostname whose AAAA is a NAT64-wrapped metadata IP must be refused."""
+    fetcher = _fetcher(resolver=_private_resolver("64:ff9b::a9fe:a9fe"))
+    try:
+        with pytest.raises(EnrichmentError, match="NAT64"):
+            await fetcher.fetch("https://intern.firma.de/impressum")
+    finally:
+        await fetcher.aclose()
+
+
 @respx.mock
 async def test_fetch_refuses_redirect_to_private_target() -> None:
     respx.get("https://firma.de/robots.txt").mock(return_value=httpx.Response(404))
     respx.get("https://firma.de/kontakt").mock(
         return_value=httpx.Response(302, headers={"location": "http://127.0.0.1/steal"})
     )
-    respx.get("http://127.0.0.1/steal").mock(return_value=httpx.Response(200, text="secret"))
+    # The private target is deliberately NOT mocked: the redirect must be refused
+    # before it is followed, so a request to 127.0.0.1 must never be made.
+    private = respx.get("http://127.0.0.1/steal").mock(
+        return_value=httpx.Response(200, text="secret")
+    )
     fetcher = _fetcher()
     try:
         with pytest.raises(EnrichmentError, match="non-public"):
             await fetcher.fetch("https://firma.de/kontakt")
+    finally:
+        await fetcher.aclose()
+    assert not private.called  # the fetch was blocked before touching the private host
+
+
+async def test_fetch_refuses_host_resolving_to_private_address() -> None:
+    """A public-looking hostname whose DNS answer is a LAN/metadata IP is refused."""
+    fetcher = _fetcher(resolver=_private_resolver("169.254.169.254"))
+    try:
+        with pytest.raises(EnrichmentError, match="non-public"):
+            await fetcher.fetch("https://intern.firma.de/impressum")
     finally:
         await fetcher.aclose()
 
@@ -145,7 +188,9 @@ async def test_fetch_honors_crawl_delay_over_base_delay() -> None:
     async def record(seconds: float) -> None:
         delays.append(seconds)
 
-    fetcher = WebFetcher(user_agent="test-agent/1.0", delay=1.5, sleeper=record)
+    fetcher = WebFetcher(
+        user_agent="test-agent/1.0", delay=1.5, sleeper=record, resolver=_public_resolver
+    )
     try:
         await fetcher.fetch("https://firma.de/a")
         await fetcher.fetch("https://firma.de/b")
