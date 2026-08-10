@@ -62,7 +62,7 @@ Clean Architecture · microservices · CI/CD · Docker · GDPR-compliant AI arch
 
 - AI/LLM-heavy projects: LLM features in production, RAG systems, agentic workflows, AI automation
 - Full-stack or backend roles on a modern TypeScript stack (Next.js/NestJS/React)
-- LegalTech, HealthTech, GovTech, e-commerce, EdTech, logistics — open to any industry, preference for projects with a regulatory or societal dimension
+- LegalTech, HealthTech, GovTech, e-commerce, EdTech, logistics — open to any industry except the ones under No-gos, preference for projects with a regulatory or societal dimension
 - Remote-first, occasionally on-site in or near Munich (1–2 days/week)
 - Sole-developer/CTO ownership as well as contributing within larger agile teams
 - Medium to long term preferred; part-time and maintenance engagements possible
@@ -70,9 +70,23 @@ Clean Architecture · microservices · CI/CD · Docker · GDPR-compliant AI arch
 
 ## No-gos
 
-Context decides — migrating *away* from a technology, a role at a different layer
-(e.g. frontend against an X backend), or integration from a modern stack are all
-fine. Match on the role, not on the bare keyword.
+### Industries (unconditional — no context rescues these)
+
+No project in these sectors, regardless of role, stack, rate, or how interesting
+the technology is. Treat as an immediate no-match, whether the client is the
+sector itself or a direct supplier/service provider to it.
+
+- **Defense / military / weapons** — armed forces, defense contractors, weapons and
+  ammunition, military intelligence and surveillance, dual-use projects with a
+  clearly military purpose
+- **Adult industry** — pornography, erotica, sex work platforms, adult dating and
+  cam sites, adult toy/content commerce
+
+### Technologies (context decides)
+
+Migrating *away* from a technology, a role at a different layer (e.g. frontend
+against an X backend), or integration from a modern stack are all fine. Match on
+the role, not on the bare keyword.
 
 - **Java** — not as my own development language (frontend against a Java backend is fine)
 - **PHP** (incl. Laravel/Symfony) — except migrating away from it
