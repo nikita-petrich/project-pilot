@@ -25,7 +25,7 @@ from project_pilot.application.documents import (
     extract_document_text,
     is_image_mime_type,
 )
-from project_pilot.application.service import DraftView, is_email
+from project_pilot.application.service import DraftView, ReplyIntent, parse_reply
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import (
     ApplicationStateError,
@@ -71,6 +71,13 @@ CHECK_USAGE = (
 # Both buttons are gone once used (the message is rewritten), so this only shows
 # after a restart dropped the in-memory state.
 UPLOAD_EXPIRED = "⚠️ I no longer have that upload (bot restart) — please upload the file again."
+# A reply outside a draft's thread has nothing to act on; say so instead of going
+# quiet, so a hint is never silently swallowed.
+NO_DRAFT_HINT = (
+    "💡 There is no application draft in this thread yet — press 📝 Apply on the "
+    "project card (or run `/apply`), then reply here with your instructions or the "
+    "recipient's e-mail address."
+)
 
 # Bounded per-message state: pending uploads awaiting their button, and checked
 # inputs kept for a passing check's apply button. Losing either on restart only
@@ -93,6 +100,9 @@ _LABEL_LIMIT = 150
 # duplicate file, while a revision (new body) uploads a fresh one. Bounded like the
 # other per-message state; losing it on restart only re-inlines/re-uploads.
 _BODY_FILE_LIMIT = 200
+
+# Threads already told that they carry no draft (the hint is posted once each).
+_HINTED_THREAD_LIMIT = 200
 
 
 class SlackPoster(Protocol):
@@ -138,7 +148,6 @@ class ApplicationFlow(Protocol):
     ) -> DraftView: ...
     async def set_recipient(self, application_id: int, email: str) -> DraftView: ...
     async def send(self, application_id: int) -> DraftView: ...
-    async def cancel(self, application_id: int) -> DraftView: ...
     async def record_draft_ref(self, application_id: int, draft_ref: str) -> None: ...
     async def find_by_draft_ref(self, draft_ref: str) -> DraftView | None: ...
     async def find_listing_id_by_url(self, url: str) -> int | None: ...
@@ -292,6 +301,7 @@ class SlackBot:
         self._pending_checks: dict[str, _PendingCheck] = {}
         self._pending_uploads: dict[str, _PendingUpload] = {}
         self._body_files: dict[str, str] = {}
+        self._hinted_threads: dict[str, None] = {}
 
     def _authorized(self, user_id: str | None) -> bool:
         """Whether ``user_id`` may drive the bot.
@@ -413,8 +423,6 @@ class SlackBot:
             )
         elif action_id == "send":
             await self._send_application(target, draft_ts=message_ts, thread_root=root)
-        elif action_id == "cancel":
-            await self._cancel_application(target, draft_ts=message_ts, thread_root=root)
         elif action_id == "enrich":
             await self._run_enrichment(target, thread_root=root)
         # open_project / open_li_* / open_google are URL buttons handled by Slack itself.
@@ -709,32 +717,27 @@ class SlackBot:
     async def _revise_with_images(
         self, view: DraftView, *, thread_ts: str, text: str, files: list[dict[str, object]]
     ) -> None:
-        """An upload in a draft's thread: images become vision input for the revision."""
+        """An upload in a draft's thread: images become vision input for the revision.
+
+        The caption is read like any other reply, so an address in it still sets the
+        recipient — with or without a usable image alongside.
+        """
         message = _unwrap_slack_links(text).strip()
-        if is_email(message):
-            # The reply is really a recipient correction; the upload changes nothing.
-            await self._post_new_draft(
-                lambda: self._service.set_recipient(view.application_id, message),
-                thread_ts,
-                progress="✅ Setting recipient …",
-            )
-            return
+        intent = parse_reply(message)
         images = _image_files(files)
         if not images:
+            # No usable image left, but the caption may still carry an address or an
+            # instruction — act on that instead of dropping the whole reply.
             await self._client.post_text(
                 "⚠️ Only images (PNG/JPEG/WebP/GIF) can accompany a revision — "
                 "please paste document content as text.",
                 thread_ts=thread_ts,
             )
+            await self._apply_reply(view, intent, thread_ts=thread_ts)
             return
-        instruction = message or DEFAULT_IMAGE_INSTRUCTION
-
-        async def factory() -> DraftView:
-            return await self._service.revise(
-                view.application_id, instruction, images=await self._download_images(images)
-            )
-
-        await self._post_new_draft(factory, thread_ts, progress="✏️ Revising the draft …")
+        await self._apply_reply(
+            view, intent, thread_ts=thread_ts, images=await self._download_images(images)
+        )
 
     async def _download_images(self, images: list[_ImageFile]) -> list[ImageAttachment]:
         reader = self._file_reader
@@ -754,20 +757,61 @@ class SlackBot:
             return
         view = await self._service.find_by_draft_ref(f"{channel}:{thread_ts}")
         if view is None:
-            return  # a reply in some other thread, not a draft
+            await self._explain_unroutable_thread(thread_ts)
+            return
         message = _unwrap_slack_links(text).strip()
-        if is_email(message):
-            await self._post_new_draft(
-                lambda: self._service.set_recipient(view.application_id, message),
-                thread_ts,
-                progress="✅ Setting recipient …",
-            )
+        await self._apply_reply(view, parse_reply(message), thread_ts=thread_ts)
+
+    async def _apply_reply(
+        self,
+        view: DraftView,
+        intent: ReplyIntent,
+        *,
+        thread_ts: str,
+        images: Sequence[ImageAttachment] | None = None,
+    ) -> None:
+        """Act on everything one reply carries: the address, the instruction, or both.
+
+        A reply is never silently half-read — "die Adresse ist a@b.de, bitte kürzer"
+        sets the recipient *and* rewrites the draft, and the result is rendered once.
+        """
+        attachments = list(images or ())
+        # An image alone means "fold this into the draft"; an image next to a bare
+        # address is the screenshot the address was read from, so it changes nothing.
+        revise = intent.instruction is not None or (bool(attachments) and intent.email is None)
+        if intent.email is None and not revise:
+            return
+
+        async def factory() -> DraftView:
+            result = view
+            if intent.email is not None:
+                result = await self._service.set_recipient(view.application_id, intent.email)
+            if revise:
+                result = await self._service.revise(
+                    view.application_id,
+                    intent.instruction or DEFAULT_IMAGE_INSTRUCTION,
+                    images=attachments,
+                )
+            return result
+
+        if intent.email is not None and revise:
+            progress = "✅ Setting recipient and revising the draft …"
+        elif intent.email is not None:
+            progress = "✅ Setting recipient …"
         else:
-            await self._post_new_draft(
-                lambda: self._service.revise(view.application_id, message),
-                thread_ts,
-                progress="✏️ Revising the draft …",
-            )
+            progress = "✏️ Revising the draft …"
+        await self._post_new_draft(factory, thread_ts, progress=progress)
+
+    async def _explain_unroutable_thread(self, thread_ts: str) -> None:
+        """Answer a reply in a thread that carries no draft — once per thread.
+
+        Silence there reads as "the bot ignored me"; repeating the hint on every
+        message would be noise, so each thread is told exactly once.
+        """
+        if thread_ts in self._hinted_threads:
+            return
+        _remember(self._hinted_threads, thread_ts, None, _HINTED_THREAD_LIMIT)
+        await self._client.post_text(NO_DRAFT_HINT, thread_ts=thread_ts)
 
     async def _relabel_anchor(self, anchor_ts: str | None, prefix: str, title: str) -> None:
         """Rewrite a slash command's channel line with the resolved project title.
@@ -882,26 +926,6 @@ class SlackBot:
             await self._client.update_blocks(progress.channel, progress.ts, blocks, fallback)
         else:
             await self._client.post_blocks(blocks, fallback, thread_ts=thread_root)
-
-    async def _cancel_application(
-        self, application_id: int, *, draft_ts: str, thread_root: str
-    ) -> None:
-        try:
-            view = await self._service.cancel(application_id)
-        except ApplicationStateError as err:
-            await self._client.post_text(f"⚠️ {err}", thread_ts=thread_root)
-            return
-        except Exception as err:
-            logger.exception("cancelling application %d failed", application_id)
-            await self._client.post_text(f"⚠️ Unexpected error: {err}", thread_ts=thread_root)
-            return
-        await self._client.update_blocks(
-            self._channel,
-            draft_ts,
-            format_draft_blocks(view, body_in_file=self._body_in_file(view.application_id)),
-            draft_fallback_text(view),
-        )
-        await self._client.post_text("❌ Draft discarded.", thread_ts=thread_root)
 
     def _body_in_file(self, application_id: int) -> bool:
         """True when this draft's e-mail is already in the thread as a .txt file."""

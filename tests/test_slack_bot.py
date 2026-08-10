@@ -20,6 +20,7 @@ from project_pilot.notification.slack import Block, PostedMessage
 from project_pilot.notification.slack_bot import (
     CHECK_USAGE,
     DEFAULT_IMAGE_INSTRUCTION,
+    NO_DRAFT_HINT,
     USAGE,
     EnrichmentFlow,
     SlackBot,
@@ -180,9 +181,6 @@ class _FakeService:
 
     async def send(self, application_id: int) -> DraftView:
         return self._result("send", application_id)
-
-    async def cancel(self, application_id: int) -> DraftView:
-        return self._result("cancel", application_id)
 
     async def record_draft_ref(self, application_id: int, draft_ref: str) -> None:
         self.recorded.append((application_id, draft_ref))
@@ -520,7 +518,7 @@ async def test_send_action_updates_draft_and_confirms_with_linkedin() -> None:
     # the confirmation carries the LinkedIn people-search button for the contact
     buttons = [e for _, _, blocks in poster.updates for e in _button_elements(blocks)]
     assert any(
-        e.get("action_id") == "linkedin_search" and "Anna%20Kleinen" in str(e.get("url"))
+        e.get("action_id") == "open_li_people" and "Anna+Kleinen" in str(e.get("url"))
         for e in buttons
     )
 
@@ -532,12 +530,12 @@ async def test_send_action_surfaces_error() -> None:
     assert any("smtp down" in t for t in poster.visible_texts())
 
 
-async def test_cancel_action_updates_message() -> None:
+async def test_discarding_a_draft_is_no_longer_offered() -> None:
+    """The Discard button is gone; a stale action id must not reach the service."""
     poster, service = _FakePoster(), _FakeService()
-    service.view = _view(status=ApplicationStatus.CANCELLED)
     await _bot(poster, service).dispatch("interactive", _interactive("cancel", "1", ts="9.9"))
-    assert ("cancel", 1) in service.calls
-    assert "9.9" in [ts for _, ts, _ in poster.updates]
+    assert service.calls == []
+    assert poster.updates == []
 
 
 async def test_url_button_action_is_ignored() -> None:
@@ -668,11 +666,14 @@ async def test_top_level_message_without_thread_is_ignored() -> None:
     assert service.calls == []
 
 
-async def test_reply_to_unknown_thread_is_ignored() -> None:
+async def test_reply_to_a_thread_without_a_draft_is_answered_once() -> None:
+    """Silence reads as "ignored" — the thread is told what to do, but only once."""
     poster, service = _FakePoster(), _FakeService()
-    await _bot(poster, service).dispatch("events_api", _event("Bitte kürzer"))
+    bot = _bot(poster, service)
+    await bot.dispatch("events_api", _event("Bitte kürzer"))
+    await bot.dispatch("events_api", _event("und förmlicher"))
     assert service.calls == []
-    assert poster.texts == []
+    assert [text for text, _ in poster.texts] == [NO_DRAFT_HINT]
 
 
 async def test_file_upload_drafts_from_extracted_text() -> None:
@@ -785,6 +786,18 @@ async def test_email_reply_with_image_still_sets_recipient() -> None:
     assert not any(name == "revise" for name, _ in service.calls)
 
 
+async def test_reply_with_address_and_instruction_does_both() -> None:
+    """One message, two wishes: the address is set and the draft is rewritten."""
+    poster, service = _FakePoster(), _FakeService()
+    service.by_ref["C1:111.1"] = _view()
+    await _bot(poster, service).dispatch(
+        "events_api",
+        _event("Adresse ist <mailto:neu@firma.de|neu@firma.de>, bitte kürzer", thread_ts="111.1"),
+    )
+    assert ("set_recipient", (1, "neu@firma.de")) in service.calls
+    assert ("revise", (1, "Adresse ist bitte kürzer")) in service.calls
+
+
 async def test_non_image_file_in_draft_thread_posts_hint() -> None:
     poster, service = _FakePoster(), _FakeService()
     service.by_ref["C1:111.1"] = _view()
@@ -792,7 +805,8 @@ async def test_non_image_file_in_draft_thread_posts_hint() -> None:
         "events_api",
         _file_event("doc.pdf", mimetype="application/pdf", thread_ts="111.1", text="anpassen"),
     )
-    assert service.calls == []
+    # The file cannot be used, but the caption is still a hint and is acted on.
+    assert ("revise", (1, "anpassen")) in service.calls
     assert any("Only images" in text for text, _ in poster.texts)
 
 
@@ -825,7 +839,8 @@ async def test_slash_check_no_match_renders_verdict_without_apply_button() -> No
     await _bot(poster, service, checker=checker).dispatch(
         "slash_commands", _slash("Java Projekt", command="/check")
     )
-    assert not _updated_buttons(poster)
+    # No apply button on a no-match, but the research searches stay available.
+    assert set(_updated_buttons(poster)) == {"open_li_company", "open_li_people", "open_google"}
     joined = "\n".join(poster.visible_texts())
     assert "20/100" in joined
 

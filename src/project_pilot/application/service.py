@@ -48,6 +48,42 @@ def is_email(text: str) -> bool:
     return _EMAIL_RE.fullmatch(text.strip()) is not None
 
 
+@dataclass(frozen=True, slots=True)
+class ReplyIntent:
+    """What a thread reply asks for: a recipient, a revision instruction, or both."""
+
+    email: str | None = None
+    instruction: str | None = None
+
+
+# What is left of a reply once its address is removed and still counts as an
+# instruction — shorter leftovers are punctuation or filler ("hier:", "->").
+_MIN_INSTRUCTION_LENGTH = 3
+
+
+def parse_reply(text: str) -> ReplyIntent:
+    """Split a thread reply into the recipient address and the rest of the message.
+
+    Nik writes to the bot in one line ("die Adresse ist a@b.de, bitte kürzer"), so a
+    reply is never *either* an address *or* an instruction: whatever it carries is
+    acted on. The address is taken verbatim (unlike listing scraping, a typed address
+    is meant), and the remaining words become the revision instruction.
+    """
+    message = text.strip()
+    match = _EMAIL_RE.search(message)
+    if match is None:
+        return ReplyIntent(instruction=message or None)
+    address = match.group(0).rstrip(".")
+    # Drop the separators that only glued the address into the sentence, so what is
+    # left reads as the instruction it was ("… ist a@b.de, bitte kürzer" → "… ist bitte kürzer").
+    separators = " \t\n,;:.-<>()"
+    before = message[: match.start()].rstrip(separators)
+    after = message[match.end() :].lstrip(separators)
+    rest = " ".join(f"{before} {after}".split()).strip(separators)
+    instruction = rest if len(rest) >= _MIN_INSTRUCTION_LENGTH else None
+    return ReplyIntent(email=address, instruction=instruction)
+
+
 def extract_email(text: str) -> str | None:
     """First plausible contact address in ``text`` (skips noreply/platform addresses)."""
     for match in _EMAIL_RE.finditer(text):
@@ -336,13 +372,6 @@ class ApplicationService:
             await session.flush()
             return self._view(sent)
 
-    async def cancel(self, application_id: int) -> DraftView:
-        async with session_scope(self._session_factory) as session:
-            application = await self._editable(Repository(session), application_id)
-            application.status = ApplicationStatus.CANCELLED
-            await session.flush()
-            return self._view(application)
-
     async def record_draft_ref(self, application_id: int, draft_ref: str) -> None:
         """Remember the Slack message (``channel:ts``) that shows the draft (routing key)."""
         async with session_scope(self._session_factory) as session:
@@ -428,6 +457,8 @@ class ApplicationService:
         if application.status is ApplicationStatus.SENT:
             raise ApplicationStateError("This application has already been sent")
         if application.status is ApplicationStatus.CANCELLED:
+            # Nothing cancels a draft any more (the Discard button is gone), but rows
+            # from before that change still exist and stay immutable.
             raise ApplicationStateError("This draft has been discarded")
         if application.status is ApplicationStatus.SENDING:
             # A send is mid-flight (or one crashed and left this behind): editing,

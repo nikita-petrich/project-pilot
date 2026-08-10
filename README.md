@@ -136,14 +136,16 @@ prompt (style rules, reference projects, skills, signature) — edit it directly
 change how applications are written. The draft posts as **one** message:
 
 - **Full e-mail** in copyable code blocks (split across Block Kit sections when
-  long, never truncated), plus the subject and the LinkedIn message. Whenever a
-  contact person is known, a **🔍 … on LinkedIn** button under the LinkedIn text
-  opens a LinkedIn people search for `<name> AND <company>` (the company narrows
-  it to the right person; also on the post-send confirmation in the thread).
+  long, never truncated), plus the subject and the LinkedIn message. Under the
+  LinkedIn text sits the **research row** (see below), so the contact route is one
+  click away — also on the post-send confirmation in the thread.
 - **Recipient** — auto-extracted from the listing when an e-mail address is
   visible anywhere in it; otherwise reply in the thread with the address.
 - **Revise** — reply in the message's thread with what you want changed
   ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
+  A reply is never half-read: "die Adresse ist `a@b.de`, bitte kürzer" sets the
+  recipient *and* rewrites the draft in one step. A reply in a thread that carries
+  no draft is answered with a hint instead of being ignored.
   Attach a screenshot to the reply (with or without text) and it goes to the LLM
   as vision input — e.g. a picture of the client's answer or of the listing detail
   the revision should reflect.
@@ -155,9 +157,10 @@ change how applications are written. The draft posts as **one** message:
   (LinkedIn message, contact results, inline fallbacks) render as native code
   blocks, so each has Slack's **copy button in its top-right corner**.
 - **Buttons** — **📤 Send** delivers the e-mail through your SMTP server, CVs
-  attached (double-taps guarded, failures keep the draft); **❌ Discard** cancels.
-  Send is always visible: without a recipient it answers with the hint to reply with
-  the address instead of sending. The **📧 Open in mail client** link above the
+  attached (double-taps guarded, failures keep the draft). It only appears once a
+  recipient is known — without an address there is nothing it could do, so the draft
+  asks for one instead (reply with it, or press **🔎 Find contact**). The
+  **📧 Open in mail client** link above the
   buttons opens your mail client with the subject, the recipient (once known) and
   the letter prefilled — available from the start. It is a text link, not a button,
   because Slack buttons silently drop `mailto:` URLs. A `mailto:` has a length limit
@@ -194,9 +197,17 @@ the channel keeps one line per request and the back-and-forth stays out of the w
 
 ## Finding a contact (enrichment)
 
-Optional, **off by default** (`ENRICHMENT_ENABLED=true` to switch on). When a match
-lists a company but no reachable e-mail, tap **🔎 Find contact** on the match (or on a
-recipient-less draft) and project-pilot looks the company's contact channel up:
+**The research row** rides on every listing-bound message — the match card, a `/check`
+verdict (match or no match), the application draft, and the send confirmation:
+**🔎 Find contact**, **🔗 Company on LinkedIn**, **🔍 `<name>` on LinkedIn**, and
+**🔍 Google contact**. The three search buttons are constructed URLs that open in your
+own browser and need no configuration; they fall back to the project title when the
+listing names no company. Only **🔎 Find contact** reaches the network, needs
+enrichment switched on, and needs a stored listing to look up.
+
+Enrichment itself is optional and **off by default** (`ENRICHMENT_ENABLED=true` to
+switch on). When a match lists a company but no reachable e-mail, tap
+**🔎 Find contact** and project-pilot looks the company's contact channel up:
 
 1. **Company website** — a web search (`ENRICHMENT_SEARCH=duckduckgo`, or pass a known
    `--url`) finds the official site, then its **Impressum / Kontakt / Team / Karriere**

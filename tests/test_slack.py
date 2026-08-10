@@ -133,8 +133,13 @@ def test_match_card_is_compact_and_carries_the_buttons() -> None:
     assert apply_button["action_id"] == "apply"
     assert apply_button["value"] == "42"
     assert "open_project" in _action_ids(blocks)
-    enrich_button = next(e for e in _action_elements(blocks) if e["action_id"] == "enrich")
+    # The research row rides underneath: contact lookup plus the LinkedIn/Google searches.
+    research = [str(e["action_id"]) for e in _all_action_elements(blocks)][2:]
+    assert research == ["enrich", "open_li_company", "open_li_people", "open_google"]
+    enrich_button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "enrich")
     assert enrich_button["value"] == "42"  # enrich carries the listing id
+    people = next(e for e in _all_action_elements(blocks) if e["action_id"] == "open_li_people")
+    assert "Anna+Meier" in str(people["url"]) and "Talent+Co" in str(people["url"])
 
 
 def test_match_card_names_only_the_top_reasons() -> None:
@@ -220,8 +225,9 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
     codes = _code_texts(blocks)
     assert "Sehr geehrte Damen und Herren,\nich passe gut." in codes
     assert "Hallo, kurzes Interesse!" in codes
-    ids = _action_ids(blocks)
-    assert ids == ["send", "cancel"]
+    ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
+    # Research row first (it belongs to the LinkedIn text), Send last; no Discard.
+    assert ids == ["open_li_company", "open_li_people", "open_google", "send"]
     # The mail-client action is a mrkdwn mailto link (Slack buttons drop mailto URLs)
     # and carries the letter itself, not just the subject.
     mail_link = (
@@ -230,7 +236,7 @@ def test_draft_blocks_full_email_subject_linkedin_and_buttons() -> None:
         "|📧 Open in mail client>"
     )
     assert mail_link in sections
-    send_button = next(e for e in _action_elements(blocks) if e["action_id"] == "send")
+    send_button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "send")
     assert send_button["value"] == "7"
 
 
@@ -247,20 +253,20 @@ def test_draft_blocks_mailto_body_is_bounded_and_says_so() -> None:
     assert "beginning of the letter" in contexts and "Send" in contexts
 
 
-def test_draft_blocks_without_recipient_offer_mail_and_cancel_and_ask_email() -> None:
+def test_draft_blocks_without_recipient_hide_send_and_ask_for_the_address() -> None:
     blocks = format_draft_blocks(
         _draft_view(recipient=None, status=ApplicationStatus.AWAITING_EMAIL)
     )
-    # Send stays visible without a recipient (pressing it answers with the hint),
-    # and the mail-client link is available up front.
-    assert _action_ids(blocks) == ["send", "cancel"]
+    # Without an address there is nothing Send could do, so it is not offered at all;
+    # the mail-client link stays available up front.
+    assert "send" not in [str(e["action_id"]) for e in _all_action_elements(blocks)]
     sections = "\n".join(_section_texts(blocks))
     assert "<mailto:?subject=Bewerbung%3A%20KI-Projekt&body=" in sections
     contexts = " ".join(
         str(cast("list[dict[str, object]]", block["elements"])[0]["text"])
         for block in _blocks_of_type(blocks, "context")
     )
-    assert "e-mail address" in contexts
+    assert "e-mail address" in contexts and "📤 Send appears" in contexts
 
 
 def _all_action_elements(blocks: list[Block]) -> list[dict[str, object]]:
@@ -287,10 +293,18 @@ def test_draft_without_recipient_offers_enrich_when_listing_known() -> None:
         listing_id=42,
     )
     blocks = format_draft_blocks(view)
-    # Contact research is offered next to Send (the mail-client action is a link).
-    assert _action_ids(blocks) == ["send", "enrich", "cancel"]
-    enrich = next(e for e in _action_elements(blocks) if e["action_id"] == "enrich")
+    # Contact research replaces the useless Send button while no recipient is known.
+    ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
+    assert ids == ["enrich", "open_li_company", "open_li_people", "open_google"]
+    enrich = next(e for e in _all_action_elements(blocks) if e["action_id"] == "enrich")
     assert enrich["value"] == "42"
+
+
+def test_draft_with_recipient_still_offers_contact_research() -> None:
+    """A known address does not end the research — the phone/LinkedIn route stays open."""
+    view = replace(_draft_view(), listing_id=42)
+    ids = [str(e["action_id"]) for e in _all_action_elements(format_draft_blocks(view))]
+    assert ids == ["enrich", "open_li_company", "open_li_people", "open_google", "send"]
 
 
 def test_draft_blocks_name_the_cvs_a_send_will_attach() -> None:
@@ -353,58 +367,50 @@ def test_contact_blocks_note_when_nothing_found() -> None:
     assert "No direct e-mail" in joined  # falls back to the links below
 
 
-def test_draft_blocks_offer_linkedin_search_for_contact() -> None:
-    blocks = format_draft_blocks(_draft_view(contact_name="Anna Kleinen"))
-    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
-    assert button["url"] == (
-        "https://www.linkedin.com/search/results/people/?keywords=Anna%20Kleinen"
-    )
-    with_company = format_draft_blocks(
-        _draft_view(contact_name="Anna Kleinen", company="Muster GmbH")
-    )
-    button = next(
-        e for e in _all_action_elements(with_company) if e["action_id"] == "linkedin_search"
-    )
+def test_draft_blocks_offer_a_people_search_for_the_contact() -> None:
+    blocks = format_draft_blocks(_draft_view(contact_name="Anna Kleinen", company="Muster GmbH"))
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "open_li_people")
     # person AND company narrows the people search to the right hit
     assert button["url"] == (
-        "https://www.linkedin.com/search/results/people/"
-        "?keywords=Anna%20Kleinen%20AND%20Muster%20GmbH"
+        "https://www.linkedin.com/search/results/people/?keywords=Anna+Kleinen+AND+Muster+GmbH"
     )
     text = button["text"]
     assert isinstance(text, dict)
     assert "Anna Kleinen" in str(text["text"])
-    # the search button rides directly under the LinkedIn section, before the review row
-    assert _action_ids(blocks) == ["linkedin_search"]
+    # the research row rides directly under the LinkedIn section, before the Send row
+    assert _action_ids(blocks)[0] == "open_li_company"
     assert len(_blocks_of_type(blocks, "actions")) == 2
 
 
-def test_draft_blocks_keep_linkedin_search_after_send() -> None:
+def test_draft_blocks_keep_the_research_row_after_send() -> None:
     blocks = format_draft_blocks(
         _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
     )
     ids = [str(e["action_id"]) for e in _all_action_elements(blocks)]
-    assert ids == ["linkedin_search"]  # review buttons gone, the search stays
+    assert ids == ["open_li_company", "open_li_people", "open_google"]  # Send row gone
 
 
-def test_draft_blocks_without_contact_have_no_linkedin_search() -> None:
+def test_draft_blocks_without_a_contact_still_search_the_project() -> None:
+    """Without a name the searches fall back to the project title — never nothing."""
     ids = [str(e["action_id"]) for e in _all_action_elements(format_draft_blocks(_draft_view()))]
-    assert "linkedin_search" not in ids
+    assert ids[:3] == ["open_li_company", "open_li_people", "open_google"]
+    button = next(
+        e
+        for e in _all_action_elements(format_draft_blocks(_draft_view()))
+        if e["action_id"] == "open_google"
+    )
+    assert "KI-Projekt" in str(button["url"])
 
 
-def test_sent_confirmation_carries_linkedin_text_and_search_button() -> None:
+def test_sent_confirmation_carries_linkedin_text_and_search_buttons() -> None:
     blocks = sent_confirmation_blocks(
         _draft_view(contact_name="Anna Kleinen", status=ApplicationStatus.SENT)
     )
     joined = "\n".join(_section_texts(blocks))
     assert "sent to *pm@firma.de*" in joined
     assert "Hallo, kurzes Interesse!" in _code_texts(blocks)
-    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "linkedin_search")
-    assert "keywords=Anna%20Kleinen" in str(button["url"])
-
-
-def test_sent_confirmation_without_contact_has_no_button() -> None:
-    blocks = sent_confirmation_blocks(_draft_view(status=ApplicationStatus.SENT))
-    assert _blocks_of_type(blocks, "actions") == []
+    button = next(e for e in _all_action_elements(blocks) if e["action_id"] == "open_li_people")
+    assert "keywords=Anna+Kleinen" in str(button["url"])
 
 
 def test_draft_blocks_split_long_email_without_truncation() -> None:
@@ -426,7 +432,7 @@ def test_draft_blocks_with_body_in_file_point_at_the_text_file() -> None:
     assert any("text file below" in text for text in _context_texts(blocks))
     # the LinkedIn message still renders inline, and the buttons are unchanged
     assert "Hallo, kurzes Interesse!" in _code_texts(blocks)
-    assert _action_ids(blocks) == ["send", "cancel"]
+    assert [str(e["action_id"]) for e in _all_action_elements(blocks)][-1] == "send"
 
 
 def _check_result(
@@ -470,10 +476,31 @@ def test_check_blocks_pass_reuse_match_body_with_custom_apply_button() -> None:
     assert "✅ match" in str(context[0]["text"]) and "threshold 60" in str(context[0]["text"])
 
 
-def test_check_blocks_pass_without_url_or_apply_ref_has_no_buttons() -> None:
+def test_check_blocks_pass_without_url_or_apply_ref_still_offer_the_searches() -> None:
+    """A text check has no project link and nothing to enrich — the searches remain."""
     message = MatchMessage(title="Text-Check", url="", score=70)
-    blocks = format_check_blocks(_check_result(message=message))
-    assert not [b for b in blocks if b.get("type") == "actions"]
+    ids = [
+        str(e["action_id"])
+        for e in _all_action_elements(format_check_blocks(_check_result(message=message)))
+    ]
+    assert ids == ["open_li_company", "open_li_people", "open_google"]
+
+
+def test_check_blocks_pass_on_a_stored_listing_offer_contact_research() -> None:
+    message = MatchMessage(title="KI-Projekt", url="https://x/1", score=80, company="Talent Co")
+    blocks = format_check_blocks(
+        _check_result(message=message), apply_action="apply", apply_value="42"
+    )
+    enrich = next(e for e in _all_action_elements(blocks) if e["action_id"] == "enrich")
+    assert enrich["value"] == "42"  # the check's listing id drives the lookup
+
+
+def test_check_blocks_no_match_still_offer_the_searches() -> None:
+    ids = [
+        str(e["action_id"])
+        for e in _all_action_elements(format_check_blocks(_check_result(passed=False)))
+    ]
+    assert ids == ["open_li_company", "open_li_people", "open_google"]
 
 
 def test_check_blocks_hard_rule_shows_matched_term() -> None:
