@@ -36,7 +36,7 @@ jobs:
       image: ${{ steps.image.outputs.ref }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Resolve image reference
         id: image
@@ -85,7 +85,7 @@ jobs:
       IMAGE: ${{ needs.build.outputs.image }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Configure SSH
         env:
