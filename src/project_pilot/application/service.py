@@ -293,8 +293,8 @@ class ApplicationService:
                     "check your Sent folder before retrying."
                 )
 
-        # Every configured CV rides along (PDF and Word, DE and EN); the draft's
-        # language only decides which one leads.
+        # Both configured CV PDFs ride along (DE and EN); the draft's language only
+        # decides which one leads.
         cvs = self._cv_attachments
         language = detect_language(body)
         attachments = cvs.for_language(language) if cvs is not None else []

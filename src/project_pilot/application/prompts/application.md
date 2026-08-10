@@ -399,15 +399,15 @@ Bewerbungssprache passen, z. B. `https://sequenz.io/de#projects`:
 
 8. Hinweis auf den Anhang — PFLICHT, genau einmal
 
-Die E-Mail versendet automatisch den CV in Deutsch und Englisch, jeweils als PDF
-und als Word-Datei. Verweise **genau einmal** darauf, in der Bewerbungssprache:
+Die E-Mail versendet automatisch den CV in Deutsch und Englisch, jeweils als PDF.
+Verweise **genau einmal** darauf, in der Bewerbungssprache:
 
 - Deutsch: „Mein aktuelles Profil (CV) inklusive aller Skills, Referenzen von Kunden
   und weiteren Informationen über mich habe ich Ihnen in Deutsch und Englisch
-  (jeweils als PDF und Word-Datei) an diese E-Mail angehängt."
+  (jeweils als PDF) an diese E-Mail angehängt."
 - Englisch: „I have attached my current profile (CV) in German and English (each as
-  PDF and Word file) to this e-mail, including all skills, client references and
-  further information about me."
+  a PDF) to this e-mail, including all skills, client references and further
+  information about me."
 
 Behaupte nichts über Anhänge, die nicht existieren, und nenne keinen Dateinamen.
 
