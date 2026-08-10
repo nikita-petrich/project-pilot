@@ -279,11 +279,14 @@ class OpenAiStructuredClient:
         self._client = client or AsyncOpenAI(api_key=api_key)
 
     async def ping(self, *, model: str) -> None:  # pragma: no cover
-        """Smallest real call there is: proves the model, the key and the credit at once."""
+        """Smallest real call there is: proves the model, the key and the credit at once.
+
+        Deliberately parameter-free. A token cap is the kind of option some models
+        reject outright, and a preflight that cries wolf about its own arguments is
+        worse than no preflight — the reply is a handful of tokens, once per start.
+        """
         await self._client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            max_completion_tokens=1,
+            model=model, messages=[{"role": "user", "content": "ping"}]
         )
 
     async def complete(
