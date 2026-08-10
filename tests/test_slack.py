@@ -305,15 +305,15 @@ def test_draft_blocks_name_the_cvs_a_send_will_attach() -> None:
         linkedin_message="Hi",
         status=ApplicationStatus.READY,
         revision_count=0,
-        attachments=("CV-DE.pdf", "CV-DE-Word.docx", "CV-EN.pdf"),
-        missing_attachments=("CV-EN-Word.docx",),
+        attachments=("CV-German.pdf", "CV-English.pdf"),
+        missing_attachments=("CV-English.pdf",),
     )
     contexts = " ".join(
         str(cast("list[dict[str, object]]", block["elements"])[0]["text"])
         for block in _blocks_of_type(format_draft_blocks(view), "context")
     )
-    assert "CV-DE.pdf, CV-DE-Word.docx, CV-EN.pdf" in contexts
-    assert "Missing in `cv/`: CV-EN-Word.docx" in contexts
+    assert "CV-German.pdf, CV-English.pdf" in contexts
+    assert "Missing in `cv/`: CV-English.pdf" in contexts
 
 
 def _enrichment(*, emails: list[str], phones: list[str]) -> ContactEnrichment:

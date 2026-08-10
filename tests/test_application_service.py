@@ -385,28 +385,26 @@ async def test_send_marks_sent_exactly_once(
     assert len(send.sent) == 1
 
 
-def _cvs(base: object, *, with_english_docx: bool = True) -> CvAttachments:
-    """Four CV files on disk (bar the optional EN .docx, to cover a missing one)."""
+def _cvs(base: object, *, with_english: bool = True) -> CvAttachments:
+    """The CV PDFs on disk (bar the EN one when asked, to cover a missing file)."""
     from pathlib import Path
 
     root = Path(str(base))
     paths = {
         "de_pdf": root / "CV-German.pdf",
         "en_pdf": root / "CV-English.pdf",
-        "de_docx": root / "CV-German-Word.docx",
-        "en_docx": root / "CV-English-Word.docx",
     }
     for key, path in paths.items():
-        if key != "en_docx" or with_english_docx:
+        if key != "en_pdf" or with_english:
             path.write_bytes(b"%PDF")
     return CvAttachments(**paths)
 
 
-async def test_send_attaches_every_cv_matching_language_first(
+async def test_send_attaches_both_cvs_matching_language_first(
     session_factory: async_sessionmaker[AsyncSession],
     tmp_path: object,
 ) -> None:
-    """All four CVs ride along; the draft language only decides the order."""
+    """Both CVs ride along; the draft language only decides the order."""
     listing_id = await _store(session_factory, _listing("jobs@firma.de"))
     send = _FakeSend()
     english = _draft()
@@ -421,12 +419,7 @@ async def test_send_attaches_every_cv_matching_language_first(
     await service.send(view.application_id)
 
     files = [part.get_filename() for part in send.sent[0].iter_attachments()]
-    assert files == [
-        "CV-English.pdf",
-        "CV-English-Word.docx",
-        "CV-German.pdf",
-        "CV-German-Word.docx",
-    ]
+    assert files == ["CV-English.pdf", "CV-German.pdf"]
 
 
 async def test_draft_view_names_attachments_and_reports_a_missing_one(
@@ -435,11 +428,11 @@ async def test_draft_view_names_attachments_and_reports_a_missing_one(
 ) -> None:
     """The draft says what a send will attach, so a missing file is visible up front."""
     listing_id = await _store(session_factory, _listing("jobs@firma.de"))
-    service = _service(session_factory, cv_attachments=_cvs(tmp_path, with_english_docx=False))
+    service = _service(session_factory, cv_attachments=_cvs(tmp_path, with_english=False))
     view = await service.draft_for_listing(listing_id)
 
-    assert view.attachments == ("CV-German.pdf", "CV-German-Word.docx", "CV-English.pdf")
-    assert view.missing_attachments == ("CV-English-Word.docx",)
+    assert view.attachments == ("CV-German.pdf",)
+    assert view.missing_attachments == ("CV-English.pdf",)
 
 
 async def test_send_without_configured_cv_has_no_attachment(

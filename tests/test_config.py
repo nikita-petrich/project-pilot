@@ -206,19 +206,16 @@ def test_enrichment_max_pages_out_of_bounds_rejected(monkeypatch: pytest.MonkeyP
 def test_cv_attachments_default_to_the_repo_files(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
-    for name in ("CV_DE_PATH", "CV_EN_PATH", "CV_DE_DOCX_PATH", "CV_EN_DOCX_PATH"):
+    for name in ("CV_DE_PATH", "CV_EN_PATH"):
         monkeypatch.delenv(name, raising=False)
     cvs = Settings().cv_attachments()
     # Unset means "the CVs committed under cv/", so updating one is a file swap.
     assert cvs.de_pdf == Path("cv/CV-German.pdf")
     assert cvs.en_pdf == Path("cv/CV-English.pdf")
-    # No Word CVs are versioned, so their slots stay unset and are never reported missing.
-    assert cvs.de_docx is None
-    assert cvs.en_docx is None
 
 
 def test_cv_attachments_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("CV_DE_PATH", "CV_EN_PATH", "CV_DE_DOCX_PATH", "CV_EN_DOCX_PATH"):
+    for name in ("CV_DE_PATH", "CV_EN_PATH"):
         monkeypatch.setenv(name, "")
     cvs = Settings().cv_attachments()
     assert cvs.de_pdf is None and cvs.en_pdf is None
@@ -226,26 +223,22 @@ def test_cv_attachments_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None
     assert cvs.missing("de") == []  # and nothing reported as missing either
 
 
-def test_cv_attachments_send_every_existing_file_language_first(
+def test_cv_attachments_send_both_pdfs_language_first(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
 ) -> None:
-    """Every configured CV goes out; only the order follows the draft language."""
+    """Both configured CVs go out; only the order follows the draft language."""
     from pathlib import Path
 
     base = Path(str(tmp_path))
     de_pdf = base / "CV-German.pdf"
     en_pdf = base / "CV-English.pdf"
-    de_docx = base / "CV-German-Word.docx"
-    for path in (de_pdf, en_pdf, de_docx):
-        path.write_bytes(b"%PDF")
+    de_pdf.write_bytes(b"%PDF")
     monkeypatch.setenv("CV_DE_PATH", str(de_pdf))
-    monkeypatch.setenv("CV_EN_PATH", str(en_pdf))
-    monkeypatch.setenv("CV_DE_DOCX_PATH", str(de_docx))
-    monkeypatch.setenv("CV_EN_DOCX_PATH", str(base / "missing.docx"))
+    monkeypatch.setenv("CV_EN_PATH", str(en_pdf))  # configured but absent on disk
     cvs = Settings().cv_attachments()
 
-    assert cvs.for_language("de") == [de_pdf, de_docx, en_pdf]
-    assert cvs.for_language(None) == [de_pdf, de_docx, en_pdf]  # unknown → German first
-    assert cvs.for_language("en") == [en_pdf, de_pdf, de_docx]
+    assert cvs.for_language("de") == [de_pdf]
+    assert cvs.for_language(None) == [de_pdf]  # unknown → German first
+    assert cvs.for_language("en") == [de_pdf]  # en_pdf missing, so only the DE one exists
     # Configured but absent is reported rather than silently dropped.
-    assert [path.name for path in cvs.missing("de")] == ["missing.docx"]
+    assert [path.name for path in cvs.missing("de")] == ["CV-English.pdf"]

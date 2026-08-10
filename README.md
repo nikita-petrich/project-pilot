@@ -60,13 +60,11 @@ The two profile files feed the matcher, the hard rules, and the application draf
   generator picks the one matching the application language for the closing
   sentence, the signature, and the LinkedIn message.
 - `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
-- `cv/` the CVs attached to application e-mails — **all of them ride along on every
-  send**, so the recipient can forward whichever format and language they need.
+- `cv/` the CVs attached to application e-mails — **both ride along on every
+  send**, so the recipient can forward whichever language they need.
   `CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
   `cv/CV-English.pdf` — the two PDFs versioned here — so
-  updating a CV is replacing the file and pushing. The Word slots
-  (`CV_DE_DOCX_PATH`, `CV_EN_DOCX_PATH`) are unset by default; point them at a
-  `.docx` only if you add one. The file name is what the
+  updating a CV is replacing the file and pushing. The file name is what the
   recipient sees. A configured file that is not on disk is skipped and named in the
   draft's `📎 Attachments` line, so you can add them one at a time. Keep them a few
   MB at most — base64 adds about a third on the wire.
@@ -165,8 +163,8 @@ change how applications are written. The draft posts as **one** message:
   because Slack buttons silently drop `mailto:` URLs. A `mailto:` has a length limit
   and can never carry attachments, so a long letter opens truncated (with a note
   saying so) and the CVs only go out via **📤 Send**.
-- **CV attachments** — every sent e-mail carries all configured CVs (PDF and Word,
-  DE and EN); the draft language only decides which one leads. The draft names them
+- **CV attachments** — every sent e-mail carries both configured CV PDFs
+  (DE and EN); the draft language only decides which one leads. The draft names them
   in a `📎 Attachments` line before you send, including any configured file that is
   missing on disk. Set a path to an empty value to leave that CV out.
 - **Signature** — every draft closes with a signature block in the draft's language:
