@@ -44,6 +44,7 @@ from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
+from project_pilot.selftest import SelfTestReport, SelfTestService, format_selftest
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,34 @@ async def _build_report(settings: Settings) -> str:
         await engine.dispose()
 
 
+async def _run_selftest(
+    settings: Settings, *, text: str | None, listing_id: int | None
+) -> SelfTestReport:
+    """Wire the real checker and Slack client, then push one listing through both."""
+    profile = ProfileService(Path("profile")).load()
+    api_key, model = settings.require_openai()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    client = _slack_client(settings)
+    service = SelfTestService(
+        checker=CheckService(
+            session_factory=session_factory,
+            matcher=LlmMatcher(
+                OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
+            ),
+            profile=profile,
+            threshold=settings.match_threshold,
+        ),
+        poster=client,
+        notifier=SlackNotifier(client),
+        profile_hash=profile.profile_hash,
+    )
+    try:
+        return await service.run(text=text, listing_id=listing_id)
+    finally:
+        await engine.dispose()
+
+
 async def _send_test_notification(settings: Settings) -> bool:
     posted = await _slack_client(settings).post_text(
         "project-pilot test ✅ — if you can see this, Slack is connected."
@@ -454,6 +483,36 @@ def enrich(
         typer.echo(f"enrich failed: {err}")
         raise typer.Exit(code=1) from err
     typer.echo(_format_enrichment(result))
+
+
+@app.command("test-match")
+def test_match(
+    text: str | None = typer.Option(
+        None, "--text", "-t", help="Description to evaluate (default: the built-in demo listing)."
+    ),
+    file: Path | None = typer.Option(
+        None, "--file", "-f", help="Read the description from a file instead of --text."
+    ),
+    listing_id: int | None = typer.Option(
+        None,
+        "--listing-id",
+        "-l",
+        help="Evaluate a stored listing and post the real match card, so the "
+        "Apply and Find-contact buttons work against a running bot.",
+    ),
+) -> None:
+    """Push one listing through hard rules, the LLM, and Slack end to end (nothing is stored)."""
+    settings = _load_settings()
+    settings.require_slack()
+    if file is not None:
+        if text is not None:
+            typer.echo("use either --text or --file, not both")
+            raise typer.Exit(code=1)
+        text = file.read_text(encoding="utf-8")
+    report = asyncio.run(_run_selftest(settings, text=text, listing_id=listing_id))
+    typer.echo(format_selftest(report))
+    if not report.ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("test-notify")
