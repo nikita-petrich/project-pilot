@@ -94,6 +94,9 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 - Scheduler daemon (scan loop + Slack bot): `uv run project-pilot daemon`
 - Slack bot only (Apply buttons, `/apply`, `/check`, thread review): `uv run project-pilot bot`
 - Post a test Slack message: `uv run project-pilot test-notify`
+- End-to-end smoke test (rules + LLM + Slack, stores nothing): `uv run project-pilot test-match`
+  (`--text`/`--file` for your own description, `--listing-id N` to post a real match
+  card whose Apply/Find-contact buttons work against a running bot)
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
 - Find a company's contact data (opt-in `ENRICHMENT_ENABLED`): `uv run project-pilot enrich "<company>"` or `enrich --listing-id <id>`
 - Reporting summary: `uv run project-pilot stats`
