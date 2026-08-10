@@ -12,12 +12,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.config import SOURCE_NAME, Settings
 from project_pilot.errors import SourceBlockedError, SourceUnavailableError
-from project_pilot.evaluation.llm import LlmEvaluation
+from project_pilot.evaluation.llm import LlmEvaluation, LlmProbe
 from project_pilot.evaluation.schemas import MatchVerdict
+from project_pilot.health import HealthKind, llm_issue
 from project_pilot.ingestion.normalize import compute_url_hash
 from project_pilot.models import Evaluation, EvaluationStage, Listing, ListingStatus, Run, RunStatus
 from project_pilot.notification.messages import MatchMessage
-from project_pilot.pipeline import Notifier, Pipeline, SourceClient
+from project_pilot.pipeline import Matcher, Notifier, Pipeline, SourceClient
 from project_pilot.profile_loader import Profile, ProfileConstraints
 from project_pilot.repository import Repository
 
@@ -26,6 +27,7 @@ SEARCH = "https://www.freelancermap.de/projekte"
 DETAIL1 = "https://www.freelancermap.de/projekt/senior-python-entwickler-backend-12345"
 DETAIL2 = "https://www.freelancermap.de/projekt/data-engineer-azure-67890"
 NOW = datetime(2026, 7, 21, 7, 20, tzinfo=UTC)  # ~8 min after card1's posted 07:12 UTC
+MODEL = "gpt-tiny-42"
 
 LIST_HTML = (
     '<script class="js-react-on-rails-component" data-component-name="ProjectSearch">'
@@ -119,7 +121,12 @@ class _FakeNotifier:
 
 
 def _settings() -> Settings:
-    return Settings(search_urls=[SEARCH], match_threshold=60, analysis_window_min=30)
+    return Settings(
+        search_urls=[SEARCH],
+        match_threshold=60,
+        analysis_window_min=30,
+        llm_model=MODEL,
+    )
 
 
 def _profile(blacklist: list[str] | None = None) -> Profile:
@@ -138,9 +145,10 @@ def _pipeline(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     client: SourceClient,
-    matcher: _FakeMatcher | None = None,
+    matcher: Matcher | None = None,
     notifier: Notifier | None = None,
     profile: Profile | None = None,
+    llm_probe: LlmProbe | None = None,
 ) -> Pipeline:
     return Pipeline(
         settings=_settings(),
@@ -149,6 +157,7 @@ def _pipeline(
         client_factory=lambda: client,
         matcher=matcher or _FakeMatcher(),
         notifier=notifier,
+        llm_probe=llm_probe,
     )
 
 
@@ -669,3 +678,141 @@ async def test_long_title_and_location_are_truncated(
         assert len(stored.title) == 512
         assert stored.location is not None
         assert len(stored.location) == 256
+
+
+class _BrokenMatcher:
+    """Stage 3 down: the fallback verdict every listing gets when the LLM cannot answer."""
+
+    def __init__(self, kind: HealthKind = HealthKind.MODEL_NOT_FOUND) -> None:
+        self.kind = kind
+
+    async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation:
+        issue = llm_issue(self.kind, model=MODEL, detail="404 model_not_found")
+        return LlmEvaluation(
+            verdict=MatchVerdict.llm_error_fallback(issue.detail),
+            model=MODEL,
+            prompt_version="test",
+            tokens_in=None,
+            tokens_out=None,
+            latency_ms=1,
+            is_error=True,
+            issue=issue,
+        )
+
+
+class _FakeProbe:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+        self.calls = 0
+
+    async def ping(self, *, model: str) -> None:
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+
+
+async def test_a_broken_llm_is_announced_instead_of_passing_as_a_clean_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Every listing scored `llm_error` still records a successful run — say it out loud."""
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(
+        session_factory,
+        client=_FakeClient(PAGES),
+        matcher=_BrokenMatcher(),
+        notifier=notifier,
+    )
+
+    outcome = await pipeline.run_once(now=NOW)
+
+    assert outcome.is_error is False  # the run itself succeeded, which is the trap
+    assert outcome.llm_errors == 2
+    assert outcome.llm_ok == 0
+    assert outcome.notified == 0
+    assert len(notifier.warnings) == 1
+    assert MODEL in notifier.warnings[0]
+    assert "LLM_MODEL" in notifier.warnings[0]
+
+
+async def test_the_same_broken_llm_is_not_re_announced_every_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(
+        session_factory,
+        client=_FakeClient(PAGES),
+        matcher=_BrokenMatcher(),
+        notifier=notifier,
+    )
+
+    await pipeline.run_once(now=NOW)
+    await pipeline.report_llm_issue(
+        llm_issue(HealthKind.MODEL_NOT_FOUND, model=MODEL), now=NOW + timedelta(minutes=15)
+    )
+
+    assert len(notifier.warnings) == 1
+
+
+async def test_a_repaired_llm_is_announced_once(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(
+        session_factory,
+        client=_FakeClient(PAGES),
+        matcher=_BrokenMatcher(),
+        notifier=notifier,
+    )
+
+    await pipeline.run_once(now=NOW)
+    await pipeline.report_llm_issue(None, now=NOW + timedelta(minutes=15))
+    await pipeline.report_llm_issue(None, now=NOW + timedelta(minutes=30))
+
+    assert len(notifier.warnings) == 2
+    assert notifier.warnings[1].startswith("✅")
+
+
+async def test_a_healthy_run_says_nothing_about_the_llm(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+
+    outcome = await pipeline.run_once(now=NOW)
+
+    assert outcome.llm_ok == 2
+    assert outcome.llm_errors == 0
+    assert notifier.warnings == []
+
+
+async def test_preflight_reports_a_broken_model_before_any_scan(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    notifier = _FakeNotifier()
+    probe = _FakeProbe(RuntimeError("Error code: 404 - model does not exist"))
+    pipeline = _pipeline(
+        session_factory, client=_FakeClient(PAGES), notifier=notifier, llm_probe=probe
+    )
+
+    issue = await pipeline.check_llm(now=NOW)
+
+    assert probe.calls == 1
+    assert issue is not None
+    assert len(notifier.warnings) == 1
+    assert MODEL in notifier.warnings[0]
+
+
+async def test_preflight_is_silent_when_the_model_answers(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(
+        session_factory, client=_FakeClient(PAGES), notifier=notifier, llm_probe=_FakeProbe()
+    )
+
+    assert await pipeline.check_llm(now=NOW) is None
+    assert notifier.warnings == []

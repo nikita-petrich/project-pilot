@@ -4,7 +4,9 @@ from collections.abc import Sequence
 from datetime import date
 from typing import Literal
 
+import httpx
 import pytest
+from openai import APIStatusError
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.errors import ConfigError
@@ -15,9 +17,11 @@ from project_pilot.evaluation.llm import (
     build_user_content,
     is_match_notifiable,
     load_prompt,
+    probe_llm,
     render_listing,
 )
 from project_pilot.evaluation.schemas import MatchVerdict
+from project_pilot.health import HealthKind
 from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import PostedPrecision, RemoteStatus
 
@@ -148,6 +152,102 @@ async def test_persistent_exception_falls_back() -> None:
     result = await matcher.evaluate(profile_text="P", listing_text="L")
     assert result.is_error is True
     assert result.reason()["verdict"] == "no_match"
+
+
+def _api_error(status: int, code: str | None = None) -> APIStatusError:
+    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
+    body: dict[str, object] = {"message": "boom"}
+    if code is not None:
+        body["code"] = code
+    return APIStatusError("boom", response=httpx.Response(status, request=request), body=body)
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (_api_error(404, "model_not_found"), HealthKind.MODEL_NOT_FOUND),
+        (_api_error(401), HealthKind.AUTH),
+        (_api_error(429, "insufficient_quota"), HealthKind.QUOTA),
+    ],
+)
+async def test_a_hopeless_failure_is_not_paid_for_twice(error: Exception, kind: HealthKind) -> None:
+    """A wrong model, a rejected key or an empty account fails identically on retry."""
+    client = _FakeClient([error, error])
+    matcher = LlmMatcher(client, model="gpt-tiny-42", prompt_template="SYS")
+
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+
+    assert client.calls == 1
+    assert result.is_error is True
+    assert result.issue is not None
+    assert result.issue.kind is kind
+
+
+async def test_a_transient_failure_is_still_retried() -> None:
+    client = _FakeClient([_api_error(503), _api_error(503)])
+    matcher = LlmMatcher(client, model="m", prompt_template="SYS")
+
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+
+    assert client.calls == 2
+    assert result.issue is not None
+    assert result.issue.kind is HealthKind.UPSTREAM
+
+
+async def test_the_real_cause_is_stored_on_the_evaluation() -> None:
+    """The verdict row must name the cause, not just say `llm_error`."""
+    client = _FakeClient([_api_error(404, "model_not_found")])
+    matcher = LlmMatcher(client, model="gpt-tiny-42", prompt_template="SYS")
+
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+
+    reasons = result.reason()["reasons"]
+    assert isinstance(reasons, list)
+    assert any("model_not_found" in str(reason) for reason in reasons)
+
+
+async def test_persistent_schema_violation_is_reported_as_a_schema_issue() -> None:
+    client = _FakeClient([LlmResponse(None, None, None), LlmResponse(None, None, None)])
+    matcher = LlmMatcher(client, model="m", prompt_template="SYS")
+
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+
+    assert result.issue is not None
+    assert result.issue.kind is HealthKind.SCHEMA
+
+
+async def test_a_good_verdict_carries_no_issue() -> None:
+    client = _FakeClient([LlmResponse(verdict=_verdict(), tokens_in=1, tokens_out=1)])
+    matcher = LlmMatcher(client, model="m", prompt_template="SYS")
+
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+
+    assert result.issue is None
+
+
+class _FakeProbe:
+    def __init__(self, error: Exception | None = None) -> None:
+        self._error = error
+        self.models: list[str] = []
+
+    async def ping(self, *, model: str) -> None:
+        self.models.append(model)
+        if self._error is not None:
+            raise self._error
+
+
+async def test_probe_reports_a_broken_model_without_raising() -> None:
+    probe = _FakeProbe(_api_error(404, "model_not_found"))
+
+    issue = await probe_llm(probe, model="gpt-tiny-42")
+
+    assert probe.models == ["gpt-tiny-42"]
+    assert issue is not None
+    assert issue.kind is HealthKind.MODEL_NOT_FOUND
+
+
+async def test_probe_is_silent_when_the_model_answers() -> None:
+    assert await probe_llm(_FakeProbe(), model="m") is None
 
 
 def test_is_match_notifiable() -> None:

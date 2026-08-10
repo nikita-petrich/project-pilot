@@ -45,6 +45,24 @@ last successful (or partial) run finished within `3 x SCAN_INTERVAL_MIN` minutes
 This covers both process liveness (the command runs) and freshness (a recent
 successful scan). `start_period` gives the first scan time to complete.
 
+## LLM health alerts
+
+A broken LLM is the one failure the healthcheck cannot see: scraping keeps working,
+listings keep being stored, every run is recorded as a success — and every listing is
+scored with the `llm_error` fallback, so no match alert can fire. The worker therefore
+reports stage 3's health to Slack itself:
+
+- **On start**, the daemon makes one minimal call to `LLM_MODEL`. A model name that
+  does not exist, a rejected `OPENAI_API_KEY` or an account out of credit is announced
+  within seconds of the deploy, not at the next fresh listing.
+- **After every run** that reached the LLM, a failure is announced with the cause
+  (which setting, which account) plus the provider's own error message.
+- **Repeats are throttled**: the same problem is re-announced only every 6 hours, a
+  *different* cause alerts immediately, and recovery is announced once.
+
+Hopeless failures (wrong model, rejected key, empty account) are not retried — the
+identical call would fail identically, the same rule the scraper applies to a 403.
+
 ## Common commands (inside the container)
 
 ```sh
@@ -71,6 +89,12 @@ matches are being missed. Restart the app after changing `.env`.
   markup. Update the selector constants at the top of
   `src/project_pilot/ingestion/parser.py`, refresh the fixtures, and rebuild.
 - **Repeated failures**: three consecutive failed runs post one Slack warning.
+- **No alerts although listings keep arriving**: check Slack for an LLM health
+  warning (see above) and the stored cause:
+  `select reason->'reasons' from evaluations where stage='llm' order by created_at desc limit 3;`
+  Fix `LLM_MODEL` / `OPENAI_API_KEY` in the `prod` GitHub environment and redeploy —
+  the server's `.env` is rewritten from GitHub on every deploy, so editing it on the
+  server does not survive.
 - **Profile or CV changes**: edit `profile/profile.md` or replace the PDF in `cv/`,
   then commit and push — the deploy rebuilds the image. When building on the host
   instead: `docker compose build && docker compose up -d`.

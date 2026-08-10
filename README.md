@@ -302,6 +302,11 @@ matches are missed. Restart the worker after changing `.env`.
 - **Repeated failures**: three consecutive failed runs post one Slack warning.
 - **Container unhealthy**: no successful run within three times the interval;
   check `docker compose logs app`.
+- **Everything looks healthy but no matches arrive**: the LLM is the one dependency
+  whose failure still produces successful runs (every listing falls back to
+  `llm_error`). The daemon preflights `LLM_MODEL` on start and posts a Slack warning
+  naming the cause — wrong model, rejected key, or an account out of credit — then
+  announces recovery once it works again. See `docs/operations.md`.
 
 ## Development
 
