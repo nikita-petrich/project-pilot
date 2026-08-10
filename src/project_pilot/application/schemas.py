@@ -2,6 +2,8 @@
 
 from pydantic import BaseModel, field_validator
 
+from project_pilot.application.linkedin import fit_linkedin_message
+
 # LinkedIn's own cap for a connection-request note; the message must carry the
 # booking link plus the phone alternative, so the full budget is used.
 LINKEDIN_LIMIT = 300
@@ -41,6 +43,9 @@ class ApplicationDraft(BaseModel):
     @field_validator("linkedin_message")
     @classmethod
     def _cap_linkedin(cls, value: str) -> str:
-        if len(value) <= LINKEDIN_LIMIT:
-            return value
-        return value[: LINKEDIN_LIMIT - 1].rstrip() + "…"
+        """Keep the note inside LinkedIn's limit without cutting off its ending.
+
+        The closing call to action carries the booking link and the phone number, so
+        an over-long note loses whole sentences from its middle instead of its tail.
+        """
+        return fit_linkedin_message(value, LINKEDIN_LIMIT)

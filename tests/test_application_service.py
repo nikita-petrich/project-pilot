@@ -12,7 +12,12 @@ from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import ApplicationGenerator, DraftResponse
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.application.service import ApplicationService, extract_email, is_email
+from project_pilot.application.service import (
+    ApplicationService,
+    extract_email,
+    is_email,
+    parse_reply,
+)
 from project_pilot.config import CvAttachments, SmtpConfig
 from project_pilot.errors import ApplicationStateError, EmailSendError
 from project_pilot.evaluation.llm import render_listing_entity
@@ -39,6 +44,36 @@ def test_extract_email_skips_platform_addresses() -> None:
     assert extract_email("info@freelancermap.de") is None
     assert extract_email("no-reply@agentur.de") is None
     assert extract_email("gar keine adresse") is None
+
+
+def test_parse_reply_reads_a_bare_address_as_the_recipient() -> None:
+    intent = parse_reply(" jobs@firma.de ")
+    assert intent.email == "jobs@firma.de"
+    assert intent.instruction is None
+
+
+def test_parse_reply_reads_address_and_instruction_from_one_message() -> None:
+    """A hint is never half-read: the address is set *and* the wish is carried out."""
+    intent = parse_reply("Die Adresse ist jobs@firma.de, bitte kürzer schreiben")
+    assert intent.email == "jobs@firma.de"
+    assert intent.instruction == "Die Adresse ist bitte kürzer schreiben"
+
+
+def test_parse_reply_without_an_address_is_a_pure_instruction() -> None:
+    intent = parse_reply("bitte förmlicher")
+    assert intent.email is None
+    assert intent.instruction == "bitte förmlicher"
+
+
+def test_parse_reply_ignores_leftover_punctuation_around_an_address() -> None:
+    intent = parse_reply("-> jobs@firma.de.")
+    assert intent.email == "jobs@firma.de"
+    assert intent.instruction is None
+
+
+def test_parse_reply_of_an_empty_message_asks_for_nothing() -> None:
+    intent = parse_reply("   ")
+    assert intent.email is None and intent.instruction is None
 
 
 class _FakeClient:
@@ -474,14 +509,18 @@ async def test_send_failure_keeps_draft_and_records_error(
     assert "connection refused" in stored.error
 
 
-async def test_cancel_blocks_further_edits(
+async def test_a_cancelled_draft_stays_immutable(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Nothing cancels a draft any more, but rows from before that change still exist."""
     listing_id = await _store(session_factory, _listing())
     service = _service(session_factory)
     view = await service.draft_for_listing(listing_id)
-    cancelled = await service.cancel(view.application_id)
-    assert cancelled.status is ApplicationStatus.CANCELLED
+    async with session_factory() as session:
+        stored = await session.get(Application, view.application_id)
+        assert stored is not None
+        stored.status = ApplicationStatus.CANCELLED
+        await session.commit()
     with pytest.raises(ApplicationStateError):
         await service.revise(view.application_id, "egal")
 

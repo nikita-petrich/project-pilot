@@ -4,9 +4,10 @@ A match is two messages: a compact card in the channel (title, score, the few
 facts that decide a yes/no, and the buttons) plus the full listing as its first
 thread reply, so a scan run stays scannable and the detail is one click away. A
 draft posts the e-mail (as a ``.txt`` file in the thread, falling back to inline
-blocks), the LinkedIn text, an open-in-mail-client link, and Send/Discard buttons.
-Generated texts render as native code blocks, so every one carries Slack's copy
-button in its corner.
+blocks), the LinkedIn text, an open-in-mail-client link, and — once a recipient is
+known — the Send button. Generated texts render as native code blocks, so every one
+carries Slack's copy button in its corner. Every listing-bound message also carries
+the research row (contact lookup plus LinkedIn/Google searches).
 
 All bot chrome (labels, buttons, hints, status) is English; only the generated
 application text follows the project's language.
@@ -19,6 +20,7 @@ from urllib.parse import quote
 
 from project_pilot.application.schemas import LINKEDIN_LIMIT
 from project_pilot.application.service import DraftView
+from project_pilot.enrichment.links import build_links
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.models import ApplicationStatus, EvaluationStage, Verdict
@@ -119,19 +121,41 @@ def status_blocks(text: str) -> list[Block]:
     return [_section(text)]
 
 
-def linkedin_search_url(name: str, company: str | None = None) -> str:
-    """LinkedIn people search for the contact — ``name AND company`` when both known."""
-    keywords = f"{name} AND {company}" if company else name
-    return f"https://www.linkedin.com/search/results/people/?keywords={quote(keywords)}"
+def _research_actions(
+    *,
+    company: str | None = None,
+    person: str | None = None,
+    title: str | None = None,
+    enrich_value: str | None = None,
+) -> Block | None:
+    """One row of research buttons: contact lookup plus the LinkedIn/Google searches.
 
-
-def _linkedin_search_actions(contact_name: str, company: str | None = None) -> Block:
-    button = _button(
-        f"🔍 {contact_name[:60]} on LinkedIn",
-        action_id="linkedin_search",
-        url=linkedin_search_url(contact_name, company),
-    )
-    return {"type": "actions", "elements": [button]}
+    Every message that names a company, a contact, or a project gets this row, so
+    "who is this and how do I reach them" is always one click away — from a match
+    card, a ``/check`` verdict, a draft, or a send confirmation alike. The LinkedIn
+    and Google buttons are constructed search URLs opened in Nik's own browser;
+    only 🔎 Find contact reaches the network, and only for the company's own site.
+    """
+    elements: list[Block] = []
+    if enrich_value is not None:
+        elements.append(_button("🔎 Find contact", action_id="enrich", value=enrich_value))
+    if company or person or title:
+        links = build_links(company=company, person=person, title=title)
+        people_label = f"🔍 {person[:50]} on LinkedIn" if person else "👥 People on LinkedIn"
+        elements.extend(
+            (
+                _button(
+                    "🔗 Company on LinkedIn",
+                    action_id="open_li_company",
+                    url=links.linkedin_company,
+                ),
+                _button(people_label, action_id="open_li_people", url=links.linkedin_people),
+                _button("🔍 Google contact", action_id="open_google", url=links.google_contact),
+            )
+        )
+    if not elements:
+        return None
+    return {"type": "actions", "elements": elements}
 
 
 def _preformatted(text: str) -> Block:
@@ -293,16 +317,26 @@ def _match_body(message: MatchMessage) -> list[Block]:
     ]
 
 
+def _message_research_actions(message: MatchMessage, *, listing_id: int | None) -> Block | None:
+    """The research row for a listing message (company/contact/title of that listing)."""
+    return _research_actions(
+        company=message.company,
+        person=message.contact_name,
+        title=message.title,
+        enrich_value=None if listing_id is None else str(listing_id),
+    )
+
+
 def format_match_blocks(message: MatchMessage, *, listing_id: int) -> list[Block]:
     """Build the compact channel card for one matched listing (with the buttons)."""
     blocks = _summary_body(message)
-    actions: list[Block] = [
-        _button("📝 Apply", action_id="apply", value=str(listing_id)),
-        _button("🔎 Find contact", action_id="enrich", value=str(listing_id)),
-    ]
+    actions: list[Block] = [_button("📝 Apply", action_id="apply", value=str(listing_id))]
     if message.url:
         actions.append(_button("🔗 View project", action_id="open_project", url=message.url))
     blocks.append({"type": "actions", "elements": actions})
+    research = _message_research_actions(message, listing_id=listing_id)
+    if research is not None:
+        blocks.append(research)
     return blocks
 
 
@@ -345,6 +379,12 @@ def format_check_blocks(
             )
         if actions:
             blocks.append({"type": "actions", "elements": actions})
+        # Contact research needs a stored listing to look up; the LinkedIn/Google
+        # searches only need a name, so a checked-from-text verdict still gets them.
+        listing_id = int(apply_value) if apply_action == "apply" and apply_value else None
+        research = _message_research_actions(result.message, listing_id=listing_id)
+        if research is not None:
+            blocks.append(research)
         blocks.append(
             _context(
                 f"🔍 Check verdict: ✅ match — score {result.score} ≥ "
@@ -374,6 +414,10 @@ def format_check_blocks(
             if line:
                 lines.append(line)
         blocks.append(_section("\n".join(lines)))
+    # Even a no-match is worth researching (the next listing from that client may fit).
+    research = _research_actions(title=result.title)
+    if research is not None:
+        blocks.append(research)
     blocks.append(_context("🔍 Check verdict — nothing was stored or notified."))
     return blocks
 
@@ -430,32 +474,40 @@ def format_draft_blocks(view: DraftView, *, body_in_file: bool = False) -> list[
             label=f"💬 LinkedIn ({len(view.linkedin_message)}/{LINKEDIN_LIMIT})",
         )
     )
-    # The search button rides with the LinkedIn text in every state (also after
-    # sending, when the outreach actually happens).
-    if view.contact_name:
-        blocks.append(_linkedin_search_actions(view.contact_name, view.company))
+    # The research row rides with the LinkedIn text in every state (also after
+    # sending, when the outreach actually happens). It carries the listing id, so
+    # 🔎 Find contact works whether or not a recipient is already known.
+    research = _research_actions(
+        company=view.company,
+        person=view.contact_name,
+        title=view.title,
+        enrich_value=None if view.listing_id is None else str(view.listing_id),
+    )
+    if research is not None:
+        blocks.append(research)
 
     if view.status in (ApplicationStatus.READY, ApplicationStatus.AWAITING_EMAIL):
         blocks.append(_attachment_section(view))
         blocks.extend(_mail_client_blocks(view))
-        # 📤 Send always shows, with or without a recipient: a hidden button reads as
-        # a broken draft. Pressing it without an address answers with the hint instead
-        # of sending (the service guards it).
-        actions: list[Block] = [
-            _button("📤 Send", action_id="send", value=str(view.application_id))
-        ]
-        # No recipient yet: offer contact research so the address can be found instead
-        # of typed in blind (the button carries the listing id, not the application id).
-        if not view.recipient and view.listing_id is not None:
-            actions.append(
-                _button("🔎 Find contact", action_id="enrich", value=str(view.listing_id))
+        # 📤 Send only exists once there is an address to send to — without one the
+        # button could never do anything, so it stays out of the way until the
+        # recipient is known (reply with it, or find it via 🔎 Find contact).
+        if view.recipient:
+            blocks.append(
+                {
+                    "type": "actions",
+                    "elements": [
+                        _button("📤 Send", action_id="send", value=str(view.application_id))
+                    ],
+                }
             )
-        actions.append(_button("❌ Discard", action_id="cancel", value=str(view.application_id)))
-        blocks.append({"type": "actions", "elements": actions})
 
     hints: list[str] = []
     if view.status is ApplicationStatus.AWAITING_EMAIL:
-        hints.append("❗ No recipient detected — reply in the thread with the e-mail address.")
+        hints.append(
+            "❗ No recipient yet — reply in the thread with the e-mail address "
+            "(or press 🔎 Find contact); 📤 Send appears as soon as one is set."
+        )
     if view.revision_count:
         hints.append(f"🔁 Revision #{view.revision_count}")
     hints.append(
@@ -561,6 +613,8 @@ def format_contact_blocks(enrichment: ContactEnrichment) -> list[Block]:
         _button("👥 People on LinkedIn", action_id="open_li_people", url=links.linkedin_people),
         _button("🔍 Google contact", action_id="open_google", url=links.google_contact),
     ]
+    # The stored links are used verbatim (they are what was persisted with the lead),
+    # rather than rebuilt like the rows on other messages.
     blocks.append({"type": "actions", "elements": link_buttons})
     blocks.append(
         _context(
@@ -580,8 +634,9 @@ def sent_confirmation_blocks(view: DraftView) -> list[Block]:
     """Thread confirmation after a send: the LinkedIn text to copy plus the search button."""
     blocks = [_section(f"✅ Application sent to *{_esc(view.recipient or '')}*")]
     blocks.extend(_code_sections(view.linkedin_message, label="💬 LinkedIn message (copy)"))
-    if view.contact_name:
-        blocks.append(_linkedin_search_actions(view.contact_name, view.company))
+    research = _research_actions(company=view.company, person=view.contact_name, title=view.title)
+    if research is not None:
+        blocks.append(research)
     return blocks
 
 
