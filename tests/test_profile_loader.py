@@ -32,6 +32,23 @@ def test_constraints_defaults_when_omitted(tmp_path: Path) -> None:
     profile = ProfileService(tmp_path).load()
     assert profile.constraints.must_have == []
     assert profile.constraints.languages == ["de", "en"]
+    assert profile.constraints.nogo_technologies == []
+
+
+def test_nogo_technologies_are_parsed(tmp_path: Path) -> None:
+    _write_profile(
+        tmp_path, profile="x", constraints="blacklist: []\nnogo_technologies:\n  - java\n  - php\n"
+    )
+    profile = ProfileService(tmp_path).load()
+    assert profile.constraints.nogo_technologies == ["java", "php"]
+
+
+def test_shipped_constraints_declare_the_technology_nogos() -> None:
+    """The repo's own profile must keep the guard armed for Java and Spring."""
+    repo_root = Path(__file__).resolve().parent.parent
+    constraints = ProfileService(repo_root / "profile").load().constraints
+    assert "java" in constraints.nogo_technologies
+    assert "spring" in constraints.nogo_technologies
 
 
 def test_hash_changes_with_content(tmp_path: Path) -> None:

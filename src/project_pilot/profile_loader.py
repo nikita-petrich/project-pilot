@@ -17,11 +17,15 @@ _SIGNATURE_HEADING_RE = re.compile(r"^##\s+Contact\s*&\s*Signature\s*$", re.IGNO
 
 
 class ProfileConstraints(BaseModel):
-    """Deterministic hard rules from constraints.yaml (the stage-2 input)."""
+    """Deterministic rules from constraints.yaml (stage 2, plus the stage-3 no-go guard)."""
 
     blacklist: list[str] = Field(default_factory=list)
     must_have: list[str] = Field(default_factory=list)
     languages: list[str] = Field(default_factory=lambda: ["de", "en"])
+    # Context-dependent no-go technologies. Not matched against the listing text
+    # (that is what `blacklist` is for) but against the LLM's own
+    # `missing_requirements` — see `evaluation/nogo.py`.
+    nogo_technologies: list[str] = Field(default_factory=list)
 
 
 def _signature_lines(text: str) -> list[str]:

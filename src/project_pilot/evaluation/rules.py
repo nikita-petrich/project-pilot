@@ -12,7 +12,7 @@ class RuleResult:
     reason: dict[str, object]
 
 
-def _term_regex(term: str) -> re.Pattern[str]:
+def term_regex(term: str) -> re.Pattern[str]:
     """Match ``term`` as a whole token.
 
     The boundary is ``[a-z0-9]`` lookaround rather than ``\\b`` so terms that end or
@@ -25,7 +25,7 @@ def _term_regex(term: str) -> re.Pattern[str]:
 
 def _matches(term: str, text: str) -> bool:
     cleaned = term.strip()
-    return bool(cleaned) and _term_regex(cleaned).search(text) is not None
+    return bool(cleaned) and term_regex(cleaned).search(text) is not None
 
 
 def apply_hard_rules(text: str, constraints: ProfileConstraints) -> RuleResult:
@@ -37,7 +37,7 @@ def apply_hard_rules(text: str, constraints: ProfileConstraints) -> RuleResult:
             )
 
     required = [term.strip() for term in constraints.must_have if term.strip()]
-    if required and not any(_term_regex(term).search(text) for term in required):
+    if required and not any(term_regex(term).search(text) for term in required):
         return RuleResult(passed=False, reason={"rule": "must_have", "required": required})
 
     return RuleResult(passed=True, reason={})

@@ -81,7 +81,7 @@ async def test_match_returns_verdict_and_metadata() -> None:
     assert result.is_match is True
     assert result.score == 80
     assert result.tokens_in == 100
-    assert result.prompt_version == "match.v5"
+    assert result.prompt_version == "match.v6"
     assert result.is_error is False
     assert client.calls == 1
 
@@ -95,6 +95,31 @@ async def test_untrusted_listing_is_fenced_in_the_user_message() -> None:
     user = client.users[0]
     assert "<<<LISTING" in user and ">>>LISTING" in user
     assert user.index(hostile) > user.index("<<<LISTING")
+
+
+async def test_required_nogo_technology_is_forced_to_no_match() -> None:
+    """A model "match" whose own gaps include a profile no-go never leaves stage 3."""
+    verdict = _verdict()
+    verdict.missing_requirements = ["AG Grid", "Spring Boot"]
+    client = _FakeClient([LlmResponse(verdict=verdict, tokens_in=1, tokens_out=1)])
+    matcher = LlmMatcher(client, model="m", prompt_template="SYS", nogo_terms=["java", "spring"])
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+    assert result.is_match is False
+    assert result.score == 0
+    assert result.nogo_term == "spring"
+    assert result.reason()["nogo"] == "spring"
+    assert result.is_error is False
+
+
+async def test_match_without_a_nogo_keeps_its_verdict() -> None:
+    verdict = _verdict()
+    verdict.missing_requirements = ["AG Grid"]
+    client = _FakeClient([LlmResponse(verdict=verdict, tokens_in=1, tokens_out=1)])
+    matcher = LlmMatcher(client, model="m", prompt_template="SYS", nogo_terms=["java", "spring"])
+    result = await matcher.evaluate(profile_text="P", listing_text="L")
+    assert result.is_match is True
+    assert result.nogo_term is None
+    assert "nogo" not in result.reason()
 
 
 async def test_no_match_verdict() -> None:

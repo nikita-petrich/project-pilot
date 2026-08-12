@@ -59,7 +59,16 @@ The two profile files feed the matcher, the hard rules, and the application draf
   Notion Calendar booking links (`CTA German` / `CTA English`); the application
   generator picks the one matching the application language for the closing
   sentence, the signature, and the LinkedIn message.
-- `profile/constraints.yaml` hard rules (blacklist terms, optional must-have)
+- `profile/constraints.yaml` deterministic rules: `blacklist` terms and an optional
+  `must_have`, both matched against the listing text before the LLM (0 tokens), plus
+  `nogo_technologies`. The last one is the profile's context-dependent no-gos (Java,
+  PHP, WordPress, Django, SAP): they are deliberately **not** matched against the
+  listing text — a frontend role against a Java backend or a migration away from PHP
+  stays welcome — but against the LLM's own answer. When the model reports one of
+  them under `missing_requirements`, i.e. the listing requires the candidate to bring
+  it and the profile does not cover it, the verdict is forced to `no_match` whatever
+  the score, and the stored reason names the term (`nogo`). Matching is
+  case-insensitive with word boundaries, so `java` never fires on "JavaScript".
 - `cv/` the CVs attached to application e-mails — **both ride along on every
   send**, so the recipient can forward whichever language they need.
   `CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
@@ -255,7 +264,9 @@ the same evaluation the scanner uses — hard rules from `constraints.yaml` firs
   as if the scanner had found it. The verdict already sits in a thread, so it stays
   one message instead of being split like a scan match.
 - **No match** — posts the verdict with the failed hard rule (matched blacklist
-  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit.
+  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit. A
+  listing that requires one of the `nogo_technologies` lands here too, with the term
+  named as the first reason.
 - **Files and screenshots** — upload a PDF, text file, or **image** and press
   **🔍 Check** on the prompt (see above). A screenshot goes to the vision LLM
   directly, and a passing check still offers the **📝 Bewerben** button, which drafts
