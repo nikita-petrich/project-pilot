@@ -86,6 +86,16 @@ def _slack_client(settings: Settings) -> SlackClient:
     return SlackClient(channel=config.channel, web_client=web)
 
 
+def _matcher(client: OpenAiStructuredClient, model: str, profile: Profile) -> LlmMatcher:
+    """The stage-3 matcher, wired with the profile's no-go technologies."""
+    return LlmMatcher(
+        client,
+        model=model,
+        prompt_template=load_prompt(),
+        nogo_terms=profile.constraints.nogo_technologies,
+    )
+
+
 def _enrichment_service(
     settings: Settings, profile: Profile
 ) -> tuple[EnrichmentService, Callable[[], Awaitable[None]]]:
@@ -141,7 +151,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         return PolitenessClient(user_agent=settings.user_agent())
 
     llm_client = OpenAiStructuredClient(api_key)
-    matcher = LlmMatcher(llm_client, model=model, prompt_template=load_prompt())
+    matcher = _matcher(llm_client, model, profile)
 
     notifier = SlackNotifier(_slack_client(settings)) if settings.has_slack() else None
 
@@ -182,9 +192,7 @@ def _build_bot(settings: Settings) -> BotRuntime:
     )
     checker = CheckService(
         session_factory=session_factory,
-        matcher=LlmMatcher(
-            OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
-        ),
+        matcher=_matcher(OpenAiStructuredClient(api_key), model, profile),
         profile=profile,
         threshold=settings.match_threshold,
     )
@@ -335,9 +343,7 @@ async def _run_selftest(
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
-            matcher=LlmMatcher(
-                OpenAiStructuredClient(api_key), model=model, prompt_template=load_prompt()
-            ),
+            matcher=_matcher(OpenAiStructuredClient(api_key), model, profile),
             profile=profile,
             threshold=settings.match_threshold,
         ),

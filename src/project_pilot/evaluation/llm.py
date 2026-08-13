@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.errors import ConfigError
+from project_pilot.evaluation.nogo import enforce_nogo
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.health import HealthIssue, HealthKind, classify_llm_error, llm_issue
 from project_pilot.ingestion.parser import ParsedListing
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "match.v5"
+PROMPT_VERSION = "match.v6"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
@@ -81,6 +82,9 @@ class LlmEvaluation:
     # Set whenever `is_error` is true: why the call failed, in operator terms, so the
     # pipeline can alert with the real cause instead of a generic "llm_error".
     issue: HealthIssue | None = None
+    # Set when the deterministic no-go guard turned a model "match" into a
+    # "no_match": which profile no-go technology the listing required.
+    nogo_term: str | None = None
 
     @property
     def score(self) -> int:
@@ -103,6 +107,8 @@ class LlmEvaluation:
         }
         if self.is_error:
             data["error"] = "llm_error"
+        if self.nogo_term is not None:
+            data["nogo"] = self.nogo_term
         return data
 
 
@@ -199,7 +205,12 @@ def is_match_notifiable(evaluation: LlmEvaluation, threshold: int) -> bool:
 
 
 class LlmMatcher:
-    """Runs stage 3: one call, one retry on an invalid parse, then an llm_error fallback."""
+    """Runs stage 3: one call, one retry on an invalid parse, then an llm_error fallback.
+
+    ``nogo_terms`` are the profile's context-dependent no-go technologies; a parsed
+    verdict runs through the deterministic guard in ``nogo`` before it is returned,
+    so a required no-go can never leave stage 3 as a match.
+    """
 
     def __init__(
         self,
@@ -208,11 +219,13 @@ class LlmMatcher:
         model: str,
         prompt_template: str,
         prompt_version: str = PROMPT_VERSION,
+        nogo_terms: Sequence[str] = (),
     ) -> None:
         self._client = client
         self._model = model
         self._prompt_template = prompt_template
         self._prompt_version = prompt_version
+        self._nogo_terms = tuple(nogo_terms)
 
     async def evaluate(
         self,
@@ -245,14 +258,18 @@ class LlmMatcher:
                     break
                 continue
             if response.verdict is not None:
+                verdict, nogo_term = enforce_nogo(response.verdict, self._nogo_terms)
+                if nogo_term is not None:
+                    logger.info("no-go override: listing requires %s; forced no_match", nogo_term)
                 return LlmEvaluation(
-                    verdict=response.verdict,
+                    verdict=verdict,
                     model=self._model,
                     prompt_version=self._prompt_version,
                     tokens_in=response.tokens_in,
                     tokens_out=response.tokens_out,
                     latency_ms=_elapsed_ms(started),
                     is_error=False,
+                    nogo_term=nogo_term,
                 )
             issue = llm_issue(
                 HealthKind.SCHEMA, model=self._model, detail="schema violation (empty parse)"

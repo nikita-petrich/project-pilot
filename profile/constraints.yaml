@@ -12,3 +12,26 @@ blacklist: []          # empty list (not null!) => no hard-blocked terms
 must_have: []         # optional: terms of which at least one must appear
 
 languages: [de, en]   # listing languages that are accepted
+
+# Context-dependent no-go technologies from profile.md ("No-gos" → Technologies).
+# These are NOT matched against the listing text — a frontend role against a Java
+# backend, or a migration away from PHP, stays welcome. They are enforced on the
+# LLM's own answer: when the model reports one of these under
+# `missing_requirements` (i.e. the listing requires the candidate to bring it and
+# the profile does not cover it), the verdict is forced to no_match, whatever the
+# score. Matching is case-insensitive with word boundaries, so `java` never fires
+# on "JavaScript" and `spring` covers "Spring Boot".
+nogo_technologies:
+  - java
+  - spring          # also matches "Spring Boot", "Spring Framework"
+  - jakarta ee
+  - java ee
+  - jsf
+  - php
+  - laravel
+  - symfony
+  - wordpress
+  - typo3
+  - django
+  - sap
+  - abap

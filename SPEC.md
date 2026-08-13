@@ -45,7 +45,8 @@ profile/
 ├── profile.md          # free-text profile (goes into the LLM prompt): skills, experience,
 │                       # desired projects, no-gos in prose
 └── constraints.yaml    # hard, deterministic rules (stage 2, no LLM):
-                        # blacklist terms, must_have (e.g. remote), languages
+                        # blacklist terms, must_have (e.g. remote), languages,
+                        # nogo_technologies (stage 3 guard, see below)
 ```
 
 A `ProfileService` loads both at startup, validates `constraints.yaml` via Pydantic, and computes `profile_hash` (SHA-256) — the hash is **stored on every evaluation**, so reporting can later tell which profile version produced which verdict. Changing the profile = edit file, commit, restart container.
@@ -73,6 +74,10 @@ Stage 3  LLM match against profile.md          → structured output (Pydantic m
          { verdict: match|no_match, score: 0..100, reasons: list[str],
            matching_skills: list[str], missing_requirements: list[str], risk_flags: list[str] }
          + stored: model, prompt_version, profile_hash, tokens_in/out, latency_ms
+Stage 3b No-go guard (nogo_technologies)       → a no-go term reported by the model itself under
+         missing_requirements forces no_match (score 0, reason: {nogo}). The profile's technology
+         no-gos are context-dependent, so they cannot be blacklisted on the listing text; the
+         model's own "the listing requires it and the profile does not cover it" is the signal.
 Match ∧ score ≥ MATCH_THRESHOLD (default 60)   → Telegram message, notified_at after success
 ```
 
@@ -132,6 +137,7 @@ project-pilot/
 │   │   ├── schemas.py          # Pydantic: MatchVerdict, RuleResult
 │   │   ├── rules.py            # stage 2 (constraints.yaml), word boundaries incl. c#/c++/.net
 │   │   ├── llm.py              # stage 3: OpenAI .parse() against MatchVerdict
+│   │   ├── nogo.py             # stage 3b: required-no-go guard over missing_requirements
 │   │   └── prompts/match.v1.md
 │   ├── notification/telegram.py
 │   ├── pipeline.py             # orchestration stages 0–3 + runs protocol
