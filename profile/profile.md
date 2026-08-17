@@ -1,7 +1,7 @@
 # Profile (LLM matching & applications)
 
 > Single source for BOTH the matcher and the application generator. Versioned in
-> the repo — edits take effect with the next deploy. As of: July 2026.
+> the repo — edits take effect with the next deploy. As of: August 2026.
 
 ## Who I am
 
@@ -77,42 +77,61 @@ fine. Match on the role, not on the bare keyword.
 Founder & CTO · LegalTech/GovTech · 04/2025–present · Lower Saxony/remote · solo (own product) · bescheidklar.de
 - Two-sided SaaS with AI pre-assessment of official decisions and terminations (Azure OpenAI, RAG) and GDPR-compliant lead handover to law firms; end-to-end ownership of architecture, EU hosting, and compliance (EU AI Act, GDPR, RDG). Target: up to 10,000 pre-assessments/month, up to 80% less manual case intake.
 - Tech: TypeScript, Python, Next.js, React, FastAPI, OpenAI API, Azure OpenAI, RAG, pgvector, LangChain, PostgreSQL, Redis, Docker, GitHub Actions, Hetzner, Clean Architecture
+- Project: https://sequenz.io/en/projects/bescheidklar
 
 ### 02 · Manifest OS — AI immigration platform
 Full-stack (AI features) · LegalTech/immigration · 12/2025–04/2026 · New York/remote · ~20 engineers, English, Scrum · manifestlaw.com
 - Production AI features (Bluedot → webhook → BullMQ → OpenAI, resilient with retry/idempotency), AI evidence processing, portal consolidation (B2B/B2C/lawyer/ops → "B2X") including full-stack migration, event tracking (Amplitude). Platform (~USD 60M valuation) with 3,000+ customers and 150+ corporate programs; up to 15% higher approval rates (team result).
 - Tech: TypeScript, Python, NestJS, Next.js, React, BullMQ, OpenAI API, Anthropic Claude API, RAG, PostgreSQL, MikroORM, Drizzle, better-auth, GCP, Docker, Playwright, event-driven architecture
+- Project: https://sequenz.io/en/projects/manifest-os
+- References: https://sequenz.io/en/projects/manifest-os/references
 
-### 03 · AITOI — interactive IoT toy (MVP)
+### 03 · RateUp — cross-platform rating app
+Sole developer · full-stack · social media/mobile · 11/2025–12/2025 · client: Krutzfeld Tech GmbH · Zurich/remote · solo (client project), self-directed · krutzfeld.tech
+- Ratings, feed and profiles from a single Ionic/Angular codebase for web plus native iOS and Android builds; backend entirely on Firebase (auth, Firestore, storage, hosting) with no server layer of its own. Built on an existing clickable prototype and taken to a handover-ready product in ~2 months, with a layered, type-safe codebase the client's team could pick up without a ramp-up hurdle.
+- Tech: TypeScript, Angular, Ionic, RxJS, Firebase (Authentication, Security Rules, Cloud Firestore, Cloud Storage, Hosting), iOS, Android, GitHub Actions, CI/CD, Clean Architecture, SOLID
+- Project: https://sequenz.io/en/projects/rate-up
+
+### 04 · AITOI — interactive IoT toy (MVP)
 Frontend engineer · IoT/consumer electronics · 08/2025–09/2025 · Frankfurt/remote · interdisciplinary team incl. hardware
 - IoT Wi-Fi onboarding via QR (device pairing, error handling), platform-independent PWA (Next.js), Supabase for auth/storage/realtime (RLS). Fully working MVP frontend in ~1 month, owned end to end from concept to demo.
 - Tech: TypeScript, Next.js, React, PWA, Supabase (auth/realtime/RLS), WebSockets, Zod, TanStack Query, Tailwind, shadcn/ui, Docker
+- Project: https://sequenz.io/en/projects/aitoi
+- References: https://sequenz.io/en/projects/aitoi/references
 
-### 04 · DiNo — digital notary office
+### 05 · DiNo — digital notary office
 Frontend engineer · LegalTech/notary · 01/2025–05/2025 · Oranienburg/remote · 2–4 people, Scrumban · digitales-notariat.de
 - Frontend for the client and notary portal, digital case and file management, secure document delivery; responsive interfaces (React, Material UI). Per the vendor: up to 70% fewer phone queries, invoices paid up to 30 days earlier.
 - Tech: TypeScript, React, Redux, Material UI, Python, Flask, REST/OpenAPI, MariaDB, JWT/OAuth 2.0, RBAC, Docker, GitLab CI
+- Project: https://sequenz.io/en/projects/dino
+- References: https://sequenz.io/en/projects/dino/references
 
-### 05 · AccountingOS — GoBD accounting & inventory
+### 06 · AccountingOS — GoBD accounting & inventory
 Sole developer (full-stack & AI) · retail & automotive trade (ERP) · 01/2024–12/2024 · client: HD Autoservice · Salzgitter/remote · github.com/nikita-petrich/accounting-os
 - GoBD-compliant accounting and inventory system (Clean Architecture); resilient data sync service for supplier catalogues (up to 20M CSV rows: queue, caching, retry, dedup); inventory coupled to invoicing; RBAC (better-auth). Saves up to 40 hours/month, up to 50% less routine effort.
 - Tech: TypeScript, Node.js, NestJS, Next.js, React, GraphQL, REST, MikroORM, MariaDB, PostgreSQL, Redis, better-auth, Docker, GitHub Actions, Hetzner
+- Project: https://sequenz.io/en/projects/accounting-os
+- References: https://sequenz.io/en/projects/accounting-os/references
 
-### 06 · LadeTrans — truck tour management system
+### 07 · LadeTrans — truck tour management system
 Sole developer (full-stack & AI) · logistics & transport · 02/2021–05/2023 · client: CDH Stephanus · Bremen/remote · cdh-stephanus.org
 - Tour management and optimization, automated PDF/DOCX generation, audit-proof digital archiving, container-based self-hosting (Docker, Nginx); type-safe backend services (NestJS). Up to 1,000 hours/year saved; transport accuracy up to +25%, logistics efficiency up to +30%.
 - Tech: TypeScript, Node.js, NestJS, Next.js, React, PostgreSQL, MikroORM, better-auth, JWT/OAuth 2.0, Docker, GitHub Actions, Nginx
+- Project: https://sequenz.io/en/projects/lkw-tourverwaltung
 
-### 07 · XU Navigator — enterprise learning platform
+### 08 · XU Navigator — enterprise learning platform
 Full-stack engineer · EdTech/e-learning · 05/2020–02/2023 · Bremen/remote · 5–10 people, Scrum · xu.de
 - Scalable microservice learning platform for large corporates (**Daimler, VW, ThyssenKrupp**): tenant-specific course content, learning progress plus automatic certificates; backend (NestJS, GraphQL), responsive Angular interfaces (Angular Material, NgRx), delivered on Azure.
 - Tech: TypeScript, Angular, NestJS, Express.js, GraphQL, MongoDB (Mongoose), NgRx, RxJS, Azure, Azure DevOps, Docker, SSO/RBAC
+- Project: https://sequenz.io/en/projects/xu-navigator
+- References: https://sequenz.io/en/projects/xu-navigator/references
 
-### 08 · Medical device management system
+### 09 · Medical device management system
 Full-stack engineer · HealthTech/medical technology · 01/2019–05/2020 · Germany · on-site/hybrid · hospital group (anonymized), Scrumban
 - Multi-tenant management of medical devices across several hospitals: master data, maintenance history, document management, fault reporting; type-safe REST API (ASP.NET Core), EF Core/MSSQL, responsive React UI (Fluent UI), login via O365 Identity.
 - Tech: C#, .NET Core, ASP.NET Core Web API, Entity Framework Core, MSSQL, TypeScript, React, Fluent UI, Redux, JWT/OAuth 2.0, O365 Identity, Azure DevOps, Docker
 
+- Project: https://sequenz.io/en/projects/medizingeraete-ms
 ## Contact & Signature
 
 > Value source for the application's signature block. The layout (order, blank
