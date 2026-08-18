@@ -107,10 +107,13 @@ class Settings(BaseSettings):
     smtp_from: str = ""
     smtp_starttls: bool = True
 
-    # Default to the CVs versioned in the repo, so swapping a file in cv/ is the whole
-    # update. The file name is what the recipient sees, hence the presentable casing.
-    # A configured path that does not exist is skipped (and reported in the draft),
-    # so the set can be filled in one file at a time.
+    # The CVs are pulled from a public Google Drive folder and cached under these
+    # paths before each draft and send (see application/cv_drive.py), so swapping a
+    # CV in Drive is the whole update — no commit, no redeploy. The file name is both
+    # the Drive lookup key and what the recipient sees, hence the presentable casing.
+    # Unset the folder id to fall back to plain local files. A CV that cannot be
+    # fetched and has no cached copy is skipped and reported in the draft.
+    cv_drive_folder_id: str = "1zfW069MqEkocmr8HXvnves4GI9xzXd0y"
     cv_de_path: str = "cv/CV-German.pdf"
     cv_en_path: str = "cv/CV-English.pdf"
 

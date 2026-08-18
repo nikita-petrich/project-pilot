@@ -38,3 +38,6 @@ __pycache__/
 htmlcov/
 dist/
 build/
+
+# CVs are pulled from Google Drive at runtime into this cache (see application/cv_drive.py)
+cv/*.pdf

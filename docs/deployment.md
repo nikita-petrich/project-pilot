@@ -31,35 +31,44 @@ be restored after a rebuild.
 | `compose.override.yaml` | generated | pins the exact image tag; do not edit |
 | `profile/profile.md` | repo | matching profile and signature block |
 | `profile/constraints.yaml` | repo | deterministic hard rules |
-| `cv/*.pdf` | repo | attached to application e-mails |
+| the CVs | public Google Drive folder | fetched by name and cached before each send |
 | `.env` | GitHub `prod` environment | rendered from its secrets and written on every deploy |
 | database | `pgdata` volume | survives deploys |
 
 Because the deploy writes `.env`, editing it on the server is pointless: the next
 deploy replaces it. Change the secret instead and re-run the workflow.
 
-## Updating the profile or a CV
+## Updating the profile
 
-Replace the file and push — there is no second mechanism and nothing to do on the
-server:
+Replace `profile/profile.md` and push — there is no second mechanism and nothing to
+do on the server; the deploy rebuilds the image:
 
 ```sh
-cp ~/new-cv.pdf cv/CV-German.pdf
-git commit -am "chore: update the German CV" && git push
+git commit -am "chore: update the profile" && git push
 ```
 
-`CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
-`cv/CV-English.pdf` — the two PDFs versioned in the repo — so keeping the filenames
-means never touching config, and the name on disk is the name the recipient sees.
-Both configured CVs are attached to every application; a path that does not exist is
-skipped (and named in the draft's `📎 Attachments` line), which is why a file you
-have not added yet is harmless.
+## Updating a CV
+
+Replace the file in the public Google Drive folder — no commit, no redeploy. Keep the
+file **name** the same (`CV-German.pdf`, `CV-English.pdf`): the app looks each CV up by
+name in that folder before every draft and send, so a fresh upload of the same name is
+picked up on its own, whatever Drive id it gets. Keep exactly one file per name in the
+folder so the match stays unambiguous.
+
+`CV_DRIVE_FOLDER_ID` is that folder; `CV_DE_PATH`/`CV_EN_PATH` (defaults
+`cv/CV-German.pdf`, `cv/CV-English.pdf`) are the local cache paths, and each basename
+is both the Drive lookup key and the name the recipient sees. Both CVs are attached to
+every application; the draft language only decides the order. If Drive is unreachable
+the last cached copy is used, and a CV that can be fetched from neither is skipped and
+named in the draft's `📎 Attachments` line — so a gap is visible before the send, never
+after. Set `CV_DRIVE_FOLDER_ID` empty to fall back to plain local files. The deploy
+target must be able to reach `drive.google.com`.
 
 **Keep CVs small.** They are e-mail attachments, and base64 encoding adds about a
 third on the wire, so a 20 MB PDF arrives as ~28 MB and is refused by most mail
 servers (Gmail caps at 25 MB). Browser-printed CVs are the usual culprit: they embed
 photos at full camera resolution. A few MB is fine; if a PDF is much larger, downscale
-its images before committing.
+its images before uploading.
 
 ## One-time server setup
 
