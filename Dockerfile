@@ -19,7 +19,11 @@ ENV PATH="/app/.venv/bin:$PATH" \
 RUN useradd --create-home --uid 1000 pilot
 WORKDIR /app
 COPY --from=builder --chown=pilot:pilot /app /app
-RUN chmod +x /app/docker/entrypoint.sh
+# WORKDIR created /app as root and COPY --chown only covers what it copies, so /app
+# itself stays root-owned (the app must not rewrite its own code). The CV cache is the
+# one path the runtime user writes, so create it and hand it over — otherwise the first
+# Drive refresh dies on mkdir('cv') with a permission error.
+RUN chmod +x /app/docker/entrypoint.sh && install -d -o pilot -g pilot /app/cv
 USER pilot
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["daemon"]
