@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from project_pilot.application.cv_drive import CvRefresher
 from project_pilot.application.documents import (
     ImageAttachment,
     annotate_image_listing,
@@ -172,15 +173,28 @@ class ApplicationService:
         profile: Profile,
         mailer: SmtpMailer | None,
         cv_attachments: CvAttachments | None = None,
+        cv_refresher: CvRefresher | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._generator = generator
         self._profile = profile
         self._mailer = mailer
         self._cv_attachments = cv_attachments
+        self._cv_refresher = cv_refresher
+
+    async def _ensure_cvs(self) -> None:
+        """Refresh the local CV cache from Drive before it is read (best-effort, never raises).
+
+        Called at draft creation so the draft's attachment lines reflect reality, and
+        again before a send so the delivered CV is the current one; a Drive outage
+        simply leaves the last cached CV in place.
+        """
+        if self._cv_refresher is not None:
+            await self._cv_refresher.refresh()
 
     async def draft_for_listing(self, listing_id: int) -> DraftView:
         """Generate and persist a draft for a stored listing (Apply button, known URL)."""
+        await self._ensure_cvs()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             listing = await repo.get_listing(listing_id)
@@ -207,6 +221,7 @@ class ApplicationService:
 
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView:
         """Generate a draft for a freshly fetched detail page (``/apply <url>``)."""
+        await self._ensure_cvs()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             stored = await repo.get_listing_by_hash(parsed.url_hash)
@@ -236,6 +251,7 @@ class ApplicationService:
         ``listing_text`` keeps a marker per image so later revisions (which can no
         longer see the pixels) know the listing arrived as a screenshot.
         """
+        await self._ensure_cvs()
         stripped = text.strip()
         listing_text = annotate_image_listing(stripped, images)
         # A recruiter mail opens with "Hallo," — read the real headline out of the
@@ -329,6 +345,9 @@ class ApplicationService:
                     "check your Sent folder before retrying."
                 )
 
+        # Pull the current CVs from Drive right before the send (falling back on the
+        # last cached copy if Drive is unreachable), so the delivered PDF is fresh.
+        await self._ensure_cvs()
         # Both configured CV PDFs ride along (DE and EN); the draft's language only
         # decides which one leads.
         cvs = self._cv_attachments

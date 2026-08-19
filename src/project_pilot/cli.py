@@ -17,6 +17,7 @@ import httpx
 import typer
 from slack_sdk.web.async_client import AsyncWebClient
 
+from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
 from project_pilot.application.generator import (
     ApplicationGenerator,
     OpenAiDraftClient,
@@ -24,7 +25,7 @@ from project_pilot.application.generator import (
 )
 from project_pilot.application.mailer import SmtpMailer
 from project_pilot.application.service import ApplicationService
-from project_pilot.config import SOURCE_NAME, Settings, load_settings
+from project_pilot.config import SOURCE_NAME, CvAttachments, Settings, load_settings
 from project_pilot.db import create_engine, create_session_factory
 from project_pilot.enrichment.fetch import Fetcher, WebFetcher
 from project_pilot.enrichment.listing import ListingEnrichmentService
@@ -171,6 +172,16 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     return pipeline, closer
 
 
+def _build_cv_refresher(settings: Settings, cvs: CvAttachments) -> CvRefresher | None:
+    """Refresh the CVs from the public Drive folder, or ``None`` to use local files as-is."""
+    if not settings.cv_drive_folder_id:
+        return None
+    targets = [path for path in (cvs.de_pdf, cvs.en_pdf) if path is not None]
+    if not targets:
+        return None
+    return DriveCvRefresher(folder_id=settings.cv_drive_folder_id, targets=targets)
+
+
 def _build_bot(settings: Settings) -> BotRuntime:
     """Wire the Slack bot: draft generator, mailer, application service, fetcher, checker."""
     profile = ProfileService(Path("profile")).load()
@@ -183,12 +194,14 @@ def _build_bot(settings: Settings) -> BotRuntime:
         OpenAiDraftClient(api_key), model=model, prompt_template=load_application_prompt()
     )
     mailer = SmtpMailer(settings.require_smtp()) if settings.has_smtp() else None
+    cv_attachments = settings.cv_attachments()
     service = ApplicationService(
         session_factory=session_factory,
         generator=generator,
         profile=profile,
         mailer=mailer,
-        cv_attachments=settings.cv_attachments(),
+        cv_attachments=cv_attachments,
+        cv_refresher=_build_cv_refresher(settings, cv_attachments),
     )
     checker = CheckService(
         session_factory=session_factory,

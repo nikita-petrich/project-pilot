@@ -95,9 +95,12 @@ matches are being missed. Restart the app after changing `.env`.
   Fix `LLM_MODEL` / `OPENAI_API_KEY` in the `prod` GitHub environment and redeploy —
   the server's `.env` is rewritten from GitHub on every deploy, so editing it on the
   server does not survive.
-- **Profile or CV changes**: edit `profile/profile.md` or replace the PDF in `cv/`,
-  then commit and push — the deploy rebuilds the image. When building on the host
-  instead: `docker compose build && docker compose up -d`.
+- **Profile changes**: edit `profile/profile.md`, then commit and push — the deploy
+  rebuilds the image. When building on the host instead:
+  `docker compose build && docker compose up -d`.
+- **CV changes**: replace the PDF of the same name in the public Google Drive folder
+  (`CV_DRIVE_FOLDER_ID`) — no commit, no redeploy. The app fetches each CV by name
+  before every draft and send; see `docs/deployment.md`.
 
 ## Migrations
 
