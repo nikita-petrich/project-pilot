@@ -110,8 +110,15 @@ class DriveCvRefresher:
             logger.warning("CV %s is not in the Drive folder; keeping the cache", target.name)
             return
         data = await self._download(client, file_id)
-        if data is not None:
+        if data is None:
+            return
+        try:
             await asyncio.to_thread(_write_atomic, target, data)
+        except OSError as err:
+            # A read-only or missing cache directory is as non-fatal as a Drive
+            # outage: the draft reports the CV as missing rather than the apply
+            # flow dying on it.
+            logger.warning("CV cache %s is not writable, keeping the cache: %s", target, err)
 
     async def _download(self, client: httpx.AsyncClient, file_id: str) -> bytes | None:
         response = await client.get(_DOWNLOAD_URL.format(file_id=file_id))
