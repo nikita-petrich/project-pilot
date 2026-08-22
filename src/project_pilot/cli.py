@@ -10,11 +10,12 @@ import logging
 import signal
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 import httpx
 import typer
+import uvicorn
 from slack_sdk.web.async_client import AsyncWebClient
 
 from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
@@ -39,6 +40,8 @@ from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, loa
 from project_pilot.ingestion.client import BASE_URL, PolitenessClient
 from project_pilot.ingestion.normalize import canonicalize_url
 from project_pilot.ingestion.parser import ParsedListing, parse_detail_page
+from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
+from project_pilot.notification.claude_fire import ClaudeRoutineFire
 from project_pilot.notification.slack import SlackClient, SlackNotifier, SlackWebClient
 from project_pilot.notification.slack_bot import SlackBot, run_socket_mode
 from project_pilot.pipeline import Pipeline, RunOutcome
@@ -156,6 +159,11 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
 
     notifier = SlackNotifier(_slack_client(settings)) if settings.has_slack() else None
 
+    claude_fire: ClaudeRoutineFire | None = None
+    if settings.claude_fire_enabled:
+        fire_url, fire_token = settings.require_claude_fire()
+        claude_fire = ClaudeRoutineFire(fire_url=fire_url, token=fire_token)
+
     pipeline = Pipeline(
         settings=settings,
         profile=profile,
@@ -164,6 +172,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         matcher=matcher,
         notifier=notifier,
         llm_probe=llm_client,
+        claude_fire=claude_fire,
     )
 
     async def closer() -> None:
@@ -272,6 +281,53 @@ def _build_bot(settings: Settings) -> BotRuntime:
         await engine.dispose()
 
     return slack_bot, web, config.app_token, closer
+
+
+def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[None]]]:
+    """Wire the MCP server: same services as the bot, minus everything Slack."""
+    token = settings.require_mcp()
+    profile = ProfileService(Path("profile")).load()
+    api_key, model = settings.require_openai()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+
+    generator = ApplicationGenerator(
+        OpenAiDraftClient(api_key), model=model, prompt_template=load_application_prompt()
+    )
+    mailer = SmtpMailer(settings.require_smtp()) if settings.has_smtp() else None
+    cv_attachments = settings.cv_attachments()
+    service = ApplicationService(
+        session_factory=session_factory,
+        generator=generator,
+        profile=profile,
+        mailer=mailer,
+        cv_attachments=cv_attachments,
+        cv_refresher=_build_cv_refresher(settings, cv_attachments),
+    )
+    checker = CheckService(
+        session_factory=session_factory,
+        matcher=_matcher(OpenAiStructuredClient(api_key), model, profile),
+        profile=profile,
+        threshold=settings.match_threshold,
+    )
+    enricher: EnrichmentService | None = None
+    enrichment_closer: Callable[[], Awaitable[None]] | None = None
+    if settings.has_enrichment():
+        enricher, enrichment_closer = _enrichment_service(settings, profile)
+
+    deps = McpDeps(
+        session_factory=session_factory,
+        check_service=checker,
+        application_service=service,
+        enricher=enricher,
+    )
+
+    async def closer() -> None:
+        if enrichment_closer is not None:
+            await enrichment_closer()
+        await engine.dispose()
+
+    return build_app(deps, token=token), closer
 
 
 async def _run_once(settings: Settings) -> RunOutcome:
@@ -463,6 +519,24 @@ def bot() -> None:
     settings = _load_settings()
     settings.require_slack()
     asyncio.run(_run_bot(settings))
+
+
+@app.command("mcp")
+def mcp() -> None:
+    """Serve project-pilot's functions as MCP tools (Streamable HTTP + bearer token)."""
+    settings = _load_settings()
+    asgi_app, closer = _build_mcp_app(settings)
+
+    async def _serve() -> None:
+        config = uvicorn.Config(
+            cast("Any", asgi_app), host="0.0.0.0", port=settings.mcp_port, log_level="info"
+        )
+        try:
+            await uvicorn.Server(config).serve()
+        finally:
+            await closer()
+
+    asyncio.run(_serve())
 
 
 @app.command("healthcheck")

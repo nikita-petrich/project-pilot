@@ -149,9 +149,34 @@ class Repository:
         rows = await self._session.scalars(stmt)
         return rows.unique().all()
 
+    async def recent_matches(self, *, limit: int = 10) -> Sequence[Listing]:
+        """The most recently seen listings with an LLM match verdict, newest first.
+
+        The match feed for the MCP surface: unlike ``get_unnotified_matches`` it
+        includes already-notified listings, because the feed is a history, not a
+        send queue.
+        """
+        stmt = (
+            select(Listing)
+            .join(Evaluation, Evaluation.listing_id == Listing.id)
+            .where(
+                Evaluation.stage == EvaluationStage.LLM,
+                Evaluation.verdict == Verdict.MATCH,
+            )
+            .options(selectinload(Listing.evaluations))
+            .order_by(Listing.first_seen_at.desc())
+            .limit(limit)
+        )
+        rows = await self._session.scalars(stmt)
+        return rows.unique().all()
+
     async def mark_notified(self, listings: Iterable[Listing], when: datetime) -> None:
         for listing in listings:
             listing.notified_at = when
+        await self._session.flush()
+
+    async def set_claude_session_url(self, listing: Listing, url: str) -> None:
+        listing.claude_session_url = url
         await self._session.flush()
 
     async def get_listing(self, listing_id: int) -> Listing | None:

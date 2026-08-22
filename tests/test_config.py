@@ -242,3 +242,29 @@ def test_cv_attachments_send_both_pdfs_language_first(
     assert cvs.for_language("en") == [de_pdf]  # en_pdf missing, so only the DE one exists
     # Configured but absent is reported rather than silently dropped.
     assert [path.name for path in cvs.missing("de")] == ["CV-English.pdf"]
+
+
+def test_require_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("MCP_TOKEN", raising=False)
+    with pytest.raises(ConfigError, match="MCP_TOKEN"):
+        Settings().require_mcp()
+
+    monkeypatch.setenv("MCP_TOKEN", "s3cret")
+    assert Settings().require_mcp() == "s3cret"
+
+
+def test_require_claude_fire(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLAUDE_ROUTINE_FIRE_URL", raising=False)
+    monkeypatch.delenv("CLAUDE_ROUTINE_TOKEN", raising=False)
+    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_FIRE_URL"):
+        Settings().require_claude_fire()
+
+    monkeypatch.setenv("CLAUDE_ROUTINE_FIRE_URL", "https://api.anthropic.com/v1/x/fire")
+    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_TOKEN"):
+        Settings().require_claude_fire()
+
+    monkeypatch.setenv("CLAUDE_ROUTINE_TOKEN", "sk-ant-oat01-x")
+    assert Settings().require_claude_fire() == (
+        "https://api.anthropic.com/v1/x/fire",
+        "sk-ant-oat01-x",
+    )

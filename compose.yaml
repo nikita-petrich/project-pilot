@@ -33,5 +33,18 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  mcp:
+    build: .
+    command: ["mcp"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+    ports:
+      - "${MCP_PORT:-8765}:${MCP_PORT:-8765}"
+    restart: unless-stopped
+
 volumes:
   pgdata:

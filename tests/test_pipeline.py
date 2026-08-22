@@ -120,6 +120,16 @@ class _FakeNotifier:
         return self.ok
 
 
+class _FakeFire:
+    def __init__(self, *, url: str | None = "https://claude.ai/code/session_01T") -> None:
+        self.url = url
+        self.fired: list[MatchMessage] = []
+
+    async def fire(self, message: MatchMessage) -> str | None:
+        self.fired.append(message)
+        return self.url
+
+
 def _settings() -> Settings:
     return Settings(
         search_urls=[SEARCH],
@@ -149,6 +159,7 @@ def _pipeline(
     notifier: Notifier | None = None,
     profile: Profile | None = None,
     llm_probe: LlmProbe | None = None,
+    claude_fire: _FakeFire | None = None,
 ) -> Pipeline:
     return Pipeline(
         settings=_settings(),
@@ -158,6 +169,7 @@ def _pipeline(
         matcher=matcher or _FakeMatcher(),
         notifier=notifier,
         llm_probe=llm_probe,
+        claude_fire=claude_fire,
     )
 
 
@@ -216,6 +228,51 @@ async def test_full_run_notifies_match(
         assert card1.notified_at is not None
         assert card2 is not None
         assert card2.notified_at is None
+
+
+async def test_match_fires_routine_and_stores_session_url(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    fire = _FakeFire()
+    pipeline = _pipeline(
+        session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier(), claude_fire=fire
+    )
+    await pipeline.run_once(now=NOW)
+    assert len(fire.fired) == 1
+    async with session_factory() as db_session:
+        listing = await Repository(db_session).get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        assert listing.claude_session_url == "https://claude.ai/code/session_01T"
+
+    # A later run must not fire again for the same listing (no idempotency key
+    # upstream — the stored URL is the guard).
+    second_fire = _FakeFire()
+    again = _pipeline(
+        session_factory,
+        client=_FakeClient(PAGES),
+        notifier=_FakeNotifier(),
+        claude_fire=second_fire,
+    )
+    await again.run_once(now=NOW + timedelta(minutes=15))
+    assert second_fire.fired == []
+
+
+async def test_failed_fire_never_fails_the_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    fire = _FakeFire(url=None)  # fire endpoint down / misconfigured
+    pipeline = _pipeline(
+        session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier(), claude_fire=fire
+    )
+    outcome = await pipeline.run_once(now=NOW)
+    assert outcome.notified == 1  # Slack went out, run stays green
+    assert len(fire.fired) == 1
+    async with session_factory() as db_session:
+        listing = await Repository(db_session).get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        assert listing.claude_session_url is None  # gap visible in the feed
 
 
 async def test_per_entry_isolation_skips_failing_detail(

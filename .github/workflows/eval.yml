@@ -1,0 +1,45 @@
+# Golden-set eval against the live LLM. Costs tokens, so it is its own workflow:
+# manual runs plus every change to what shapes the judgment (prompts, skills,
+# profile, evaluation code, the golden set itself). The job checks for the key
+# at runtime and skips gracefully when the secret is absent — GitHub cannot
+# reference secrets in job-level `if`.
+name: Eval
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/project_pilot/evaluation/**"
+      - "profile/**"
+      - ".claude/skills/**"
+      - "tests/eval/**"
+
+permissions:
+  contents: read
+
+jobs:
+  golden-set:
+    runs-on: ubuntu-latest
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      LLM_MODEL: ${{ vars.LLM_MODEL }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.8.17"
+          python-version: "3.13"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Golden-set eval
+        run: |
+          if [ -z "$OPENAI_API_KEY" ] || [ -z "$LLM_MODEL" ]; then
+            echo "OPENAI_API_KEY/LLM_MODEL not configured — skipping eval."
+            exit 0
+          fi
+          uv run pytest -m eval --no-cov

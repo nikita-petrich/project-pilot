@@ -121,6 +121,13 @@ class Settings(BaseSettings):
     analysis_window_min: int = 30
     match_threshold: int = 60
 
+    mcp_token: str = Field(default="", repr=False)
+    mcp_port: int = 8765
+
+    claude_fire_enabled: bool = False
+    claude_routine_fire_url: str = ""
+    claude_routine_token: str = Field(default="", repr=False)
+
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
     enrichment_max_pages: int = 6
@@ -218,6 +225,18 @@ class Settings(BaseSettings):
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
+
+    def require_claude_fire(self) -> tuple[str, str]:
+        if not self.claude_routine_fire_url:
+            raise ConfigError("CLAUDE_ROUTINE_FIRE_URL must be set (the routine's /fire URL)")
+        if not self.claude_routine_token:
+            raise ConfigError("CLAUDE_ROUTINE_TOKEN must be set (sk-ant-oat01-… routine token)")
+        return self.claude_routine_fire_url, self.claude_routine_token
+
+    def require_mcp(self) -> str:
+        if not self.mcp_token:
+            raise ConfigError("MCP_TOKEN must be set (bearer token for the MCP server)")
+        return self.mcp_token
 
     def has_enrichment(self) -> bool:
         return self.enrichment_enabled

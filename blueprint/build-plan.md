@@ -34,6 +34,8 @@
 ## Claude-App-Umbau (Zielarchitektur: blueprint/reference/zielarchitektur.drawio)
 
 - [x] 19. **Skills als Urteilsschicht** - `.claude/skills/check-project/` und `.claude/skills/write-application/` aus den bestehenden Prompts (`evaluation/prompts/match.v6.md`, `application/prompts/application.md`) als dünne Wrapper, die diese zur Laufzeit lesen; testbar direkt in Claude Code (`/check-project` mit eingefügter Projektbeschreibung); Prompt-Injection-Guard im Skill-Text
-- [ ] 20. **MCP-Server** - FastMCP über die bestehenden Services: `get_listing`, `search_listings`, `ingest_listing`, `save_draft`, `send_application` (nur nach Confirm), `enrich_company`; öffentlich mit Token, als Custom Connector in claude.ai eingebunden
-- [ ] 21. **Eval-Suite** - Golden-Set aus der `evaluations`-Tabelle (von Nik gelabelt), pytest-Eval-Runner, CI-Gate gegen Verschlechterung des Urteils
-- [ ] 22. **Routine-Anbindung** - Worker feuert die `match-thread`-Routine pro Match (`notification/claude_fire.py`), 2 Wochen parallel zu Slack, dann Slack-Abbau
+- [x] 20. **MCP-Server** - FastMCP über die bestehenden Services: `get_listing`, `search_listings`, `ingest_listing`, `save_draft`, `send_application` (nur nach Confirm), `enrich_company`; öffentlich mit Token, als Custom Connector in claude.ai eingebunden
+- [ ] 20b. **ingest_listing MCP-Tool** - Listings aus fremden Quellen (E-Mail, n8n) idempotent anlegen; braucht eine Design-Entscheidung zur external_url-Synthese für URL-lose Quellen
+- [x] 21. **Eval-Suite** - Golden-Set aus der `evaluations`-Tabelle (von Nik gelabelt), pytest-Eval-Runner, CI-Gate gegen Verschlechterung des Urteils
+- [x] 22. **Routine-Anbindung** - Worker feuert die `match-thread`-Routine pro Match (`notification/claude_fire.py`), Session-URL am Listing, Doppel-Fire-Guard; läuft parallel zu Slack
+- [ ] 23. **Slack-Abbau** - nach ~2 Wochen erfolgreichem Parallelbetrieb der Routine: `notification/slack.py`, `slack_bot.py`, `bot`-Command, slack_sdk-Dependency und Slack-Settings entfernen; Warnungen (Cooldown/Failures) auf einen verbleibenden Kanal umziehen (Routine-Fire oder E-Mail)

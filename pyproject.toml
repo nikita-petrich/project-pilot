@@ -12,6 +12,7 @@ dependencies = [
     "apscheduler>=3.11.3",
     "asyncpg>=0.31.0",
     "beautifulsoup4>=4.15.0",
+    "fastmcp>=3.4.7",
     "httpx>=0.28.1",
     "lxml>=6.1.1",
     "openai>=2.46.0",
@@ -23,6 +24,7 @@ dependencies = [
     "sqlalchemy>=2.0.51",
     "tenacity>=9.1.4",
     "typer>=0.27.0",
+    "uvicorn>=0.52.4",
 ]
 
 [project.scripts]
@@ -100,7 +102,10 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-addopts = "--cov=project_pilot --cov-report=term-missing"
+# "not eval" keeps the quality gate offline and token-free; run the golden-set
+# eval explicitly with `uv run pytest -m eval` (needs OPENAI_API_KEY + LLM_MODEL).
+addopts = "--cov=project_pilot --cov-report=term-missing -m 'not eval'"
+markers = ["eval: golden-set evals against the live LLM (cost tokens; excluded by default)"]
 
 [tool.coverage.run]
 source = ["src/project_pilot"]

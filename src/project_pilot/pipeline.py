@@ -83,6 +83,12 @@ class Notifier(Protocol):
     async def send_warning(self, text: str) -> bool: ...
 
 
+class MatchFire(Protocol):
+    """Opens the Claude match-thread session for one match (feature 22)."""
+
+    async def fire(self, message: MatchMessage) -> str | None: ...
+
+
 type ClientFactory = Callable[[], SourceClient]
 
 
@@ -124,6 +130,7 @@ class Pipeline:
         base_url: str = BASE_URL,
         llm_probe: LlmProbe | None = None,
         alerter: HealthAlerter | None = None,
+        claude_fire: MatchFire | None = None,
     ) -> None:
         self._settings = settings
         self._profile = profile
@@ -135,6 +142,7 @@ class Pipeline:
         self._source = SOURCE_NAME
         self._llm_probe = llm_probe
         self._alerter = alerter or HealthAlerter(self._send_operator_message)
+        self._claude_fire = claude_fire
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
@@ -521,10 +529,34 @@ class Pipeline:
                     await repo.mark_notified([listing], now)
                     await session.commit()
                     outcome.notified += 1
+                    await self._open_match_thread(repo, session, listing, message)
                 else:
                     failed += 1
             if failed:
                 logger.warning("notifier send failed; %d match(es) will retry next run", failed)
+
+    async def _open_match_thread(
+        self,
+        repo: Repository,
+        session: AsyncSession,
+        listing: Listing,
+        message: MatchMessage,
+    ) -> None:
+        """Fire the match-thread routine once per listing; a failure never fails the run.
+
+        Guarded on ``claude_session_url`` because the fire endpoint has no
+        idempotency key: without the guard, a notify retry would open a second
+        session for the same match.
+        """
+        if self._claude_fire is None or listing.claude_session_url is not None:
+            return
+        session_url = await self._claude_fire.fire(message)
+        if session_url is None:
+            logger.warning("match thread not opened for %s (fire failed)", listing.external_url)
+            return
+        await repo.set_claude_session_url(listing, session_url)
+        await session.commit()
+        logger.info("match thread opened: %s -> %s", listing.external_url, session_url)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:
