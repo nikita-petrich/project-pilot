@@ -19,7 +19,7 @@ Turn each into listing text first - the judgment is the same afterwards:
 
 | Form | What to do |
 |---|---|
-| **freelancermap URL** | `project_pilot_list_matches` / `project_pilot_get_listing` if it is stored; otherwise fetch it with a web-fetch tool. Never guess a listing's content from its URL. |
+| **A listing URL** (any board) | `project_pilot_list_matches` / `project_pilot_get_listing` if it is stored; otherwise fetch it with a web-fetch tool. Never guess a listing's content from its URL. |
 | **Listing id** (from the feed) | `project_pilot_get_listing` |
 | **Pasted text, recruiter mail** | use it directly |
 | **PDF** | read it and use its text |
@@ -41,9 +41,11 @@ what the rest of the system can act on later.
    the `origin` that actually applies - `chat` for something pasted here, `mail`
    for a forwarded recruiter mail, `pdf`, `image` for a transcribed screenshot,
    `url` for a fetched link, `api` for an automation. Add `title`, `url` and
-   `company` when you have them, and `note` for anything worth remembering about
-   how it arrived. It returns a `listing_id`, and `already_known: true` when this
-   text or URL was stored before.
+   `company` when you have them, `source` when you know the platform
+   (freelancermap, linkedin, malt, an agency - it is read off the URL otherwise),
+   and `note` for anything worth remembering about how it arrived. It returns a
+   `listing_id`, and `already_known: true` when this text or URL was stored
+   before. The board it came from changes nothing about the judgment.
 2. Then `project_pilot_check_listing(listing_id)`.
 3. Report that verdict, in the step 6 format, naming the `listing_id` so the
    listing can be drafted from and sent later.

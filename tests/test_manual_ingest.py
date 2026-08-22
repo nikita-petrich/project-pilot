@@ -5,10 +5,15 @@ from datetime import UTC, datetime
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.manual import (
     INGEST_URL_PREFIX,
+    MANUAL_SOURCE,
     build_manual_listing,
     listing_key,
 )
-from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
+from project_pilot.ingestion.normalize import (
+    canonicalize_listing_url,
+    canonicalize_url,
+    compute_url_hash,
+)
 from project_pilot.models import ListingOrigin, ListingStatus, RemoteStatus
 
 NOW = datetime(2026, 8, 22, 9, 30, tzinfo=UTC)
@@ -82,3 +87,36 @@ def test_provenance_is_recorded_in_raw() -> None:
         "note": "Screenshot aus WhatsApp",
         "supplied_url": "https://www.freelancermap.de/projekt/x-1",
     }
+
+
+def test_a_relative_path_is_never_resolved_against_the_scraped_board() -> None:
+    """A bare path could belong to any host — key on the text instead of guessing."""
+    external_url, _ = listing_key(text=MAIL, url="/projekt/relativ-12345")
+    assert external_url.startswith(INGEST_URL_PREFIX)
+    assert canonicalize_listing_url("/projekt/relativ-12345") is None
+
+
+def test_the_board_is_read_off_the_url_and_can_be_overridden() -> None:
+    """Nothing here is bound to one platform: the URL names the board."""
+    from_other_board = build_manual_listing(
+        text=MAIL,
+        origin=ListingOrigin.URL,
+        now=NOW,
+        url="https://www.linkedin.com/jobs/view/4242",
+    )
+    assert from_other_board.source == "linkedin"
+
+    scraped_board = build_manual_listing(
+        text=MAIL,
+        origin=ListingOrigin.URL,
+        now=NOW,
+        url="https://www.freelancermap.de/projekt/x-1",
+    )
+    # Matches the scanner's own SOURCE_NAME, so both rows agree on the board.
+    assert scraped_board.source == "freelancermap"
+
+    explicit = build_manual_listing(text=MAIL, origin=ListingOrigin.MAIL, now=NOW, source="Hays")
+    assert explicit.source == "Hays"
+
+    no_url = build_manual_listing(text=MAIL, origin=ListingOrigin.CHAT, now=NOW)
+    assert no_url.source == MANUAL_SOURCE

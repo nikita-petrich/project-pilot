@@ -26,6 +26,41 @@ def compute_url_hash(canonical_url: str) -> str:
     return hashlib.sha256(canonical_url.encode("utf-8")).hexdigest()
 
 
+def canonicalize_listing_url(url: str) -> str | None:
+    """Canonicalize an **absolute** listing URL from any board; None if it is not one.
+
+    ``canonicalize_url`` resolves against the scraped board's base, which is right
+    for links found inside that board's HTML and wrong for anything else: a bare
+    path handed in from a chat or an automation would silently become a
+    freelancermap URL. This variant refuses what it cannot identify instead.
+
+    For an absolute URL both functions produce the same string, so a listing
+    ingested by link and the same page fetched by the scanner keep one url_hash.
+    """
+    parts = urlsplit(url.strip())
+    if parts.scheme not in {"http", "https"} or not parts.netloc:
+        return None
+    path = parts.path.rstrip("/") or "/"
+    return urlunsplit((parts.scheme, parts.netloc.lower(), path, "", ""))
+
+
+def source_from_url(url: str) -> str | None:
+    """The board key for a listing URL — ``freelancermap`` for the scraper's own.
+
+    A deliberately plain heuristic (the registrable label, minus ``www.``), because
+    the caller can always pass the source explicitly and a wrong guess is a label,
+    not a behaviour. Multi-part suffixes such as ``co.uk`` are not special-cased.
+    """
+    canonical = canonicalize_listing_url(url)
+    if canonical is None:
+        return None
+    host = urlsplit(canonical).netloc.removeprefix("www.")
+    labels = [label for label in host.split(".") if label]
+    if not labels:
+        return None
+    return labels[-2] if len(labels) > 1 else labels[0]
+
+
 def parse_german_date(text: str) -> date | None:
     match = _DATE_RE.search(text)
     if match is None:

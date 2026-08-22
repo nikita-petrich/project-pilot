@@ -111,6 +111,15 @@ per evaluation).
 `listings.origin` (enum: scan | chat | mail | pdf | image | url | api) records how
 a row got there: the scanner's own listings are `scan`, everything the MCP
 `ingest_listing` tool stores names its channel, with the detail in `raw["ingest"]`.
+`listings.source` names the platform alongside it (`freelancermap`, `linkedin`, an
+agency, `manual`), read off the listing URL when not passed in.
+
+**Single-source only where it has to be.** The scraper is freelancermap-specific
+by design (its parser, `SEARCH_URLS`, the watermark in `source_state`); the data
+model, the evaluation prompts, the application flow and the whole MCP surface are
+not, and carry no board name. A second platform therefore reaches the database
+today through `ingest_listing` (mail or n8n, no code), and *scanning* one is a new
+parser behind the same pipeline — build-plan item 15.
 
 Features 16 and 18 added two further tables: `applications` (one draft/send cycle
 per application: recipient, subject/body, LinkedIn message, status guard against

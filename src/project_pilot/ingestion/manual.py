@@ -14,24 +14,29 @@ This module builds the stored row for them. Two rules make it safe:
   later finds (or already found) updates that one row instead of forking a
   duplicate. Text with no URL is keyed by the text itself, so the same mail
   pasted twice is the same listing.
+
+Nothing here is bound to freelancermap. The board is read off the URL (or passed
+in), so a listing from another platform, a mail, or an automation is stored the
+same way and only the scraper stays single-source.
 """
 
 import hashlib
 import re
 from datetime import datetime
 
-from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import (
-    canonicalize_url,
+    canonicalize_listing_url,
     compute_url_hash,
     extract_listing_title,
+    source_from_url,
 )
 from project_pilot.models import Listing, ListingOrigin, ListingStatus, RemoteStatus
 
 # Stands in for the listing URL of something that has none, so `external_url`
 # keeps its NOT NULL/unique contract without pretending to be fetchable.
 INGEST_URL_PREFIX = "pilot://ingest/"
-_MANUAL_SOURCE = "manual"
+# The board key for a listing that carries no URL to read one off.
+MANUAL_SOURCE = "manual"
 _TITLE_MAX = 512
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -44,11 +49,13 @@ def _text_key(text: str) -> str:
 def listing_key(*, text: str, url: str | None) -> tuple[str, str]:
     """``(external_url, url_hash)`` for an ingested listing.
 
-    With a URL the pair is identical to what the scraper would compute for the
-    same page - that is what lets a pasted link and a scanned listing be one row.
+    With an absolute URL the pair is identical to what the scraper would compute
+    for the same page - that is what lets a pasted link and a scanned listing be
+    one row. Anything else (no URL, or a bare path that could belong to any host)
+    is keyed by its own text rather than guessed at.
     """
-    if url and url.strip():
-        canonical = canonicalize_url(url, BASE_URL)
+    canonical = canonicalize_listing_url(url) if url else None
+    if canonical is not None:
         return canonical, compute_url_hash(canonical)
     digest = _text_key(text)
     return f"{INGEST_URL_PREFIX}{digest[:16]}", digest
@@ -71,11 +78,17 @@ def build_manual_listing(
     now: datetime,
     title: str | None = None,
     url: str | None = None,
+    source: str | None = None,
     company: str | None = None,
     note: str | None = None,
 ) -> Listing:
-    """The unsaved ``Listing`` for one manually supplied project description."""
+    """The unsaved ``Listing`` for one supplied project description, from any board.
+
+    ``source`` names the platform it came from. Passed in it is taken as given;
+    otherwise it is read off the URL, and text with no URL is ``manual``.
+    """
     external_url, url_hash = listing_key(text=text, url=url)
+    board = (source or "").strip() or (source_from_url(url) if url else None) or MANUAL_SOURCE
     ingest: dict[str, object] = {"origin": origin.value, "received_at": now.isoformat()}
     if note and note.strip():
         ingest["note"] = note.strip()
@@ -85,7 +98,7 @@ def build_manual_listing(
     if company and company.strip():
         raw["company"] = company.strip()
     return Listing(
-        source=_MANUAL_SOURCE,
+        source=board[:64],
         external_url=external_url,
         url_hash=url_hash,
         title=_title_for(text, title),

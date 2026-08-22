@@ -30,7 +30,7 @@ the outbound channel. Removing that leg is what makes the whole setup safe.
 
 | Form | What to do |
 |---|---|
-| **Listing id, or a stored freelancermap URL** | `project_pilot_get_listing` for the facts |
+| **Listing id, or a stored listing's URL** | `project_pilot_get_listing` for the facts |
 | **Other URL** | fetch with a web-fetch tool; otherwise ask for the text |
 | **Pasted text, recruiter mail** | use it directly |
 | **PDF** | read it and use its text |

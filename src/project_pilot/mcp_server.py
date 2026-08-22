@@ -69,6 +69,7 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
     return {
         "listing_id": listing.id,
         "title": listing.title,
+        "source": listing.source,
         "url": listing.external_url,
         "score": score,
         "location": listing.location,
@@ -166,6 +167,7 @@ async def ingest_listing(
     origin: str,
     title: str | None = None,
     url: str | None = None,
+    source: str | None = None,
     company: str | None = None,
     note: str | None = None,
 ) -> dict[str, object]:
@@ -186,6 +188,7 @@ async def ingest_listing(
         now=datetime.now(UTC),
         title=title,
         url=url,
+        source=source,
         company=company,
         note=note,
     )
@@ -276,21 +279,24 @@ def build_mcp(deps: McpDeps) -> FastMCP:
         origin: str,
         title: str | None = None,
         url: str | None = None,
+        source: str | None = None,
         company: str | None = None,
         note: str | None = None,
     ) -> dict[str, object]:
         """Store a project listing that did not come from the scanner, and return
         its listing_id. Call this FIRST for anything the user brings in by hand -
         a pasted description, a forwarded recruiter mail, a PDF, a screenshot you
-        transcribed, a link - before checking or drafting, so the listing is in
-        the database and the whole flow (check, draft, send, reporting) works on
-        it. `origin` records how it arrived and must be one of: chat, mail, pdf,
-        image, url, api. Pass the listing text itself as `text` (transcribe an
-        image first); `title`, `url`, `company` and `note` when known. Ingesting
-        the same text or URL twice returns the existing listing rather than a
+        transcribed, a link from any job platform - before checking or drafting,
+        so the listing is in the database and the whole flow (check, draft, send,
+        reporting) works on it. `origin` records how it arrived and must be one
+        of: chat, mail, pdf, image, url, api. Pass the listing text itself as
+        `text` (transcribe an image first); `title`, `url`, `company` and `note`
+        when known. `source` names the platform (freelancermap, linkedin, malt,
+        an agency name, ...) and is read off the URL when omitted. Ingesting the
+        same text or URL twice returns the existing listing rather than a
         duplicate (`already_known: true`)."""
         return await ingest_listing(
-            deps, text, origin, title=title, url=url, company=company, note=note
+            deps, text, origin, title=title, url=url, source=source, company=company, note=note
         )
 
     @mcp.tool

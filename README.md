@@ -147,19 +147,43 @@ Ten tools are exposed, and any Claude chat that has the connector can use them:
 n8n speaks the same protocol, so a workflow can ingest and check incoming
 recruiter mails without duplicating any of the judgment.
 
-### Listings that did not come from the scanner
+### Listings from anywhere else
 
-A recruiter mails, a client sends a PDF, someone screenshots a listing.
-`ingest_listing` stores it like any other listing and records **how it arrived** —
-`listings.origin` is one of `scan`, `chat`, `mail`, `pdf`, `image`, `url`, `api`,
-and `raw["ingest"]` keeps the detail (a note, the supplied URL, the timestamp).
+A recruiter mails, a client sends a PDF, someone screenshots a listing, an n8n
+workflow forwards one from another board. `ingest_listing` stores it like any
+other listing and records two things about where it came from:
+
+| Column | Answers | Values |
+|---|---|---|
+| `listings.source` | **which platform** | `freelancermap`, `linkedin`, `malt`, an agency name, … — read off the URL, or passed in; `manual` for text with no URL |
+| `listings.origin` | **which channel** | `scan`, `chat`, `mail`, `pdf`, `image`, `url`, `api` |
+
+`raw["ingest"]` keeps the detail (a note, the supplied URL, the timestamp).
 Everything downstream then works on it unchanged: check, draft, revise, send,
 reporting.
 
-Dedupe is the scanner's own: a pasted freelancermap link is canonicalized and
-hashed exactly as the scraper does it, so a link you check by hand and the page
-the scanner later fetches are **one** row, not two. Text with no URL is keyed by
-the text, so the same mail pasted twice is the same listing.
+Dedupe is the scanner's own: an absolute listing URL is canonicalized and hashed
+exactly as the scraper does it, so a link you check by hand and the page the
+scanner later fetches are **one** row, not two. Text with no URL is keyed by the
+text, so the same mail pasted twice is the same listing. A bare path is never
+resolved against the scraped board — it could belong to any host, so it is keyed
+by its text instead of being guessed at.
+
+### Which parts are tied to freelancermap
+
+Only the scraper. Everything else was built source-agnostic and stays that way:
+
+| Layer | Bound to a board? |
+|---|---|
+| `ingestion/parser.py`, `SEARCH_URLS`, `source_state` watermark | **yes** — freelancermap's HTML and pagination |
+| data model (`listings.source` per row, `source_state` keyed by source) | no |
+| evaluation (`constraints.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
+| application drafting, enrichment, sending | no |
+| MCP tools, the match-thread routine, both skills | no |
+
+So a second board reaches the database today through `ingest_listing` (an n8n
+workflow forwarding its mails costs no code at all), and *scanning* one is a new
+parser plus its search URLs — build-plan item 15, deliberately not built yet.
 
 ## Applying from a match thread
 

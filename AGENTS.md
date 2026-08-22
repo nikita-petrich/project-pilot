@@ -13,6 +13,14 @@ fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
 and pushes real matches within minutes: each match opens a Claude match-thread
 session, with the push arriving through the Claude app; the MCP server exposes
 every function to Claude chats and n8n.
+
+**Only the scraper is freelancermap-specific** (its parser, `SEARCH_URLS`, the
+watermark) — keep it that way. The data model, the evaluation prompts, the
+application flow and the MCP tools carry no board name, so a listing from any
+other platform reaches the database through `ingest_listing`, which records both
+`listings.source` (which platform) and `listings.origin` (which channel).
+Scanning a second board is a new parser behind the same pipeline, build-plan
+item 15.
 Backend only, no web UI of its own — the Claude app is the interaction surface
 (see `blueprint/reference/zielarchitektur.drawio`). The
 binding detail specification lives in `SPEC.md` at the repo root.
