@@ -17,6 +17,10 @@ import sys
 # These configure the deploy, not the app, so they must not land in the app's .env.
 DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# The routine fire endpoint, as the API trigger's modal hands it out.
+FIRE_URL_RE = re.compile(
+    r"^https://api\.anthropic\.com/v1/claude_code/routines/[A-Za-z0-9_-]+/fire/?$"
+)
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -77,7 +81,27 @@ def problems(settings: dict[str, str]) -> list[str]:
             found.append(f"{key} has leading or trailing whitespace")
         elif " #" in value:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
+    found.extend(_fire_url_problems(settings.get("CLAUDE_ROUTINE_FIRE_URL", "")))
     return found
+
+
+def _fire_url_problems(url: str) -> list[str]:
+    """Catch the routine's *page* URL being stored instead of its fire endpoint.
+
+    Both are shown in the Claude UI and only one of them fires anything; the wrong
+    one answers 403 at the first real match, hours after a deploy that looked
+    perfectly healthy. The shape is fixed, so check it here rather than discover it
+    from a warning session that cannot be sent either.
+    """
+    if not url:
+        return []  # absence is already reported by the REQUIRED check
+    if not FIRE_URL_RE.match(url):
+        return [
+            f"CLAUDE_ROUTINE_FIRE_URL is {url!r}, which is not a routine fire endpoint. "
+            "Expected https://api.anthropic.com/v1/claude_code/routines/trig_.../fire "
+            "— a https://claude.ai/code/routines/... address is the page, not the API."
+        ]
+    return []
 
 
 def main() -> int:
