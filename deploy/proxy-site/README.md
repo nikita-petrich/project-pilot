@@ -12,7 +12,7 @@ no shared cert to re-issue.
 
 ## Naming
 
-`mcp-<service>.sequenz.io`. This one is `mcp-pilot.sequenz.io`; a Notion server
+`mcp-<service>.sequenz.io`. This one is `mcp-project-pilot.sequenz.io`; a Notion server
 would be `mcp-notion.sequenz.io`, an n8n bridge `mcp-n8n.sequenz.io`.
 
 The shared prefix is the point: every MCP server sorts together in Strato's
@@ -23,16 +23,16 @@ every client.
 
 ## Wiring it up
 
-**1. DNS.** At Strato, an `A` record for `mcp-pilot` under `sequenz.io` pointing
+**1. DNS.** At Strato, an `A` record for `mcp-project-pilot` under `sequenz.io` pointing
 at the VPS (plus `AAAA` if it has IPv6). Verify before touching the proxy — a failed
 certificate order counts against Let's Encrypt's rate limit:
 
 ```sh
-dig +short mcp-pilot.sequenz.io
+dig +short mcp-project-pilot.sequenz.io
 ```
 
 **2. `ALLOWED_DOMAINS`.** The regex in the proxy's `compose.yml` decides which
-hostnames may get a certificate. It must match `mcp-pilot.sequenz.io`; a pattern that
+hostnames may get a certificate. It must match `mcp-project-pilot.sequenz.io`; a pattern that
 already covers one level of subdomains (`^([a-z0-9-]+\.)?sequenz\.io$`) does.
 
 **3. Mount this file.** In the proxy's `compose.yml`, as a **single file**, not a
@@ -42,10 +42,10 @@ directory, and mounting over it read-only would break every other site:
 ```yaml
     volumes:
       - ssl-data:/etc/resty-auto-ssl
-      - ./mcp-pilot.sequenz.io.conf:/etc/nginx/conf.d/mcp-pilot.sequenz.io.conf:ro
+      - ./mcp-project-pilot.sequenz.io.conf:/etc/nginx/conf.d/mcp-project-pilot.sequenz.io.conf:ro
 ```
 
-Leave `mcp-pilot.sequenz.io` **out** of `SITES`. This file replaces the entry.
+Leave `mcp-project-pilot.sequenz.io` **out** of `SITES`. This file replaces the entry.
 
 **4. The shared network.** project-pilot's `app` and `mcp` join the proxy's
 network by the name in `PROXY_NETWORK` (see the repo's `.env.example`), which

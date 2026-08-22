@@ -113,33 +113,33 @@ One subdomain per MCP server, and that is all it takes: that image orders a
 certificate per hostname over HTTP-01 on first request. No wildcard, no DNS-01,
 nothing to re-issue when the next MCP server arrives.
 
-**Naming.** `mcp-<service>.sequenz.io` — this one is `mcp-pilot.sequenz.io`. The
+**Naming.** `mcp-<service>.sequenz.io` — this one is `mcp-project-pilot.sequenz.io`. The
 shared `mcp-` prefix keeps every MCP server together in Strato's record list and
 in the Claude connector list, and the suffix says which one it is. A bare `mcp.`
 would be unusable the moment there are two.
 
 **1. DNS at Strato.** Domainverwaltung → `sequenz.io` → an `A` record for
-`mcp-pilot` pointing at the VPS (plus `AAAA` if it has IPv6). Verify before touching the
+`mcp-project-pilot` pointing at the VPS (plus `AAAA` if it has IPv6). Verify before touching the
 proxy — failed certificate orders count against Let's Encrypt's rate limit:
 
 ```sh
-dig +short mcp-pilot.sequenz.io
+dig +short mcp-project-pilot.sequenz.io
 ```
 
 **2. `ALLOWED_DOMAINS`.** The proxy's regex decides which hostnames may get a
-certificate. It has to match `mcp-pilot.sequenz.io`; a pattern covering one subdomain
+certificate. It has to match `mcp-project-pilot.sequenz.io`; a pattern covering one subdomain
 level (`^([a-z0-9-]+\.)?sequenz\.io$`) already does.
 
-**3. The site config.** Copy [`../deploy/proxy-site/mcp-pilot.sequenz.io.conf`](../deploy/proxy-site/mcp-pilot.sequenz.io.conf)
+**3. The site config.** Copy [`../deploy/proxy-site/mcp-project-pilot.sequenz.io.conf`](../deploy/proxy-site/mcp-project-pilot.sequenz.io.conf)
 next to the proxy's `compose.yml` and mount it as a **single file**:
 
 ```yaml
     volumes:
       - ssl-data:/etc/resty-auto-ssl
-      - ./mcp-pilot.sequenz.io.conf:/etc/nginx/conf.d/mcp-pilot.sequenz.io.conf:ro
+      - ./mcp-project-pilot.sequenz.io.conf:/etc/nginx/conf.d/mcp-project-pilot.sequenz.io.conf:ro
 ```
 
-Leave `mcp-pilot.sequenz.io` **out** of `SITES` — the entrypoint renders SITES entries
+Leave `mcp-project-pilot.sequenz.io` **out** of `SITES` — the entrypoint renders SITES entries
 into that same directory and would fail writing over a read-only mount, and its
 generic template keeps nginx's defaults (`proxy_buffering on`,
 `proxy_read_timeout 60s`, gzip). MCP streams over Server-Sent Events, so those
@@ -164,8 +164,8 @@ docker compose logs -f nginx
 Check it from your laptop:
 
 ```sh
-curl -s -o /dev/null -w '%{http_code}\n' https://mcp-pilot.sequenz.io/mcp
-curl -s -o /dev/null -w '%{http_code}\n' https://mcp-pilot.sequenz.io/t/<MCP_TOKEN>/mcp
+curl -s -o /dev/null -w '%{http_code}\n' https://mcp-project-pilot.sequenz.io/mcp
+curl -s -o /dev/null -w '%{http_code}\n' https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp
 ```
 
 The first must answer `401`: TLS and routing work and the guard is armed. The
@@ -188,8 +188,8 @@ The server accepts it two ways, because clients differ in what they can send:
 
 | Client | URL | Auth |
 |---|---|---|
-| Claude custom connector (claude.ai, iOS, Android) | `https://mcp-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` | in the path |
-| Claude Code, n8n, anything with header support | `https://mcp-pilot.sequenz.io/mcp` | `Authorization: Bearer <MCP_TOKEN>` |
+| Claude custom connector (claude.ai, iOS, Android) | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` | in the path |
+| Claude Code, n8n, anything with header support | `https://mcp-project-pilot.sequenz.io/mcp` | `Authorization: Bearer <MCP_TOKEN>` |
 
 Prefer the header wherever it is available. The path form exists because the
 custom-connector dialog takes a URL and nothing else; treat that URL as the
@@ -232,7 +232,7 @@ over incoming recruiter mails without duplicating any judgment.
 | matches evaluated, no session appears | check `docker compose logs app` for `routine fire failed`; the listing stays unnotified and is retried next run |
 | connector shows no tools | the proxy buffers, or the URL is missing the `/mcp` suffix |
 | `502 Bad Gateway` from the proxy | the `mcp` container is not on the proxy's network — check `PROXY_NETWORK` against `docker network ls` |
-| browser warns about a self-signed certificate | `ALLOWED_DOMAINS` in the proxy does not match `mcp-pilot.sequenz.io` |
+| browser warns about a self-signed certificate | `ALLOWED_DOMAINS` in the proxy does not match `mcp-project-pilot.sequenz.io` |
 | every listing scores `llm_error` | not a Claude problem — `LLM_MODEL` or `OPENAI_API_KEY`, see [`operations.md`](operations.md) |
 
 A failed fire never fails a run: the listing keeps `notified_at` empty and the
