@@ -13,11 +13,14 @@ from project_pilot.notification.messages import MatchMessage
 FIRE_URL = "https://api.anthropic.com/v1/claude_code/routines/trig_test/fire"
 
 
-def _message(description: str = "Volltext der Ausschreibung.") -> MatchMessage:
+def _message(
+    description: str = "Volltext der Ausschreibung.", listing_id: int | None = 42
+) -> MatchMessage:
     return MatchMessage(
         title="Senior Python Developer",
         url="https://example.com/p/1",
         score=87,
+        listing_id=listing_id,
         company="ACME GmbH",
         location="Remote (DE)",
         reasons=["Stack passt", "Remote"],
@@ -37,6 +40,13 @@ def test_fire_text_carries_facts_and_description() -> None:
     assert "Firma: ACME GmbH" in text
     assert "Warum Match: Stack passt · Remote" in text
     assert text.endswith("Volltext der Ausschreibung.")
+
+
+def test_fire_text_carries_the_listing_id_for_the_mcp_tools() -> None:
+    # The thread needs the id to call get_listing/draft_application; a listing that
+    # is not stored (a manual check) has none, and must not fake one.
+    assert "Listing-ID: 42" in fire_text(_message())
+    assert "Listing-ID" not in fire_text(_message(listing_id=None))
 
 
 def test_fire_text_is_capped() -> None:

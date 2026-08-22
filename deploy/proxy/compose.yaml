@@ -5,7 +5,7 @@
 # touching this stack again.
 #
 #   scp -r deploy/proxy <user>@<host>:/opt/stacks/proxy
-#   cd /opt/stacks/proxy && cp .env.example .env && nano .env
+#   cd /opt/stacks/proxy && cp .env.example .env && nano .env   # ACME_EMAIL
 #   docker network create edge          # skipped if project-pilot created it already
 #   docker compose up -d
 services:

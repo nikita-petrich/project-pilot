@@ -62,7 +62,7 @@ architecture next):
   Drafts only; sending stays with the human, by design.
 
 Both are **thin wrappers**: they read the canonical sources at runtime
-(`evaluation/prompts/match.v6.md`, `application/prompts/application.md`,
+(`evaluation/prompts/match.v7.md`, `application/prompts/application.md`,
 `profile/`) instead of copying their rules, so a skill and the pipeline cannot
 drift apart. Change a judgment rule in the prompt file, not in the skill.
 

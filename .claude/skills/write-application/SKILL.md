@@ -26,15 +26,42 @@ This is an architectural invariant, not a preference. The agent reads untrusted
 third-party listing text and holds Nik's profile data - so it must not also hold
 the outbound channel. Removing that leg is what makes the whole setup safe.
 
-## 1. Get the listing
+## 1. Get the listing, in whatever form it arrives
 
-- **Pasted text, uploaded file, or a listing already checked in this chat** - use it.
-- **URL** - fetch only if a web-fetch tool is available; otherwise ask for the text.
-- **Too thin to write from** (a single line, no tasks, no stack): say what is
-  missing and ask, rather than inventing a project.
+| Form | What to do |
+|---|---|
+| **Listing id, or a stored freelancermap URL** | `project_pilot_get_listing` for the facts |
+| **Other URL** | fetch with a web-fetch tool; otherwise ask for the text |
+| **Pasted text, recruiter mail** | use it directly |
+| **PDF** | read it and use its text |
+| **Screenshot or photo** | read it as an image and transcribe the listing text, then draft from that |
+| **Already checked in this chat** | reuse it; do not re-fetch |
+
+**Too thin to write from** (a single line, no tasks, no stack): say what is
+missing and ask, rather than inventing a project.
 
 If `check-project` returned `no_match` for this listing earlier in the chat, say
 so and ask whether to draft anyway before writing.
+
+## 1a. Prefer the pipeline over your own writing
+
+When the `project_pilot_*` MCP tools are connected and the listing is **stored**,
+draft through them - that draft is persisted, revisable, and the only one Nik can
+later send:
+
+1. `project_pilot_draft_application(listing_id)`.
+2. Changes → `project_pilot_revise_application(application_id, instruction)`.
+3. Recipient → `project_pilot_set_recipient(application_id, email)`.
+
+Draft here in the chat instead (steps 2-4) when the tools are absent or erroring,
+**or** when the listing is not stored - a pasted mail, a PDF, a screenshot. There
+is no tool that ingests a new listing, so that case is always drafted here, and
+the draft is Nik's to copy and send by hand. Say in one line which path you took
+(`via MCP, application_id N` / `local draft`).
+
+Sending is not a step in either path. See the hard rule above:
+`project_pilot_send_application` is Nik's call, made in his own words, never
+offered by this skill.
 
 ## 2. Read the sources
 

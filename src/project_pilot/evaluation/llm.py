@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-PROMPT_VERSION = "match.v6"
+PROMPT_VERSION = "match.v7"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 

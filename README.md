@@ -244,7 +244,7 @@ Two ways reach the same judgment without the server:
 Claude session with this repository can run. They are thin wrappers that read the
 canonical prompt and profile files at runtime rather than restating their rules, so
 a skill and the pipeline cannot drift apart — change a judgment rule in
-`evaluation/prompts/match.v6.md`, never in the skill.
+`evaluation/prompts/match.v7.md`, never in the skill.
 
 ## Deploying
 

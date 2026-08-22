@@ -1,8 +1,16 @@
 # Proxy stack
 
-A minimal Caddy in front of project-pilot's MCP server: TLS from Let's Encrypt,
-one route, no secrets. It exists because the Claude custom connector and n8n need
-a public HTTPS URL, and the app deliberately publishes no host port of its own.
+A minimal Caddy in front of the MCP servers on this host: TLS from Let's Encrypt,
+one route per subdomain, no secrets. It exists because the Claude custom connector
+and n8n need a public HTTPS URL, and the apps deliberately publish no host port of
+their own.
+
+Today it serves `mcp.sequenz.io` → project-pilot. Adding a second MCP server later
+is an A record, a block in the `Caddyfile`, and a reload:
+
+```sh
+docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile
+```
 
 If the VPS already runs a reverse proxy, do not add this one — route the hostname
 to `project-pilot-mcp:8765` on the `edge` network there instead. The equivalents
@@ -19,4 +27,4 @@ the container name does not resolve), and it must not buffer responses — MCP
 streams over Server-Sent Events, and a buffering proxy makes every call look like
 a hang. Caddy handles both without configuration.
 
-Setup is in [`../../docs/mcp.md`](../../docs/mcp.md).
+Setup is in [`../../docs/claude-setup.md`](../../docs/claude-setup.md).

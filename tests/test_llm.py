@@ -81,7 +81,7 @@ async def test_match_returns_verdict_and_metadata() -> None:
     assert result.is_match is True
     assert result.score == 80
     assert result.tokens_in == 100
-    assert result.prompt_version == "match.v6"
+    assert result.prompt_version == "match.v7"
     assert result.is_error is False
     assert client.calls == 1
 
