@@ -10,18 +10,29 @@ per hostname over HTTP-01 the first time it is requested, so a new MCP server
 needs a DNS record and a route — no wildcard certificate, no DNS-01 challenge,
 no shared cert to re-issue.
 
+## Naming
+
+`mcp-<service>.sequenz.io`. This one is `mcp-pilot.sequenz.io`; a Notion server
+would be `mcp-notion.sequenz.io`, an n8n bridge `mcp-n8n.sequenz.io`.
+
+The shared prefix is the point: every MCP server sorts together in Strato's
+record list and in the Claude connector list, and the suffix says which service
+it is. A bare `mcp.sequenz.io` becomes ambiguous the moment there are two, and
+renaming a hostname later means a new certificate and a new connector URL in
+every client.
+
 ## Wiring it up
 
-**1. DNS.** At Strato, an `A` record for `mcp` under `sequenz.io` pointing at the
-VPS (plus `AAAA` if it has IPv6). Verify before touching the proxy — a failed
+**1. DNS.** At Strato, an `A` record for `mcp-pilot` under `sequenz.io` pointing
+at the VPS (plus `AAAA` if it has IPv6). Verify before touching the proxy — a failed
 certificate order counts against Let's Encrypt's rate limit:
 
 ```sh
-dig +short mcp.sequenz.io
+dig +short mcp-pilot.sequenz.io
 ```
 
 **2. `ALLOWED_DOMAINS`.** The regex in the proxy's `compose.yml` decides which
-hostnames may get a certificate. It must match `mcp.sequenz.io`; a pattern that
+hostnames may get a certificate. It must match `mcp-pilot.sequenz.io`; a pattern that
 already covers one level of subdomains (`^([a-z0-9-]+\.)?sequenz\.io$`) does.
 
 **3. Mount this file.** In the proxy's `compose.yml`, as a **single file**, not a
@@ -31,10 +42,10 @@ directory, and mounting over it read-only would break every other site:
 ```yaml
     volumes:
       - ssl-data:/etc/resty-auto-ssl
-      - ./mcp.sequenz.io.conf:/etc/nginx/conf.d/mcp.sequenz.io.conf:ro
+      - ./mcp-pilot.sequenz.io.conf:/etc/nginx/conf.d/mcp-pilot.sequenz.io.conf:ro
 ```
 
-Leave `mcp.sequenz.io` **out** of `SITES`. This file replaces the entry.
+Leave `mcp-pilot.sequenz.io` **out** of `SITES`. This file replaces the entry.
 
 **4. The shared network.** project-pilot's `app` and `mcp` join the proxy's
 network by the name in `PROXY_NETWORK` (see the repo's `.env.example`), which
@@ -48,8 +59,15 @@ docker compose logs -f nginx
 
 ## Adding the next MCP server
 
-Copy this file, change `server_name`, `set $mcp_upstream`, and the mount, then
-add the A record. Nothing else in the proxy changes.
+Four edits, none of them in the proxy's own config:
+
+1. An `A` record for `mcp-<service>` at Strato.
+2. Copy this file to `mcp-<service>.sequenz.io.conf`; change `server_name` and
+   `set $mcp_upstream` to that server's container name and port.
+3. Mount the new file alongside this one.
+4. `docker compose up -d` — the certificate is ordered on the first request.
+
+`ALLOWED_DOMAINS` already covers it if the regex spans one subdomain level.
 
 ## Why not just a `SITES` entry
 
