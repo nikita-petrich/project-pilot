@@ -6,6 +6,7 @@ parsed listing plus an LLM verdict into the display-ready shape; it is shared by
 the scan pipeline and the manual ``/check`` flow.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -188,3 +189,56 @@ def to_match_message(
         description=listing.description or "",
         onsite_only=is_onsite_only(remote_pct, listing.location, listing.description or ""),
     )
+
+
+# The compact match card, ported verbatim from the Slack notifier it replaced:
+# who is hiring, where, the terms, and the top reasons — four scannable lines.
+# It lives here rather than in a transport, because the routine fire, a future
+# channel and any test all want the same layout.
+_CARD_REASONS = 2
+_CARD_RISKS = 2
+
+
+def _inline(parts: Sequence[str | None]) -> str | None:
+    """Join the given values into one middot-separated line, dropping the empty ones."""
+    picked = [part for part in parts if part]
+    return "  ·  ".join(picked) if picked else None
+
+
+def _client_type(message: MatchMessage) -> str | None:
+    if message.is_endcustomer is None:
+        return None
+    return "Direct client" if message.is_endcustomer else "Agency"
+
+
+def _labeled_list(label: str, values: Sequence[str], *, limit: int) -> str | None:
+    picked = [value for value in values if value][:limit]
+    return f"{label}: {', '.join(picked)}" if picked else None
+
+
+def render_match_card(message: MatchMessage) -> str:
+    """The at-a-glance overview of one match: headline, facts, fit, link.
+
+    Company and location are always rendered, even when the listing names
+    neither — an agency post that hides its client is itself a signal, so the
+    card says so rather than silently dropping the line.
+    """
+    company = f"🏢 {message.company}" if message.company else "🏢 Company not stated"
+    location = f"📍 {message.location}" if message.location else "📍 Location not stated"
+    lines = [
+        f"🎯 {message.title}  ·  {message.score}/100",
+        _inline([company, _client_type(message)]),
+        _inline([location, f"🏠 {message.remote_label}" if message.remote_label else None]),
+        _inline(
+            [
+                f"📅 {message.start}" if message.start else None,
+                f"⏳ {message.duration_label}" if message.duration_label else None,
+                f"📊 {message.workload_label}" if message.workload_label else None,
+                f"🕒 {message.posted_ago}" if message.posted_ago else None,
+            ]
+        ),
+        _labeled_list("✅ Fits", message.reasons, limit=_CARD_REASONS),
+        _labeled_list("⚠️ Risks", message.risk_flags, limit=_CARD_RISKS),
+        f"🔗 {message.url}",
+    ]
+    return "\n".join(line for line in lines if line)

@@ -24,10 +24,27 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
 4. Fires the `match-thread` Claude routine for every match at or above
-   `MATCH_THRESHOLD`. That opens one Claude session carrying the listing's facts
-   and full description; Claude summarizes it, and the Claude app pushes the
-   finished session to your phone and laptop. A reason is stored for every verdict
-   — match and no-match alike — for later reporting.
+   `MATCH_THRESHOLD`. That opens one Claude session carrying the match card, the
+   remaining facts and the full description; Claude repeats the card and adds its
+   own reading, and the Claude app pushes the finished session to your phone and
+   laptop. A reason is stored for every verdict — match and no-match alike — for
+   later reporting.
+
+The card is rendered in code (`notification/messages.py`), not left to the model,
+so every alert is scannable the same way:
+
+```
+🎯 Senior Backend Entwickler (Node.js)  ·  87/100
+🏢 One Day Ahead GmbH  ·  Agency
+📍 Frankfurt am Main, Deutschland  ·  🏠 100%
+📅 01.09.2026  ·  ⏳ 4 mo (+ extension)  ·  📊 100%  ·  🕒 5 min ago
+✅ Fits: Node.js-/Express.js-Stack deckt den Backend-Fokus, REST, Docker und PostgreSQL sind im Profil abgedeckt
+⚠️ Risks: Agentur-Listing, Endkunde nicht genannt
+🔗 https://www.freelancermap.de/projekt/…
+```
+
+Company and location always get their line: a listing that names neither is
+itself a signal, so the card says so rather than dropping it silently.
 
 Everything after the push happens in that session: ask questions, have the
 application drafted and revised, and send it, through the MCP server this project

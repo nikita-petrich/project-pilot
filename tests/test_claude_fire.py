@@ -34,11 +34,17 @@ def _client() -> ClaudeRoutineFire:
     return ClaudeRoutineFire(fire_url=FIRE_URL, token="sk-ant-oat01-test")
 
 
-def test_fire_text_carries_facts_and_description() -> None:
+def test_fire_text_opens_with_the_match_card() -> None:
     text = fire_text(_message())
-    assert "Score 87/100" in text
-    assert "Firma: ACME GmbH" in text
-    assert "Warum Match: Stack passt · Remote" in text
+    lines = text.splitlines()
+    # The card is the overview that reaches the feed and the push, so it leads.
+    assert lines[0] == "Listing-ID: 42"
+    assert lines[2] == "🎯 Senior Python Developer  ·  87/100"
+    assert lines[3] == "🏢 ACME GmbH"
+    assert "📍 Remote (DE)" in lines[4]
+    assert "✅ Fits: Stack passt, Remote" in text
+    assert "⚠️ Risks: kein Budget genannt" in text
+    assert "🔗 https://example.com/p/1" in text
     assert text.endswith("Volltext der Ausschreibung.")
 
 

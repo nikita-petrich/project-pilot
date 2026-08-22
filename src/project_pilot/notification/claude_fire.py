@@ -23,7 +23,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from project_pilot.notification.messages import MatchMessage
+from project_pilot.notification.messages import MatchMessage, render_match_card
 
 logger = logging.getLogger(__name__)
 
@@ -43,35 +43,40 @@ def _is_retryable(err: BaseException) -> bool:
 
 
 def fire_text(message: MatchMessage) -> str:
-    """The session's opening context: the card's facts plus the full description."""
-    facts = [
-        f"NEUES MATCH — Score {message.score}/100",
-        f"Rolle: {message.title}",
-    ]
-    # The id is what lets the session reach the MCP tools for this listing, so it
-    # goes in first — without it the thread can only work from the text below.
-    if message.listing_id is not None:
-        facts.insert(1, f"Listing-ID: {message.listing_id}")
-    labeled = [
-        ("Firma", message.company),
-        ("Ort", message.location),
-        ("Remote", message.remote_label),
-        ("Start", message.start),
-        ("Dauer", message.duration_label),
-        ("Auslastung", message.workload_label),
+    """The session's opening context: the match card, the rest of the facts, the text.
+
+    The card comes first and is rendered here rather than left to the model, so
+    the overview that reaches the feed and the push looks the same every time.
+    The routine prompt repeats it verbatim and adds its own reading below it.
+    """
+    parts = [f"Listing-ID: {message.listing_id}"] if message.listing_id is not None else []
+    parts.append(render_match_card(message))
+
+    details = [
         ("Vertragsart", message.contract_type),
+        ("Branche", message.industry),
+        ("Sprache", message.language),
+        ("Anzeige läuft", message.expires_label),
+        ("Ansprechpartner", message.contact_name),
     ]
-    facts.extend(f"{label}: {value}" for label, value in labeled if value)
+    extra = [f"{label}: {value}" for label, value in details if value]
     if message.skills:
-        facts.append("Skills: " + ", ".join(message.skills))
-    if message.reasons:
-        facts.append("Warum Match: " + " · ".join(message.reasons))
-    if message.risk_flags:
-        facts.append("Risiken: " + " · ".join(message.risk_flags))
-    facts.append(f"URL: {message.url}")
+        extra.append("Skills: " + ", ".join(message.skills))
+    if message.matching_skills:
+        extra.append("Passende Skills: " + ", ".join(message.matching_skills))
+    if message.missing_requirements:
+        extra.append("Lücken: " + ", ".join(message.missing_requirements))
+    # The card shows the top two of each; the session gets the full lists.
+    if len(message.reasons) > 1:
+        extra.append("Warum Match: " + " · ".join(message.reasons))
+    if len(message.risk_flags) > 1:
+        extra.append("Risiken: " + " · ".join(message.risk_flags))
+    if extra:
+        parts.append("\n".join(extra))
+
     if message.description:
-        facts.append(f"\nBeschreibung:\n{message.description}")
-    return "\n".join(facts)[:MAX_TEXT_CHARS]
+        parts.append(f"Beschreibung:\n{message.description}")
+    return "\n\n".join(parts)[:MAX_TEXT_CHARS]
 
 
 class ClaudeRoutineFire:
