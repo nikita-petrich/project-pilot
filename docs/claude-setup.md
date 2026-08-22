@@ -126,9 +126,23 @@ proxy — failed certificate orders count against Let's Encrypt's rate limit:
 dig +short mcp-project-pilot.sequenz.io
 ```
 
-**2. `ALLOWED_DOMAINS`.** The proxy's regex decides which hostnames may get a
-certificate. It has to match `mcp-project-pilot.sequenz.io`; a pattern covering one subdomain
-level (`^([a-z0-9-]+\.)?sequenz\.io$`) already does.
+**2. `ALLOWED_DOMAINS`.** The proxy's regex decides which hostnames may order a
+certificate, and it must allow the new host. Check it before assuming it does not:
+the regex is unanchored, so a bare `sequenz.io` in the pattern already matches every
+subdomain by accident — including this one.
+
+That accident is worth closing while you are in the file. Unanchored, the same
+pattern also matches `sequenz.io.attacker.com`, which lets a stranger point DNS at
+this server and burn the Let's Encrypt rate limit. Anchor and escape it instead:
+
+```yaml
+ALLOWED_DOMAINS: '^([a-z0-9-]+\.)?sequenz\.io$'
+```
+
+Single quotes, not double: YAML would try to interpret `\.` as an escape. The
+trailing `$` is safe from Compose's `$`-interpolation because nothing follows it —
+any other `$` in a value has to be doubled. Changing this variable needs
+`docker compose up -d` (the entrypoint substitutes it at start), not a reload.
 
 **3. The site config.** Copy [`../deploy/proxy-site/mcp-project-pilot.sequenz.io.conf`](../deploy/proxy-site/mcp-project-pilot.sequenz.io.conf)
 next to the proxy's `compose.yml` and mount it as a **single file**:

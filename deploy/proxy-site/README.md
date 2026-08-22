@@ -32,8 +32,17 @@ dig +short mcp-project-pilot.sequenz.io
 ```
 
 **2. `ALLOWED_DOMAINS`.** The regex in the proxy's `compose.yml` decides which
-hostnames may get a certificate. It must match `mcp-project-pilot.sequenz.io`; a pattern that
-already covers one level of subdomains (`^([a-z0-9-]+\.)?sequenz\.io$`) does.
+hostnames may order a certificate. It is matched unanchored, so a pattern naming
+the bare domain already covers every subdomain — including a hostile
+`sequenz.io.attacker.com`. Anchor and escape it:
+
+```yaml
+ALLOWED_DOMAINS: '^([a-z0-9-]+\.)?sequenz\.io$'
+```
+
+Single-quote it (YAML would read `\.` as an escape); the trailing `$` survives
+Compose interpolation because nothing follows it. This variable is substituted at
+container start, so it needs `docker compose up -d`, not a config reload.
 
 **3. Mount this file.** In the proxy's `compose.yml`, as a **single file**, not a
 directory — the entrypoint writes the generated `SITES` blocks into that same
