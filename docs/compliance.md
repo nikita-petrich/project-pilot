@@ -54,8 +54,8 @@ These come from `SPEC.md` section 5 and `blueprint/context/coding-standards.md`.
    pagination usually stops earlier), and detail pages only for **new** listings. A
    random 2 to 5 second delay separates requests; every request has a timeout.
 5. **Back off on blocking.** An HTTP 403 or a captcha indicator aborts the run,
-   sets `source_state.cooldown_until = now + 6h`, and sends a single Slack
-   warning. No retry hammering; 403 is never retried (Feature 9).
+   sets `source_state.cooldown_until = now + 6h`, and opens a single operator
+   warning session. No retry hammering; 403 is never retried (Feature 9).
 6. **Secrets via env only.** No secrets in the repo; `.env.example` is maintained.
 
 ## STOP conditions (halt, document, ask Nik)

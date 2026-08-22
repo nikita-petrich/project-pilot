@@ -1,4 +1,4 @@
-"""MCP server: tool payloads, tool registration, and the bearer guard."""
+"""MCP server: tool payloads, tool registration, and the token guard."""
 
 from datetime import UTC, datetime
 
@@ -17,11 +17,11 @@ from project_pilot.mcp_server import (
     _check_payload,
     _draft_payload,
     _listing_summary,
-    bearer_guard,
     build_mcp,
     enrich_company,
     get_listing,
     list_matches,
+    token_guard,
 )
 from project_pilot.models import (
     ApplicationStatus,
@@ -186,8 +186,8 @@ async def _ok_app(scope: Scope, receive: Receive, send: Send) -> None:
     await send({"type": "http.response.body", "body": b"ok"})
 
 
-async def test_bearer_guard_rejects_missing_and_wrong_token() -> None:
-    app = bearer_guard(_ok_app, "s3cret")
+async def test_token_guard_rejects_missing_and_wrong_token() -> None:
+    app = token_guard(_ok_app, "s3cret")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://mcp") as client:
         assert (await client.get("/mcp")).status_code == 401
@@ -196,3 +196,23 @@ async def test_bearer_guard_rejects_missing_and_wrong_token() -> None:
         ok = await client.get("/mcp", headers={"Authorization": "Bearer s3cret"})
         assert ok.status_code == 200
         assert ok.text == "ok"
+
+
+async def test_token_guard_accepts_the_token_as_a_url_prefix() -> None:
+    """The connector route: a client that can only be given a URL, no headers."""
+    seen: list[str] = []
+
+    async def _echo_path(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append(str(scope["path"]))
+        await _ok_app(scope, receive, send)
+
+    app = token_guard(_echo_path, "s3cret")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://mcp") as client:
+        assert (await client.get("/t/s3cret/mcp")).status_code == 200
+        assert (await client.get("/t/s3cret")).status_code == 200
+        assert (await client.get("/t/nope/mcp")).status_code == 401
+        assert (await client.get("/t/")).status_code == 401
+
+    # The wrapped app sees the path it would have seen with an Authorization header.
+    assert seen == ["/mcp", "/"]

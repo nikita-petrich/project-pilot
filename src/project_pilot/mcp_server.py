@@ -12,6 +12,7 @@ the underlying ``ApplicationService.send`` keeps its status guard against double
 sends either way.
 """
 
+import hmac
 import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
@@ -271,8 +272,44 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     return mcp
 
 
-def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
-    """Minimal ASGI middleware: every HTTP request needs `Authorization: Bearer <token>`."""
+def _header_token(scope: Scope) -> bytes:
+    headers = scope.get("headers")
+    if not isinstance(headers, list):
+        return b""
+    for name, value in headers:
+        if bytes(name).lower() == b"authorization":
+            return bytes(value)
+    return b""
+
+
+def _strip_path_token(scope: Scope, token: str) -> Scope | None:
+    """A copy of ``scope`` with a valid ``/t/<token>`` prefix removed, else None.
+
+    The prefix is the second accepted way to present the token, for clients that
+    can only be handed a URL and no headers (the Claude custom connector is the
+    one that matters). The rest of the app never sees it: the returned scope's
+    path is what it would have been with a header.
+    """
+    path = scope.get("path")
+    if not isinstance(path, str):
+        return None
+    segments = path.split("/", 3)
+    if len(segments) < 3 or segments[1] != "t":
+        return None
+    if not hmac.compare_digest(segments[2], token):
+        return None
+    rest = f"/{segments[3]}" if len(segments) == 4 else "/"
+    return {**scope, "path": rest, "raw_path": rest.encode()}
+
+
+def token_guard(app: AsgiApp, token: str) -> AsgiApp:
+    """Minimal ASGI middleware: every HTTP request must carry the MCP token.
+
+    Either as ``Authorization: Bearer <token>`` (Claude Code, n8n, anything that
+    can set headers) or as a ``/t/<token>/…`` URL prefix. The prefix puts a secret
+    in the URL, which is why it is only ever handed out over HTTPS and why the MCP
+    server keeps no access log of its own.
+    """
 
     expected = f"Bearer {token}".encode()
 
@@ -280,24 +317,21 @@ def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
         if scope.get("type") != "http":
             await app(scope, receive, send)
             return
-        headers = scope.get("headers")
-        provided = b""
-        if isinstance(headers, list):
-            for name, value in headers:
-                if bytes(name).lower() == b"authorization":
-                    provided = bytes(value)
-                    break
-        if provided != expected:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain")],
-                }
-            )
-            await send({"type": "http.response.body", "body": b"unauthorized"})
+        if hmac.compare_digest(_header_token(scope), expected):
+            await app(scope, receive, send)
             return
-        await app(scope, receive, send)
+        stripped = _strip_path_token(scope, token)
+        if stripped is not None:
+            await app(stripped, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"unauthorized"})
 
     return guarded
 
@@ -305,4 +339,4 @@ def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
 def build_app(deps: McpDeps, *, token: str) -> AsgiApp:
     """The served ASGI app: FastMCP's Streamable-HTTP app behind the token guard."""
     inner: AsgiApp = build_mcp(deps).http_app()
-    return bearer_guard(inner, token)
+    return token_guard(inner, token)

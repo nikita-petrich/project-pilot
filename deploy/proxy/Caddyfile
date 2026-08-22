@@ -1,0 +1,18 @@
+# Public entry point for project-pilot's MCP server.
+#
+# Caddy terminates TLS (certificate from Let's Encrypt on the first request,
+# renewed on its own) and forwards to the `mcp` container over the shared `edge`
+# network. It carries no secret of its own: the MCP server checks the token
+# itself, either from the Authorization header or from a `/t/<token>/…` URL
+# prefix, so this file stays safe to read and to version.
+#
+# Access logging is deliberately left off (Caddy's default), because the URL of a
+# connector request contains the token.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$MCP_DOMAIN} {
+	reverse_proxy project-pilot-mcp:{$MCP_PORT:8765}
+}

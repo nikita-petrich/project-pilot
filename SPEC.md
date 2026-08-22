@@ -5,11 +5,15 @@
 **Status:** v3.1 (final). Domain cornerstones: Telegram-only, no Apify, 15-minute interval, lossless persistence of all listings, `evaluations` with a stored reason for match **and** no-match, LLM matching against Nik's profile, watermark/freshness semantics.
 
 > **Addendum (2026-08):** the shipped system has since moved past this spec in
-> three places (see `blueprint/build-plan.md` 16–18): notification is **Slack**
-> (Block Kit + Socket Mode bot), not Telegram — every Telegram reference below is
-> historical; an application-drafting flow (LLM draft, reviewed SMTP send,
-> `applications` table) and opt-in contact enrichment (`contact_leads` table)
-> were added. The watermark/freshness/lossless rules in §3–5 remain binding.
+> three places (see `blueprint/build-plan.md` 16–23). Notification is neither
+> Telegram nor Slack any more: every match fires the **Claude `match-thread`
+> routine**, which opens one Claude session per match and pushes it through the
+> Claude app, and an **MCP server** exposes every function to Claude chats and
+> n8n — so every Telegram reference below, and the Slack addendum that replaced
+> it, are historical (`docs/claude-setup.md` is the live wiring). An
+> application-drafting flow (LLM draft, reviewed SMTP send, `applications` table)
+> and opt-in contact enrichment (`contact_leads` table) were added. The
+> watermark/freshness/lossless rules in §3–5 remain binding.
 
 **Why Python (context for /overview and all feature specs):** Nik positions himself as an AI engineer; Python is on his CV and LinkedIn tagline, and the hands-on Python experience is to be built verifiably with this project. project-pilot is deliberately also a learning vehicle: the code should demonstrate idiomatic, modern Python (Pydantic v2, SQLAlchemy 2.0 typed, asyncio, structured outputs) — quality over speed.
 

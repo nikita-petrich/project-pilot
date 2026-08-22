@@ -85,14 +85,24 @@ docker compose version              # must work without sudo
 
 ### Networks
 
-The `app` container joins the shared external network `edge` (alias
-`project-pilot`) so it sits alongside the rest of the stack behind the proxy. It
-serves nothing over it: there is no HTTP server, and Slack runs over an outbound
-Socket Mode connection, so no proxy route or domain is involved.
+Three services, two networks, no published ports:
 
-`postgres` stays on the stack's private `default` network. Nothing outside this
-stack should reach the database, and a second stack publishing its own `postgres`
-service on `edge` would collide on that network's DNS.
+| Service | Networks | Reachable as |
+|---|---|---|
+| `app` | `default`, `edge` | nothing — the worker only makes outbound calls |
+| `mcp` | `default`, `edge` | `project-pilot-mcp:8765`, for the reverse proxy |
+| `postgres` | `default` only | nothing outside the stack |
+
+`edge` is the shared external network the reverse proxy lives on. `app` joins it
+only to sit alongside the rest of the stack; the one thing actually served over it
+is the MCP server, and even that publishes no host port — the proxy owns the
+public hostname and the certificate. Setting that up is
+[`claude-setup.md`](claude-setup.md) §2, and the repo ships a ready proxy stack in
+[`deploy/proxy/`](../deploy/proxy).
+
+`postgres` stays off `edge` deliberately: nothing outside this stack should reach
+the database, and a second stack publishing its own `postgres` service there would
+collide on that network's DNS.
 
 If `edge` does not exist yet, the deploy creates it rather than failing.
 
@@ -132,12 +142,19 @@ Required — the container dies at boot without them:
 | `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
 | `LLM_MODEL` | model name, e.g. a small, cheap one |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
+| `CLAUDE_ROUTINE_FIRE_URL` | the match-thread routine's fire endpoint — THE notification channel |
+| `CLAUDE_ROUTINE_TOKEN` | that routine's bearer token (`sk-ant-oat01-…`) |
+| `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
+
+The last three come from [`claude-setup.md`](claude-setup.md). The deploy fails at
+the *Install .env* step if any of them is missing, before the server is touched:
+without a notification channel the worker would find matches it cannot deliver, so
+refusing to deploy beats a crash loop over SSH.
 
 Strongly recommended — it starts without them, but not usefully:
 
 | Key | Value |
 |---|---|
-| `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | without these there are no alerts at all |
 | `CONTACT_MAIL` | goes into the scraper's user agent; a compliance promise, so use a real address |
 | `POSTGRES_PASSWORD` | otherwise the default `pilot`. Set a real one **before the first deploy**: it is baked into the `pgdata` volume on creation, and changing it later means recreating the volume |
 
