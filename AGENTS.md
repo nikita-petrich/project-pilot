@@ -45,6 +45,23 @@ Unused adapters can be removed. Codex-only projects can delete `CLAUDE.md` and
 When changing shared workflow behavior, update the matching skill in both
 adapter folders so Codex and Claude Code stay aligned.
 
+## Domain-Skills
+
+Beyond the workflow skills below, two skills carry project-pilot's own judgment
+into any Claude surface (Claude Code today, the match-thread routine of the target
+architecture next):
+
+- `/check-project` - judge one project listing against Nik's profile, exactly as
+  the scan pipeline does (stage-2 rules, then the verdict, then the no-go
+  post-check on `missing_requirements`).
+- `/write-application` - draft subject, body and LinkedIn message for a listing.
+  Drafts only; sending stays with the human, by design.
+
+Both are **thin wrappers**: they read the canonical sources at runtime
+(`evaluation/prompts/match.v6.md`, `application/prompts/application.md`,
+`profile/`) instead of copying their rules, so a skill and the pipeline cannot
+drift apart. Change a judgment rule in the prompt file, not in the skill.
+
 Core skills:
 
 - `onboard` - tune commands, standards, visibility, ignore rules, and tool adapters after overlaying the Blueprint onto a freshly scaffolded or early project
