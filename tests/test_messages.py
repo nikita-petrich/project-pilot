@@ -41,3 +41,9 @@ def test_match_card_states_a_missing_company_instead_of_dropping_the_line() -> N
     assert "📍 Location not stated" in card
     # No terms, no fit reasons — those lines are simply absent.
     assert "📅" not in card and "✅" not in card
+
+
+def test_match_card_drops_the_link_line_without_a_url() -> None:
+    """A listing checked from pasted text has no link — an empty 🔗 is noise."""
+    card = render_match_card(MatchMessage(title="Rolle", url="", score=70))
+    assert "🔗" not in card

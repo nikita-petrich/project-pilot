@@ -21,9 +21,17 @@ On <https://claude.ai/code/routines> → **New routine**:
 - **Name:** `match-thread`
 - **Repository:** `nikita-petrich/project-pilot`, branch `main` — the session needs
   it for the `/check-project` and `/write-application` skills.
-- **Connectors:** remove all of them. A connector that can write (Gmail above all)
-  turns a session that reads untrusted listing text into one that can act on it.
-  Sending stays behind the MCP tool and an explicit confirmation, by design.
+- **Connectors:** keep **only** `mcp-project-pilot`; remove every other one. The
+  routine form includes all of your connectors by default, and a routine run has
+  no approval prompts — Claude may call every tool of an included connector,
+  writes included, without asking. Gmail in that list would turn a session that
+  reads untrusted listing text into one that can act on it. project-pilot is the
+  connector it actually needs: without it the session falls back to the repo's
+  skills and says `⚠️ ohne MCP`, which is honest but cannot draft anything
+  sendable.
+
+  Connector traffic goes through Anthropic's servers, so the environment's
+  **Allowed domains** needs no entry for the MCP host.
 - **Notifications:** switch push on. That toggle *is* the alerting.
 - **Prompt:**
 
@@ -98,7 +106,19 @@ uv run project-pilot test-match          # rules + LLM + a real routine fire
 ```
 
 A `200` with a session URL, a push on the phone within a couple of minutes, and a
-chattable session is the whole acceptance test.
+chattable session is the whole acceptance test. If the session opens with
+`⚠️ ohne MCP`, the connector is not on the routine — edit it and add
+`mcp-project-pilot` under **Connectors**.
+
+**What the tool-permission toggles do and do not cover.** Setting
+`send_application` to *ask every time* in the Claude app gates it in your own
+chats. It does not gate the autonomous part of a routine run, which has no
+approval prompts at all — there the rule in the prompt is the only guard. The
+platform helps: the fired text arrives wrapped in a `<routine-fire-payload>`
+block labeled as untrusted, so a listing cannot pose as an instruction. The
+residual risk is a listing that talks the model through draft → set_recipient →
+send in one turn, against an explicit rule. Small, but not zero; it is the
+reason the prompt states the send rule in full rather than in passing.
 
 ---
 

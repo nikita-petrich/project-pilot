@@ -239,6 +239,6 @@ def render_match_card(message: MatchMessage) -> str:
         ),
         _labeled_list("✅ Fits", message.reasons, limit=_CARD_REASONS),
         _labeled_list("⚠️ Risks", message.risk_flags, limit=_CARD_RISKS),
-        f"🔗 {message.url}",
+        f"🔗 {message.url}" if message.url else None,
     ]
     return "\n".join(line for line in lines if line)
