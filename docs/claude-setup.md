@@ -32,7 +32,11 @@ On <https://claude.ai/code/routines> → **New routine**:
 
   Connector traffic goes through Anthropic's servers, so the environment's
   **Allowed domains** needs no entry for the MCP host.
-- **Notifications:** switch push on. That toggle *is* the alerting.
+- **Notifications:** switch push on under the **Notifications** tab. That toggle
+  *is* the alerting — and it only counts from the next run, so save before firing.
+  The summary Claude writes is what reaches the phone, and the app sends it only
+  when Claude judged the run worth reporting; the prompt's closing step therefore
+  states outright that every run is.
 - **Prompt:**
 
 ```
@@ -61,7 +65,12 @@ Schritt 1 — Einstieg (dieser Turn):
      "⚠️ ohne MCP" als allererste Zeile über die Karte.
 4. Falls dir ein Tool zum Umbenennen dieser Session zur Verfügung steht,
    benenne sie um in "⭐ <Score> · <Rolle> · <Firma>". Sonst überspringen.
-5. Beende deinen Turn und warte. Nicht vorauseilend bewerben.
+5. Schließe mit genau einer Zeile ab, die als Benachrichtigung taugt:
+   "⭐ <Score> · <Rolle> · <Firma> — <ein Satz, warum ich hinschauen soll>".
+   Jeder Run ist meldenswert: es ist immer ein neues Projekt-Match, auf das
+   ich reagieren soll. Diese Zeile ist das, was ich auf dem Handy sehe, also
+   schreib sie auch dann, wenn du sonst nichts Besonderes zu melden hättest.
+6. Beende danach deinen Turn und warte. Nicht vorauseilend bewerben.
 
 Danach behandeln wir das Projekt hier im Chat. Regeln dafür:
 
