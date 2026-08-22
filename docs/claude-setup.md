@@ -212,7 +212,7 @@ project_pilot_enrich_company      contact data from the company's own website
 ```
 
 n8n uses the same server: an **MCP Client** node with the header form of the URL
-gets the identical nine tools, so a workflow can run `project_pilot_check_text`
+gets the identical ten tools, so a workflow can run `project_pilot_check_text`
 over incoming recruiter mails without duplicating any judgment.
 
 ---
@@ -221,11 +221,13 @@ over incoming recruiter mails without duplicating any judgment.
 
 | Symptom | Cause |
 |---|---|
-| deploy fails at *Install .env from the prod environment* | one of `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`, `MCP_TOKEN` is unset — the server is untouched, the old stack keeps running |
+| deploy fails at *Install .env from the prod environment* | one of `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`, `MCP_TOKEN`, `PROXY_NETWORK` is unset — the server is untouched, the old stack keeps running |
 | fire returns `400` | the routine is paused, or the beta header was dropped |
 | fire returns `401` | the token was regenerated in the routine UI and the secret still holds the old one |
 | matches evaluated, no session appears | check `docker compose logs app` for `routine fire failed`; the listing stays unnotified and is retried next run |
 | connector shows no tools | the proxy buffers, or the URL is missing the `/mcp` suffix |
+| `502 Bad Gateway` from the proxy | the `mcp` container is not on the proxy's network — check `PROXY_NETWORK` against `docker network ls` |
+| browser warns about a self-signed certificate | `ALLOWED_DOMAINS` in the proxy does not match `mcp.sequenz.io` |
 | every listing scores `llm_error` | not a Claude problem — `LLM_MODEL` or `OPENAI_API_KEY`, see [`operations.md`](operations.md) |
 
 A failed fire never fails a run: the listing keeps `notified_at` empty and the
