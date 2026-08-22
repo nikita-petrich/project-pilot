@@ -1,6 +1,6 @@
 """The transport-neutral match card: what the overview looks like."""
 
-from project_pilot.notification.messages import MatchMessage, render_match_card
+from project_pilot.notification.messages import MatchMessage, headline, render_match_card
 
 
 def test_match_card_renders_the_scannable_overview() -> None:
@@ -47,3 +47,13 @@ def test_match_card_drops_the_link_line_without_a_url() -> None:
     """A listing checked from pasted text has no link — an empty 🔗 is noise."""
     card = render_match_card(MatchMessage(title="Rolle", url="", score=70))
     assert "🔗" not in card
+
+
+def test_headline_names_score_role_and_company() -> None:
+    """This line becomes the session's name, so it carries the identifying three."""
+    message = MatchMessage(
+        title="Senior Backend Entwickler", url="https://x/1", score=87, company="ACME GmbH"
+    )
+    assert headline(message) == "⭐ 87 · Senior Backend Entwickler · ACME GmbH"
+    # A listing that names no company still yields a usable name.
+    assert headline(MatchMessage(title="Rolle", url="", score=61)) == "⭐ 61 · Rolle"

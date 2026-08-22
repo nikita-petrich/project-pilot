@@ -23,7 +23,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from project_pilot.notification.messages import MatchMessage, render_match_card
+from project_pilot.notification.messages import MatchMessage, headline, render_match_card
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,11 @@ def fire_text(message: MatchMessage) -> str:
     the overview that reaches the feed and the push looks the same every time.
     The routine prompt repeats it verbatim and adds its own reading below it.
     """
-    parts = [f"Listing-ID: {message.listing_id}"] if message.listing_id is not None else []
+    # The opening line is what surfaces as the session's name in the feed, so it
+    # leads with the three things that identify a match at a glance.
+    parts = [headline(message)]
+    if message.listing_id is not None:
+        parts.append(f"Listing-ID: {message.listing_id}")
     parts.append(render_match_card(message))
 
     details = [

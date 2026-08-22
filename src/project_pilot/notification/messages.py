@@ -216,6 +216,18 @@ def _labeled_list(label: str, values: Sequence[str], *, limit: int) -> str | Non
     return f"{label}: {', '.join(picked)}" if picked else None
 
 
+def headline(message: MatchMessage) -> str:
+    """One line naming the match: score, role, company.
+
+    Doubles as the session's name in the feed, so it stays short and puts the
+    score first — that is what decides whether a listing is worth opening.
+    """
+    parts = [f"⭐ {message.score}", message.title]
+    if message.company:
+        parts.append(message.company)
+    return " · ".join(parts)
+
+
 def render_match_card(message: MatchMessage) -> str:
     """The at-a-glance overview of one match: headline, facts, fit, link.
 

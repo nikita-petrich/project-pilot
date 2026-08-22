@@ -37,11 +37,12 @@ def _client() -> ClaudeRoutineFire:
 def test_fire_text_opens_with_the_match_card() -> None:
     text = fire_text(_message())
     lines = text.splitlines()
-    # The card is the overview that reaches the feed and the push, so it leads.
-    assert lines[0] == "Listing-ID: 42"
-    assert lines[2] == "🎯 Senior Python Developer  ·  87/100"
-    assert lines[3] == "🏢 ACME GmbH"
-    assert "📍 Remote (DE)" in lines[4]
+    # The headline names the session in the feed; the card follows it.
+    assert lines[0] == "⭐ 87 · Senior Python Developer · ACME GmbH"
+    assert lines[2] == "Listing-ID: 42"
+    assert lines[4] == "🎯 Senior Python Developer  ·  87/100"
+    assert lines[5] == "🏢 ACME GmbH"
+    assert "📍 Remote (DE)" in lines[6]
     assert "✅ Fits: Stack passt, Remote" in text
     assert "⚠️ Risks: kein Budget genannt" in text
     assert "🔗 https://example.com/p/1" in text
@@ -51,7 +52,7 @@ def test_fire_text_opens_with_the_match_card() -> None:
 def test_fire_text_carries_the_listing_id_for_the_mcp_tools() -> None:
     # The thread needs the id to call get_listing/draft_application; a listing that
     # is not stored (a manual check) has none, and must not fake one.
-    assert "Listing-ID: 42" in fire_text(_message())
+    assert "\nListing-ID: 42\n" in fire_text(_message())
     assert "Listing-ID" not in fire_text(_message(listing_id=None))
 
 
