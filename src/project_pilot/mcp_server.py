@@ -12,9 +12,11 @@ the underlying ``ApplicationService.send`` keeps its status guard against double
 sends either way.
 """
 
+import hmac
 import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from fastmcp import FastMCP
@@ -23,9 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.service import ApplicationService, DraftView
 from project_pilot.db import session_scope
 from project_pilot.enrichment.schemas import ContactEnrichment
-from project_pilot.errors import ApplicationStateError
+from project_pilot.errors import ApplicationStateError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
-from project_pilot.models import Listing
+from project_pilot.ingestion.manual import build_manual_listing
+from project_pilot.models import Listing, ListingOrigin
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -71,6 +74,7 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
         "location": listing.location,
         "remote_status": listing.remote_status.value,
         "status": listing.status.value,
+        "origin": listing.origin.value,
         "first_seen_at": listing.first_seen_at.isoformat(),
         "notified_at": listing.notified_at.isoformat() if listing.notified_at else None,
         "claude_session_url": listing.claude_session_url,
@@ -156,6 +160,51 @@ async def get_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
         return detail
 
 
+async def ingest_listing(
+    deps: McpDeps,
+    text: str,
+    origin: str,
+    title: str | None = None,
+    url: str | None = None,
+    company: str | None = None,
+    note: str | None = None,
+) -> dict[str, object]:
+    """Store a listing that did not come from the scanner, with its provenance."""
+    if not text.strip():
+        raise ApplicationStateError("Cannot ingest an empty listing text")
+    try:
+        channel = ListingOrigin(origin)
+    except ValueError as err:
+        allowed = ", ".join(member.value for member in ListingOrigin)
+        raise ApplicationStateError(f"Unknown origin {origin!r}; use one of: {allowed}") from err
+    if channel is ListingOrigin.SCAN:
+        raise ApplicationStateError("origin 'scan' belongs to the scanner; name the real channel")
+
+    listing = build_manual_listing(
+        text=text,
+        origin=channel,
+        now=datetime.now(UTC),
+        title=title,
+        url=url,
+        company=company,
+        note=note,
+    )
+    async with session_scope(deps.session_factory) as session:
+        repo = Repository(session)
+        # upsert_listing dedupes on url_hash, so re-ingesting the same mail (or a
+        # link the scanner already stored) touches that row instead of forking one.
+        stored, created = await repo.upsert_listing(listing)
+        # Re-read with the evaluations eager-loaded: an already-known listing comes
+        # back from a plain select, and summarizing it would lazy-load under async.
+        full = assert_defined(
+            await repo.get_listing_with_evaluations(assert_defined(stored.id, "listing id")),
+            "ingested listing",
+        )
+        payload = _listing_summary(full)
+        payload["already_known"] = not created
+        return payload
+
+
 async def check_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
     return _check_payload(await deps.check_service.check_stored(listing_id))
 
@@ -222,6 +271,29 @@ def build_mcp(deps: McpDeps) -> FastMCP:
         return await get_listing(deps, listing_id)
 
     @mcp.tool
+    async def project_pilot_ingest_listing(
+        text: str,
+        origin: str,
+        title: str | None = None,
+        url: str | None = None,
+        company: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        """Store a project listing that did not come from the scanner, and return
+        its listing_id. Call this FIRST for anything the user brings in by hand -
+        a pasted description, a forwarded recruiter mail, a PDF, a screenshot you
+        transcribed, a link - before checking or drafting, so the listing is in
+        the database and the whole flow (check, draft, send, reporting) works on
+        it. `origin` records how it arrived and must be one of: chat, mail, pdf,
+        image, url, api. Pass the listing text itself as `text` (transcribe an
+        image first); `title`, `url`, `company` and `note` when known. Ingesting
+        the same text or URL twice returns the existing listing rather than a
+        duplicate (`already_known: true`)."""
+        return await ingest_listing(
+            deps, text, origin, title=title, url=url, company=company, note=note
+        )
+
+    @mcp.tool
     async def project_pilot_check_listing(listing_id: int) -> dict[str, object]:
         """Re-run the match check (hard rules + LLM verdict) for a stored
         listing. Read-only; persists nothing."""
@@ -271,8 +343,44 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     return mcp
 
 
-def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
-    """Minimal ASGI middleware: every HTTP request needs `Authorization: Bearer <token>`."""
+def _header_token(scope: Scope) -> bytes:
+    headers = scope.get("headers")
+    if not isinstance(headers, list):
+        return b""
+    for name, value in headers:
+        if bytes(name).lower() == b"authorization":
+            return bytes(value)
+    return b""
+
+
+def _strip_path_token(scope: Scope, token: str) -> Scope | None:
+    """A copy of ``scope`` with a valid ``/t/<token>`` prefix removed, else None.
+
+    The prefix is the second accepted way to present the token, for clients that
+    can only be handed a URL and no headers (the Claude custom connector is the
+    one that matters). The rest of the app never sees it: the returned scope's
+    path is what it would have been with a header.
+    """
+    path = scope.get("path")
+    if not isinstance(path, str):
+        return None
+    segments = path.split("/", 3)
+    if len(segments) < 3 or segments[1] != "t":
+        return None
+    if not hmac.compare_digest(segments[2], token):
+        return None
+    rest = f"/{segments[3]}" if len(segments) == 4 else "/"
+    return {**scope, "path": rest, "raw_path": rest.encode()}
+
+
+def token_guard(app: AsgiApp, token: str) -> AsgiApp:
+    """Minimal ASGI middleware: every HTTP request must carry the MCP token.
+
+    Either as ``Authorization: Bearer <token>`` (Claude Code, n8n, anything that
+    can set headers) or as a ``/t/<token>/…`` URL prefix. The prefix puts a secret
+    in the URL, which is why it is only ever handed out over HTTPS and why the MCP
+    server keeps no access log of its own.
+    """
 
     expected = f"Bearer {token}".encode()
 
@@ -280,24 +388,21 @@ def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
         if scope.get("type") != "http":
             await app(scope, receive, send)
             return
-        headers = scope.get("headers")
-        provided = b""
-        if isinstance(headers, list):
-            for name, value in headers:
-                if bytes(name).lower() == b"authorization":
-                    provided = bytes(value)
-                    break
-        if provided != expected:
-            await send(
-                {
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain")],
-                }
-            )
-            await send({"type": "http.response.body", "body": b"unauthorized"})
+        if hmac.compare_digest(_header_token(scope), expected):
+            await app(scope, receive, send)
             return
-        await app(scope, receive, send)
+        stripped = _strip_path_token(scope, token)
+        if stripped is not None:
+            await app(stripped, receive, send)
+            return
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"text/plain")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b"unauthorized"})
 
     return guarded
 
@@ -305,4 +410,4 @@ def bearer_guard(app: AsgiApp, token: str) -> AsgiApp:
 def build_app(deps: McpDeps, *, token: str) -> AsgiApp:
     """The served ASGI app: FastMCP's Streamable-HTTP app behind the token guard."""
     inner: AsgiApp = build_mcp(deps).http_app()
-    return bearer_guard(inner, token)
+    return token_guard(inner, token)

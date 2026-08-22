@@ -1,4 +1,4 @@
-"""MCP server: tool payloads, tool registration, and the bearer guard."""
+"""MCP server: tool payloads, tool registration, and the token guard."""
 
 from datetime import UTC, datetime
 
@@ -9,6 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.service import ApplicationService, DraftView
 from project_pilot.errors import ApplicationStateError
 from project_pilot.evaluation.check import CheckResult, CheckService
+from project_pilot.ingestion.client import BASE_URL
+from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
 from project_pilot.mcp_server import (
     McpDeps,
     Receive,
@@ -17,27 +19,31 @@ from project_pilot.mcp_server import (
     _check_payload,
     _draft_payload,
     _listing_summary,
-    bearer_guard,
     build_mcp,
     enrich_company,
     get_listing,
+    ingest_listing,
     list_matches,
+    token_guard,
 )
 from project_pilot.models import (
     ApplicationStatus,
     Evaluation,
     EvaluationStage,
     Listing,
+    ListingOrigin,
     ListingStatus,
     RemoteStatus,
     Verdict,
 )
+from project_pilot.repository import Repository
 
 NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
 
 EXPECTED_TOOLS = {
     "project_pilot_list_matches",
     "project_pilot_get_listing",
+    "project_pilot_ingest_listing",
     "project_pilot_check_listing",
     "project_pilot_check_text",
     "project_pilot_draft_application",
@@ -57,6 +63,7 @@ def _listing(url: str = "https://example.com/p/1", score: int = 80) -> Listing:
         description="LLM-Pipelines mit FastAPI.",
         status=ListingStatus.EVALUATED,
         remote_status=RemoteStatus.REMOTE,
+        origin=ListingOrigin.SCAN,
         first_seen_at=NOW,
         last_seen_at=NOW,
         raw={"company": "ACME GmbH"},
@@ -186,8 +193,8 @@ async def _ok_app(scope: Scope, receive: Receive, send: Send) -> None:
     await send({"type": "http.response.body", "body": b"ok"})
 
 
-async def test_bearer_guard_rejects_missing_and_wrong_token() -> None:
-    app = bearer_guard(_ok_app, "s3cret")
+async def test_token_guard_rejects_missing_and_wrong_token() -> None:
+    app = token_guard(_ok_app, "s3cret")
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://mcp") as client:
         assert (await client.get("/mcp")).status_code == 401
@@ -196,3 +203,82 @@ async def test_bearer_guard_rejects_missing_and_wrong_token() -> None:
         ok = await client.get("/mcp", headers={"Authorization": "Bearer s3cret"})
         assert ok.status_code == 200
         assert ok.text == "ok"
+
+
+async def test_token_guard_accepts_the_token_as_a_url_prefix() -> None:
+    """The connector route: a client that can only be given a URL, no headers."""
+    seen: list[str] = []
+
+    async def _echo_path(scope: Scope, receive: Receive, send: Send) -> None:
+        seen.append(str(scope["path"]))
+        await _ok_app(scope, receive, send)
+
+    app = token_guard(_echo_path, "s3cret")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://mcp") as client:
+        assert (await client.get("/t/s3cret/mcp")).status_code == 200
+        assert (await client.get("/t/s3cret")).status_code == 200
+        assert (await client.get("/t/nope/mcp")).status_code == 401
+        assert (await client.get("/t/")).status_code == 401
+
+    # The wrapped app sees the path it would have seen with an Authorization header.
+    assert seen == ["/mcp", "/"]
+
+
+async def test_ingest_listing_stores_provenance_and_dedupes(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    deps = _deps(session_factory)
+    text = "Position: Senior Python Developer\n\nRAG-Pipelines mit FastAPI, remote."
+
+    first = await ingest_listing(deps, text, "mail", note="Recruiter-Mail von ACME")
+    assert first["already_known"] is False
+    assert first["origin"] == "mail"
+    assert first["title"] == "Senior Python Developer"
+    listing_id = first["listing_id"]
+
+    # The same mail pasted again is the same listing, not a second row.
+    again = await ingest_listing(deps, f"  {text}  ", "chat")
+    assert again["already_known"] is True
+    assert again["listing_id"] == listing_id
+
+    async with session_factory() as session:
+        stored = await Repository(session).get_listing_with_evaluations(int(str(listing_id)))
+    assert stored is not None
+    assert stored.origin is ListingOrigin.MAIL
+    ingest = stored.raw["ingest"]
+    assert isinstance(ingest, dict)
+    assert ingest["origin"] == "mail" and ingest["note"] == "Recruiter-Mail von ACME"
+
+
+async def test_ingest_listing_with_a_url_shares_the_scanner_key(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A pasted link and the scanned page must be one row, not two."""
+    url = "https://www.freelancermap.de/projekt/beispiel-12345"
+    async with session_factory() as session:
+        scanned = _listing(url=url)
+        scanned.url_hash = compute_url_hash(canonicalize_url(url, BASE_URL))
+        scanned.external_url = canonicalize_url(url, BASE_URL)
+        session.add(scanned)
+        await session.commit()
+        scanned_id = scanned.id
+
+    result = await ingest_listing(
+        _deps(session_factory), "Irgendein anderer Text.", "url", url=f"{url}?utm_source=x"
+    )
+    assert result["already_known"] is True
+    assert result["listing_id"] == scanned_id
+
+
+async def test_ingest_listing_rejects_empty_text_and_bad_origin(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    deps = _deps(session_factory)
+    with pytest.raises(ApplicationStateError, match="empty"):
+        await ingest_listing(deps, "   ", "chat")
+    with pytest.raises(ApplicationStateError, match="Unknown origin"):
+        await ingest_listing(deps, "Text", "telepathy")
+    # `scan` is the scanner's own label; an ingest must name the real channel.
+    with pytest.raises(ApplicationStateError, match="scanner"):
+        await ingest_listing(deps, "Text", "scan")

@@ -1,7 +1,9 @@
 # Operations (server deployment)
 
-project-pilot runs as a long-lived Docker container next to its own PostgreSQL. No
-ingress or domain is needed — Slack Socket Mode needs no inbound port.
+project-pilot runs as two long-lived Docker containers (the worker and the MCP
+server) next to its own PostgreSQL. Only the MCP server needs a domain, and it is
+published by the reverse proxy rather than by a host port — see
+[`claude-setup.md`](claude-setup.md).
 
 How the container gets onto the server is [`deployment.md`](deployment.md) (GitHub
 Actions builds, the server pulls). This page is what to do once it runs.
@@ -13,8 +15,8 @@ Actions builds, the server pulls). This page is what to do once it runs.
   and baked into the image, so editing them means commit + deploy (or, when building
   on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
-  `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_CHANNEL`, `OPENAI_API_KEY`,
-  `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"), and optionally
+  `OPENAI_API_KEY`, `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"),
+  `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`, `MCP_TOKEN`, and optionally
   `POSTGRES_PASSWORD`. Do not set `DATABASE_URL` in `.env`; compose sets it to reach
   the postgres service.
 
@@ -35,8 +37,11 @@ healthcheck has a baseline) and then every `SCAN_INTERVAL_MIN` minutes.
 - **app**: multi-stage build on `python:3.13-slim`, dependencies installed with
   `uv`, runs as the non-root user `pilot`. Entrypoint applies migrations then execs
   the CLI (default `daemon`).
+- **mcp**: the same image with `command: ["mcp"]`, serving the tools over
+  Streamable HTTP behind its bearer token. No host port; the reverse proxy reaches
+  it as `project-pilot-mcp:8765` on the `edge` network.
 - **postgres**: `postgres:16` with a named volume `pgdata` for persistence and a
-  `pg_isready` healthcheck. The app waits for postgres to be healthy.
+  `pg_isready` healthcheck. Both app containers wait for postgres to be healthy.
 
 ## Healthcheck
 
@@ -50,7 +55,8 @@ successful scan). `start_period` gives the first scan time to complete.
 A broken LLM is the one failure the healthcheck cannot see: scraping keeps working,
 listings keep being stored, every run is recorded as a success — and every listing is
 scored with the `llm_error` fallback, so no match alert can fire. The worker therefore
-reports stage 3's health to Slack itself:
+reports stage 3's health over the same channel as a match — a Claude session titled
+as an operator warning:
 
 - **On start**, the daemon makes one minimal call to `LLM_MODEL`. A model name that
   does not exist, a rejected `OPENAI_API_KEY` or an account out of credit is announced
@@ -68,8 +74,9 @@ identical call would fail identically, the same rule the scraper applies to a 40
 ```sh
 docker compose exec app project-pilot stats         # reporting summary
 docker compose exec app project-pilot run-once      # one scan now (exit != 0 on failure)
-docker compose exec app project-pilot test-notify   # send a Slack test message
+docker compose exec app project-pilot test-match    # rules + LLM + a real routine fire
 docker compose exec app project-pilot healthcheck   # liveness/freshness probe
+docker compose logs -f mcp                          # the MCP server's requests
 ```
 
 ## Threshold tuning
@@ -83,14 +90,14 @@ matches are being missed. Restart the app after changing `.env`.
 - **Container is unhealthy**: no successful run in `3 x` the interval. Check
   `docker compose logs app` for a `SourceBlockedError` (cooldown) or config error.
 - **Cooldown**: a 403 or captcha sets a 6-hour cooldown in `source_state`; the
-  worker skips scans until it expires and posts one Slack warning. If it
+  worker skips scans until it expires and opens one warning session. If it
   persists, the site may be blocking automated access (revisit `docs/compliance.md`).
 - **Selector breakage** (`SelectorMismatchError`): freelancermap changed its
   markup. Update the selector constants at the top of
   `src/project_pilot/ingestion/parser.py`, refresh the fixtures, and rebuild.
-- **Repeated failures**: three consecutive failed runs post one Slack warning.
-- **No alerts although listings keep arriving**: check Slack for an LLM health
-  warning (see above) and the stored cause:
+- **Repeated failures**: three consecutive failed runs open one warning session.
+- **No sessions although listings keep arriving**: look for an LLM health warning
+  session (see above), then check the stored cause:
   `select reason->'reasons' from evaluations where stage='llm' order by created_at desc limit 3;`
   Fix `LLM_MODEL` / `OPENAI_API_KEY` in the `prod` GitHub environment and redeploy —
   the server's `.env` is rewritten from GitHub on every deploy, so editing it on the

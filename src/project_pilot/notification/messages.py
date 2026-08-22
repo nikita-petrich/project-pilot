@@ -27,6 +27,10 @@ class MatchMessage:
     title: str
     url: str
     score: int
+    # The database id, when the listing is stored. It is what a match thread needs
+    # to reach the MCP tools (get_listing, draft_application); a freshly parsed
+    # listing from a manual check has none yet.
+    listing_id: int | None = None
     company: str | None = None
     contact_name: str | None = None
     is_endcustomer: bool | None = None
@@ -162,6 +166,7 @@ def to_match_message(
         title=listing.title,
         url=listing.external_url,
         score=score,
+        listing_id=listing.id if isinstance(listing, Listing) else None,
         company=raw.company,
         contact_name=contact_name,
         is_endcustomer=raw.is_endcustomer_project,

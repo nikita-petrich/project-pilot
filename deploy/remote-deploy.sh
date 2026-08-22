@@ -41,12 +41,15 @@ services:
     image: ${IMAGE}
 EOF
 
-# `edge` is external, owned by the proxy stack. Compose aborts with a bare "network
-# edge not found" if it is absent, so create it rather than fail a deploy on a host
-# where the proxy has not been brought up yet.
-if ! docker network inspect edge >/dev/null 2>&1; then
-    echo "shared network 'edge' not found — creating it"
-    docker network create edge >/dev/null
+# The proxy's network is external and owned by the proxy stack. Compose aborts with
+# a bare "network not found" if it is absent, so create it rather than fail a deploy
+# on a host where the proxy has not been brought up yet. The name comes from .env
+# (PROXY_NETWORK) so this stack can attach to whatever the proxy already runs on.
+PROXY_NETWORK="$(sed -n 's/^PROXY_NETWORK=//p' .env 2>/dev/null | tail -n1 | tr -d "\"'")"
+PROXY_NETWORK="${PROXY_NETWORK:-edge}"
+if ! docker network inspect "${PROXY_NETWORK}" >/dev/null 2>&1; then
+    echo "shared network '${PROXY_NETWORK}' not found — creating it"
+    docker network create "${PROXY_NETWORK}" >/dev/null
 fi
 
 # The image is a PUBLIC GHCR package: pull it anonymously and make sure no stale

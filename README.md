@@ -2,8 +2,10 @@
 
 A personal, single-user worker that watches freelancermap.de for new project
 listings, persists every listing losslessly in PostgreSQL, evaluates fresh ones
-against a profile (deterministic hard rules, then an LLM match), and reports real
-matches to Slack within minutes. Backend only, no web UI.
+against a profile (deterministic hard rules, then an LLM match), and pushes real
+matches within minutes: each match opens its own Claude session, and the Claude
+app delivers it to phone and laptop. Backend only, no web UI — the Claude app is
+the entire interaction surface.
 
 Built as a modern, strictly-typed Python codebase (Python 3.13, asyncio,
 Pydantic v2, SQLAlchemy 2.0, `mypy --strict`). The binding detail specification is
@@ -21,17 +23,23 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. Posts a Slack alert for matches at or above `MATCH_THRESHOLD` — a compact card
-   in the channel (title, score, client, location/remote, start, duration,
-   workload, age, top reasons, buttons) with the full listing as its first thread
-   reply — and stores a reason for every verdict (match and no-match alike) for
-   later reporting.
+4. Fires the `match-thread` Claude routine for every match at or above
+   `MATCH_THRESHOLD`. That opens one Claude session carrying the listing's facts
+   and full description; Claude summarizes it, and the Claude app pushes the
+   finished session to your phone and laptop. A reason is stored for every verdict
+   — match and no-match alike — for later reporting.
+
+Everything after the push happens in that session: ask questions, have the
+application drafted and revised, and send it, through the MCP server this project
+also ships. Operator warnings (source cooldown, LLM health, repeated failures)
+arrive the same way, as their own sessions.
 
 ## Requirements
 
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
-- A Slack app (Socket Mode, see below) and an OpenAI API key for live operation
+- An OpenAI API key, and a Claude plan with Claude Code on the web for the
+  match-thread routine ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -85,7 +93,9 @@ gitignored and `.env.example` is the template):
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
-| `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` / `SLACK_CHANNEL` | Slack bot token (`xoxb-…`), app-level token for Socket Mode (`xapp-…`), and the channel id to post to |
+| `CLAUDE_ROUTINE_FIRE_URL` / `CLAUDE_ROUTINE_TOKEN` | the match-thread routine's fire endpoint and its token — the notification channel |
+| `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
+| `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
@@ -100,123 +110,98 @@ gitignored and `.env.example` is the template):
 ```sh
 uv run project-pilot init-db        # apply Alembic migrations
 uv run project-pilot run-once       # one scan now (non-zero exit on a failed run)
-uv run project-pilot daemon         # scheduler + Slack bot until SIGTERM
-uv run project-pilot bot            # only the Slack bot (no scanning)
-uv run project-pilot test-notify    # post a test message to the Slack channel
+uv run project-pilot daemon         # the scan loop until SIGTERM
+uv run project-pilot mcp            # the MCP server (Streamable HTTP + bearer token)
+uv run project-pilot test-match     # rules + LLM + a real routine fire, stores nothing
+uv run project-pilot test-filter    # dry-run the filter against a listing
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
 uv run project-pilot enrich "<company>" [--person "First Last"] [--url https://…]
 uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, record the lead
 ```
 
-## Slack setup
+## Claude setup
 
-The full, reproducible setup — creating (or re-creating) the app from a manifest,
-tokens, channel, and scopes — lives in [`docs/slack-app-setup.md`](docs/slack-app-setup.md).
-In short: create the app at [api.slack.com/apps](https://api.slack.com/apps) →
-**From a manifest**, paste the manifest below, then generate the app-level token
-(`connections:write` → `SLACK_APP_TOKEN`), install the app (`xoxb-…` →
-`SLACK_BOT_TOKEN`), and set `SLACK_CHANNEL` to the channel id the bot is invited to.
+Two pieces, both in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-```yaml
-display_information:
-  name: project-pilot
-features:
-  bot_user: { display_name: project-pilot, always_online: true }
-  slash_commands:
-    - { command: /apply, description: Create an application, usage_hint: "<link or text>", should_escape: false }
-    - { command: /check, description: Check a listing against your profile, usage_hint: "<link or text>", should_escape: false }
-oauth_config:
-  scopes: { bot: [chat:write, commands, channels:history, files:read] }
-settings:
-  event_subscriptions: { bot_events: [message.channels] }
-  interactivity: { is_enabled: true }
-  socket_mode_enabled: true
-```
+1. **The `match-thread` routine** on [claude.ai/code/routines](https://claude.ai/code/routines),
+   with this repository attached and push notifications on. Its API trigger yields
+   `CLAUDE_ROUTINE_FIRE_URL` and `CLAUDE_ROUTINE_TOKEN`. The worker POSTs one match
+   to it per session; there is no inbound port and no webhook to expose.
+2. **The MCP server** behind the reverse proxy, added to the Claude app as a
+   custom connector. That is what turns a pushed session into a working surface:
+   the feed, the checks, the drafts, and the send are its tools. The site config
+   for the proxy is in [`deploy/proxy-site/`](deploy/proxy-site).
 
-Socket Mode means the app connects out to Slack — no public URL, works behind NAT.
+Ten tools are exposed, and any Claude chat that has the connector can use them:
 
-## Applying from Slack
+| Tool | Does |
+|---|---|
+| `list_matches` / `get_listing` | the feed and one listing in full, with its evaluations |
+| `ingest_listing` | store a listing that did not come from the scanner, with its provenance |
+| `check_listing` / `check_text` | re-run the verdict on a stored listing or on pasted text |
+| `draft_application` / `revise_application` | write and rework a draft |
+| `set_recipient` / `send_application` | address it, and — only on your explicit go — send it |
+| `enrich_company` | contact data from the company's own website |
 
-Every match posts a Slack message with an **📝 Bewerben** button. Tapping it makes
-the LLM write a personalized application. The single prompt file
+n8n speaks the same protocol, so a workflow can ingest and check incoming
+recruiter mails without duplicating any of the judgment.
+
+### Listings that did not come from the scanner
+
+A recruiter mails, a client sends a PDF, someone screenshots a listing.
+`ingest_listing` stores it like any other listing and records **how it arrived** —
+`listings.origin` is one of `scan`, `chat`, `mail`, `pdf`, `image`, `url`, `api`,
+and `raw["ingest"]` keeps the detail (a note, the supplied URL, the timestamp).
+Everything downstream then works on it unchanged: check, draft, revise, send,
+reporting.
+
+Dedupe is the scanner's own: a pasted freelancermap link is canonicalized and
+hashed exactly as the scraper does it, so a link you check by hand and the page
+the scanner later fetches are **one** row, not two. Text with no URL is keyed by
+the text, so the same mail pasted twice is the same listing.
+
+## Applying from a match thread
+
+Ask for it in the session — "schreib die Bewerbung" — and the LLM writes a
+personalized application. The single prompt file
 `src/project_pilot/application/prompts/application.md` holds the full application
-prompt (style rules, reference projects, skills, signature) — edit it directly to
-change how applications are written. The draft posts as **one** message:
+prompt (style rules, reference projects, skills, signature); edit it directly to
+change how applications are written.
 
-- **Full e-mail** in copyable code blocks (split across Block Kit sections when
-  long, never truncated), plus the subject and the LinkedIn message. Under the
-  LinkedIn text sits the **research row** (see below), so the contact route is one
-  click away — also on the post-send confirmation in the thread.
-- **Recipient** — auto-extracted from the listing when an e-mail address is
-  visible anywhere in it; otherwise reply in the thread with the address.
-- **Revise** — reply in the message's thread with what you want changed
-  ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft updates in place.
-  A reply is never half-read: "die Adresse ist `a@b.de`, bitte kürzer" sets the
-  recipient *and* rewrites the draft in one step. A reply in a thread that carries
-  no draft is answered with a hint instead of being ignored.
-  Attach a screenshot to the reply (with or without text) and it goes to the LLM
-  as vision input — e.g. a picture of the client's answer or of the listing detail
-  the revision should reflect.
-- **E-mail as a file** — the letter itself arrives in the thread as one `.txt`
-  file (nothing split across blocks): open, copy, or download it in one piece.
-  Each revision uploads a fresh file; the newest one is the current draft. This
-  needs the `files:write` bot scope and a channel *ID* in `SLACK_CHANNEL` — without
-  them the bot falls back to rendering the text inline. All generated texts
-  (LinkedIn message, contact results, inline fallbacks) render as native code
-  blocks, so each has Slack's **copy button in its top-right corner**.
-- **Buttons** — **📤 Send** delivers the e-mail through your SMTP server, CVs
-  attached (double-taps guarded, failures keep the draft). It only appears once a
-  recipient is known — without an address there is nothing it could do, so the draft
-  asks for one instead (reply with it, or press **🔎 Find contact**). The
-  **📧 Open in mail client** link above the
-  buttons opens your mail client with the subject, the recipient (once known) and
-  the letter prefilled — available from the start. It is a text link, not a button,
-  because Slack buttons silently drop `mailto:` URLs. A `mailto:` has a length limit
-  and can never carry attachments, so a long letter opens truncated (with a note
-  saying so) and the CVs only go out via **📤 Send**.
-- **CV attachments** — every sent e-mail carries both configured CV PDFs
-  (DE and EN); the draft language only decides which one leads. The draft names them
-  in a `📎 Attachments` line before you send, including any configured file that is
-  missing on disk. Set a path to an empty value to leave that CV out.
+- **Full draft** — subject, the complete e-mail, and a LinkedIn connection
+  message, returned in one piece and never truncated.
+- **Recipient** — auto-extracted from the listing when an e-mail address is visible
+  anywhere in it; otherwise name it in the chat, or ask for the contact to be
+  looked up (see below).
+- **Revise** — say what you want changed ("kürzer", "auf Englisch", "betone
+  RAG-Erfahrung") and the draft is rewritten in place. Paste or attach a screenshot
+  and it goes to the model as vision input, so a picture of the client's reply or
+  of a listing detail can drive the revision.
+- **Send** — only after you have read the draft and said so. `send_application`
+  delivers it through your SMTP server with the CVs attached; a status guard makes a
+  second send impossible, and a failure keeps the draft intact. Nothing else in the
+  system can reach outward, which is the point: the model reads untrusted listing
+  text, so it never holds the outbound channel on its own.
+- **CV attachments** — every sent e-mail carries both configured CV PDFs (DE and
+  EN); the draft language only decides which one leads. The draft names them in a
+  `📎 Attachments` line beforehand, including any configured file that is missing,
+  so a gap is visible before the send rather than after.
 - **Signature** — every draft closes with a signature block in the draft's language:
   the `-- ` separator (RFC 3676), the greeting inside the block, name and title,
   `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link,
   then location and VAT ID — values from `profile.md`, layout from the prompt. The
   confidentiality notice follows as the last block.
 
-`/apply <freelancermap-link>` starts the same flow for any listing (stored or
-freshly fetched), and `/apply <pasted project description>` works without a link.
-
-**Uploading a file** (PDF, text, or **image**) does the same. Slack cannot attach a
-file to a slash command, so the bot asks instead: drop the file in the channel and
-it replies **in the upload's thread** with two buttons — **📝 Apply** drafts the
-application, **🔍 Check** scores the listing first. Nothing is downloaded and no
-token is spent until you press one, and the buttons disappear once used, so an
-upload can never fire twice.
-
-Any comment you add to the upload is kept as extra project context (there is no
-keyword to remember), and screenshots (PNG/JPEG/WebP/GIF) go to the vision LLM
-directly. Nothing is ever sent without the explicit Send tap.
-
-**Everything answers in a thread.** A slash command posts a single channel line
-(`📥 Application: …`) and puts the draft, progress, and any hint in its thread; an
-upload is answered in the **upload's own thread**, with no extra channel message. So
-the channel keeps one line per request and the back-and-forth stays out of the way.
+The same flow works from any Claude chat with the connector, not just from a match
+session: paste a listing, run `check_text`, then draft from it.
 
 ## Finding a contact (enrichment)
 
-**The research row** rides on every listing-bound message — the match card, a `/check`
-verdict (match or no match), the application draft, and the send confirmation:
-**🔎 Find contact**, **🔗 Company on LinkedIn**, **🔍 `<name>` on LinkedIn**, and
-**🔍 Google contact**. The three search buttons are constructed URLs that open in your
-own browser and need no configuration; they fall back to the project title when the
-listing names no company. Only **🔎 Find contact** reaches the network, needs
-enrichment switched on, and needs a stored listing to look up.
-
-Enrichment itself is optional and **off by default** (`ENRICHMENT_ENABLED=true` to
-switch on). When a match lists a company but no reachable e-mail, tap
-**🔎 Find contact** and project-pilot looks the company's contact channel up:
+Enrichment is optional and **off by default** (`ENRICHMENT_ENABLED=true` to switch
+on). When a match names a company but no reachable e-mail, ask for the contact in
+the session (`enrich_company`) and project-pilot looks the company's contact
+channel up:
 
 1. **Company website** — a web search (`ENRICHMENT_SEARCH=duckduckgo`, or pass a known
    `--url`) finds the official site, then its **Impressum / Kontakt / Team / Karriere**
@@ -233,9 +218,9 @@ switch on). When a match lists a company but no reachable e-mail, tap
    `profile.md` (Contact & Signature); `OUTREACH_OFFER_DU=true` (the default) offers
    first-name terms ("Gerne auch per Du.").
 
-The result posts in the message's thread (e-mails best-first, phone, named people, the
-connection message, the links) and is stored in `contact_leads`. Reply to a draft's
-thread with a found address to set it as the recipient. From the shell:
+The result comes back in the session (e-mails best-first, phone, named people, the
+connection message, the research links) and is stored in `contact_leads`. Name a
+found address in the chat to set it as the draft's recipient. From the shell:
 
 ```sh
 uv run project-pilot enrich "Muster GmbH" --person "Max Mustermann"
@@ -253,40 +238,29 @@ uv sync --extra render && uv run playwright install chromium
 Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
 retry); only company pages are rendered, never LinkedIn or Google.
 
-## Checking a listing from Slack
+## Checking a listing on demand
 
-`/check <freelancermap-link or pasted project description>` runs any listing through
-the same evaluation the scanner uses — hard rules from `constraints.yaml` first
-(0 tokens), then the LLM match against your profile:
+`check_listing` (a stored listing) and `check_text` (a pasted description or
+recruiter mail) run anything through the same evaluation the scanner uses — hard
+rules from `constraints.yaml` first (0 tokens), then the LLM match against your
+profile. Both return the verdict in full:
 
-- **Match (score ≥ `MATCH_THRESHOLD`)** — posts the full listing (all facts, reasons,
-  gaps, risks) including the **📝 Bewerben** button, so the apply flow starts exactly
-  as if the scanner had found it. The verdict already sits in a thread, so it stays
-  one message instead of being split like a scan match.
-- **No match** — posts the verdict with the failed hard rule (matched blacklist
-  term) or the LLM's score, reasons, and gaps, so you see *why* it doesn't fit. A
-  listing that requires one of the `nogo_technologies` lands here too, with the term
-  named as the first reason.
-- **Files and screenshots** — upload a PDF, text file, or **image** and press
-  **🔍 Check** on the prompt (see above). A screenshot goes to the vision LLM
-  directly, and a passing check still offers the **📝 Bewerben** button, which drafts
-  from the same screenshot.
-
-Like `/apply`, the command posts one channel line (`🔍 Check: …`) and the verdict
-lands in its thread; a checked upload is answered in the upload's own thread. That
-line names the **listing**, not the first words of what you pasted: the headline is
-read out of the text (a `Position:`/`Projekt:` line counts), and a recruiter mail
-that only opens with "Hallo," is titled by the model instead. The channel line is
-relabelled with that title once the verdict is in.
-
-A pasted description also gets rendered **in full** — a scan match shortens it
-behind its 🔗 View project button, but pasted text and uploads have no such link,
-so the whole description is shown, split across sections.
+- **Match (score ≥ `MATCH_THRESHOLD`)** — facts, reasons, matching skills, gaps and
+  risks, so the apply flow can start from it exactly as if the scanner had found it.
+- **No match** — the failed hard rule (the matched blacklist term) or the LLM's
+  score, reasons, and gaps, so you see *why* it doesn't fit. A listing that requires
+  one of the `nogo_technologies` lands here too, with the term named first.
 
 A check is read-only: nothing is stored, the freshness gate is skipped, and the
-scanner's watermark stays untouched. One caveat for screenshots: the hard rules read
-text, so an image with no caption skips stage 2 and is judged by the LLM alone —
-a caption is still rule-checked as usual.
+scanner's watermark stays untouched.
+
+Two ways reach the same judgment without the server:
+[`/check-project`](.claude/skills/check-project/SKILL.md) and
+[`/write-application`](.claude/skills/write-application/SKILL.md) are skills any
+Claude session with this repository can run. They are thin wrappers that read the
+canonical prompt and profile files at runtime rather than restating their rules, so
+a skill and the pipeline cannot drift apart — change a judgment rule in
+`evaluation/prompts/match.v7.md`, never in the skill.
 
 ## Deploying
 
@@ -295,6 +269,10 @@ the image into GHCR, and the server pulls it over SSH. The server holds no
 configuration of its own — the app's `.env` is rendered from the secrets of the
 `prod` environment and written on every deploy. Setup, secrets, and rollback are in
 [`docs/deployment.md`](docs/deployment.md).
+
+The deploy refuses to start if `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`
+or `MCP_TOKEN` is missing, and fails before touching the server: a worker that
+finds matches it cannot deliver is worse than one that does not run.
 
 To build and run on the host instead, from a checkout:
 
@@ -317,18 +295,21 @@ matches are missed. Restart the worker after changing `.env`.
 ## Troubleshooting
 
 - **Cooldown**: a 403 or captcha sets a 6-hour cooldown in `source_state`; the
-  worker skips scans until it expires and posts one Slack warning.
+  worker skips scans until it expires and opens one warning session.
 - **`SelectorMismatchError`**: freelancermap changed its markup. Update the
   selector constants at the top of `src/project_pilot/ingestion/parser.py`,
   refresh the fixtures, and re-run.
-- **Repeated failures**: three consecutive failed runs post one Slack warning.
+- **Repeated failures**: three consecutive failed runs open one warning session.
 - **Container unhealthy**: no successful run within three times the interval;
   check `docker compose logs app`.
 - **Everything looks healthy but no matches arrive**: the LLM is the one dependency
   whose failure still produces successful runs (every listing falls back to
-  `llm_error`). The daemon preflights `LLM_MODEL` on start and posts a Slack warning
-  naming the cause — wrong model, rejected key, or an account out of credit — then
-  announces recovery once it works again. See `docs/operations.md`.
+  `llm_error`). The daemon preflights `LLM_MODEL` on start and opens a warning
+  session naming the cause — wrong model, rejected key, or an account out of credit
+  — then announces recovery once it works again. See `docs/operations.md`.
+- **No session for a match**: the routine fire failed. `docker compose logs app`
+  shows `routine fire failed`; the listing keeps `notified_at` empty and the next
+  scan retries it, so nothing is lost while the routine is paused.
 
 ## Development
 
@@ -337,6 +318,7 @@ uv run ruff check           # lint
 uv run ruff format --check  # format
 uv run mypy                 # strict type check
 uv run pytest               # tests (Postgres-backed tests skip if no DB)
+uv run pytest -m eval       # judgment eval against the golden set (real LLM calls)
 ```
 
 Tests never make live network requests; freelancermap pages and external APIs are
@@ -376,12 +358,14 @@ src/project_pilot/
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, check, prompts/
   enrichment/   fetch, render, search, extract, links, message, service, listing
-  notification/ slack
-  application/  generator, service, mailer, documents (apply flow)
+  notification/ claude_fire (the routine channel), messages
+  application/  generator, service, mailer, documents, cv_drive (apply flow)
+  mcp_server.py the tools any Claude surface calls
   pipeline.py scheduler.py reporting.py cli.py
 alembic/        async migrations
-docs/           compliance.md, operations.md, adr/
-tests/          unit + integration, fixtures/
+deploy/         render-env.py, remote-deploy.sh, proxy/ (Caddy for the MCP host)
+docs/           claude-setup.md, deployment.md, operations.md, compliance.md, adr/
+tests/          unit + integration, fixtures/, eval/ (golden set)
 ```
 
 Built with the [AI Coding Blueprint](blueprint/README.md); agent instructions live

@@ -9,6 +9,9 @@ Excluded from the normal suite (``-m "not eval"`` in addopts) because it costs
 tokens and needs a key; run it with ``uv run pytest -m eval``. Without
 ``OPENAI_API_KEY``/``LLM_MODEL`` it skips instead of failing.
 
+The set covers German and English listings alike, because the prompt judges both
+and a language must never decide a verdict on its own.
+
 The starter labels were set by the AI from the profile's rules and await Nik's
 review; grow the set from real ``evaluations`` rows over time.
 """

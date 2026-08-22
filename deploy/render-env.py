@@ -30,6 +30,10 @@ REQUIRED = (
     "CLAUDE_ROUTINE_TOKEN",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
+    # The reverse proxy's Docker network. Wrong or unset, the MCP container comes
+    # up healthy and stays unreachable — a 502 with nothing in its own logs, which
+    # is exactly the kind of silent failure this gate exists to prevent.
+    "PROXY_NETWORK",
 )
 
 # The app starts without these, but not usefully: no contact mail, or a default password.

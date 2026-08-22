@@ -108,6 +108,10 @@ per evaluation).
 - `cooldown_until` (timestamptz, nullable) - set on 403/captcha
 - `consecutive_failures` (int)
 
+`listings.origin` (enum: scan | chat | mail | pdf | image | url | api) records how
+a row got there: the scanner's own listings are `scan`, everything the MCP
+`ingest_listing` tool stores names its channel, with the detail in `raw["ingest"]`.
+
 Features 16 and 18 added two further tables: `applications` (one draft/send cycle
 per application: recipient, subject/body, LinkedIn message, status guard against
 double sends, token accounting) and `contact_leads` (append-only enrichment

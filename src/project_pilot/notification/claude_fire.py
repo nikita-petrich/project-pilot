@@ -48,6 +48,10 @@ def fire_text(message: MatchMessage) -> str:
         f"NEUES MATCH — Score {message.score}/100",
         f"Rolle: {message.title}",
     ]
+    # The id is what lets the session reach the MCP tools for this listing, so it
+    # goes in first — without it the thread can only work from the text below.
+    if message.listing_id is not None:
+        facts.insert(1, f"Listing-ID: {message.listing_id}")
     labeled = [
         ("Firma", message.company),
         ("Ort", message.location),
