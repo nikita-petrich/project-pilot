@@ -67,34 +67,6 @@ def test_require_search_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_search_urls() == ["https://a.example/x"]
 
 
-def test_require_slack(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_CHANNEL"):
-        monkeypatch.delenv(var, raising=False)
-    settings = Settings()
-    assert not settings.has_slack()
-    with pytest.raises(ConfigError):
-        settings.require_slack()
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-1")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1")
-    monkeypatch.setenv("SLACK_CHANNEL", "C0123")
-    settings = Settings()
-    assert settings.has_slack()
-    slack = settings.require_slack()
-    assert slack.bot_token == "xoxb-1"
-    assert slack.app_token == "xapp-1"
-    assert slack.channel == "C0123"
-    assert slack.allowed_user_ids == frozenset()  # unset ⇒ channel-only trust
-
-
-def test_slack_allowed_user_ids_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-1")
-    monkeypatch.setenv("SLACK_APP_TOKEN", "xapp-1")
-    monkeypatch.setenv("SLACK_CHANNEL", "C0123")
-    monkeypatch.setenv("SLACK_ALLOWED_USER_IDS", "U0001AAA, U0002BBB")
-    slack = Settings().require_slack()
-    assert slack.allowed_user_ids == frozenset({"U0001AAA", "U0002BBB"})
-
-
 def test_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)

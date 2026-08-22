@@ -18,7 +18,7 @@ from project_pilot.health import HealthKind, llm_issue
 from project_pilot.ingestion.normalize import compute_url_hash
 from project_pilot.models import Evaluation, EvaluationStage, Listing, ListingStatus, Run, RunStatus
 from project_pilot.notification.messages import MatchMessage
-from project_pilot.pipeline import Matcher, Notifier, Pipeline, SourceClient
+from project_pilot.pipeline import Matcher, Pipeline, SourceClient
 from project_pilot.profile_loader import Profile, ProfileConstraints
 from project_pilot.repository import Repository
 
@@ -103,31 +103,21 @@ class _FakeMatcher:
         )
 
 
-class _FakeNotifier:
-    def __init__(self, *, ok: bool = True) -> None:
-        self.ok = ok
-        self.matches: list[MatchMessage] = []
-        self.match_listing_ids: list[int] = []
-        self.warnings: list[str] = []
-
-    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
-        self.matches.append(message)
-        self.match_listing_ids.append(listing_id)
-        return self.ok
-
-    async def send_warning(self, text: str) -> bool:
-        self.warnings.append(text)
-        return self.ok
-
-
 class _FakeFire:
+    """The full channel fake: matches record and 'open' a session, warnings record."""
+
     def __init__(self, *, url: str | None = "https://claude.ai/code/session_01T") -> None:
         self.url = url
-        self.fired: list[MatchMessage] = []
+        self.matches: list[MatchMessage] = []
+        self.warnings: list[str] = []
 
     async def fire(self, message: MatchMessage) -> str | None:
-        self.fired.append(message)
+        self.matches.append(message)
         return self.url
+
+    async def fire_warning(self, text: str) -> bool:
+        self.warnings.append(text)
+        return self.url is not None
 
 
 def _settings() -> Settings:
@@ -156,10 +146,9 @@ def _pipeline(
     *,
     client: SourceClient,
     matcher: Matcher | None = None,
-    notifier: Notifier | None = None,
     profile: Profile | None = None,
     llm_probe: LlmProbe | None = None,
-    claude_fire: _FakeFire | None = None,
+    claude_fire: "_FakeFire | _CommitProbeFire | None" = None,
 ) -> Pipeline:
     return Pipeline(
         settings=_settings(),
@@ -167,7 +156,6 @@ def _pipeline(
         session_factory=session_factory,
         client_factory=lambda: client,
         matcher=matcher or _FakeMatcher(),
-        notifier=notifier,
         llm_probe=llm_probe,
         claude_fire=claude_fire,
     )
@@ -193,8 +181,8 @@ async def _seed_state(
 async def test_seed_run_persists_without_analysis(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    notifier = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=notifier)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_seed is True
     assert outcome.new == 2
@@ -210,8 +198,8 @@ async def test_full_run_notifies_match(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier(ok=True)
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    notifier = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=notifier)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_seed is False
     assert outcome.new == 2
@@ -235,11 +223,9 @@ async def test_match_fires_routine_and_stores_session_url(
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     fire = _FakeFire()
-    pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier(), claude_fire=fire
-    )
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=fire)
     await pipeline.run_once(now=NOW)
-    assert len(fire.fired) == 1
+    assert len(fire.matches) == 1
     async with session_factory() as db_session:
         listing = await Repository(db_session).get_listing_by_hash(compute_url_hash(DETAIL1))
         assert listing is not None
@@ -248,14 +234,9 @@ async def test_match_fires_routine_and_stores_session_url(
     # A later run must not fire again for the same listing (no idempotency key
     # upstream — the stored URL is the guard).
     second_fire = _FakeFire()
-    again = _pipeline(
-        session_factory,
-        client=_FakeClient(PAGES),
-        notifier=_FakeNotifier(),
-        claude_fire=second_fire,
-    )
+    again = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=second_fire)
     await again.run_once(now=NOW + timedelta(minutes=15))
-    assert second_fire.fired == []
+    assert second_fire.matches == []
 
 
 async def test_failed_fire_never_fails_the_run(
@@ -263,16 +244,15 @@ async def test_failed_fire_never_fails_the_run(
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     fire = _FakeFire(url=None)  # fire endpoint down / misconfigured
-    pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier(), claude_fire=fire
-    )
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=fire)
     outcome = await pipeline.run_once(now=NOW)
-    assert outcome.notified == 1  # Slack went out, run stays green
-    assert len(fire.fired) == 1
+    assert outcome.notified == 0  # nothing delivered, run itself stays green
+    assert len(fire.matches) == 1
     async with session_factory() as db_session:
         listing = await Repository(db_session).get_listing_by_hash(compute_url_hash(DETAIL1))
         assert listing is not None
-        assert listing.claude_session_url is None  # gap visible in the feed
+        assert listing.notified_at is None  # stays pending, retried next run
+        assert listing.claude_session_url is None
 
 
 async def test_per_entry_isolation_skips_failing_detail(
@@ -369,15 +349,15 @@ async def test_notification_retry_on_next_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    failing = _FakeNotifier(ok=False)
-    first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing)
+    failing = _FakeFire(url=None)
+    first = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=failing)
     outcome1 = await first.run_once(now=NOW)
     assert outcome1.matched == 1
     assert outcome1.notified == 0
     assert len(failing.matches) == 1
 
-    ok_notifier = _FakeNotifier(ok=True)
-    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok_notifier)
+    ok_notifier = _FakeFire()
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=ok_notifier)
     outcome2 = await second.run_once(now=NOW + timedelta(minutes=15))
     assert outcome2.new == 0
     assert outcome2.notified == 1
@@ -399,8 +379,8 @@ async def test_stale_listings_are_skipped_not_analysed(
 ) -> None:
     late = datetime(2026, 7, 21, 9, 0, tzinfo=UTC)  # far past card1's posted time
     await _seed_state(session_factory, watermark=late - timedelta(minutes=120))
-    notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    notifier = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=notifier)
     outcome = await pipeline.run_once(now=late)
     assert outcome.matched == 0
     assert outcome.notified == 0
@@ -416,11 +396,11 @@ async def test_blacklist_rejects_before_llm(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     pipeline = _pipeline(
         session_factory,
         client=_FakeClient(PAGES),
-        notifier=notifier,
+        claude_fire=notifier,
         profile=_profile(blacklist=["asyncio"]),
     )
     outcome = await pipeline.run_once(now=NOW)
@@ -428,11 +408,11 @@ async def test_blacklist_rejects_before_llm(
     assert notifier.matches == []
 
 
-async def test_dry_run_without_notifier_does_not_notify(
+async def test_dry_run_without_fire_does_not_notify(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=None)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=None)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.matched == 1
     assert outcome.notified == 0
@@ -476,8 +456,8 @@ async def test_unreachable_source_fails_run_without_cooldown_or_traceback(
 ) -> None:
     watermark = NOW - timedelta(minutes=10)
     await _seed_state(session_factory, watermark=watermark)
-    notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_OfflineClient(), notifier=notifier)
+    notifier = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_OfflineClient(), claude_fire=notifier)
 
     with caplog.at_level(logging.WARNING, logger="project_pilot.pipeline"):
         outcome = await pipeline.run_once(now=NOW)
@@ -499,8 +479,8 @@ async def test_unreachable_source_fails_run_without_cooldown_or_traceback(
 async def test_source_blocked_sets_cooldown_and_warns(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    warns = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES, block=True), notifier=warns)
+    warns = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES, block=True), claude_fire=warns)
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.is_error is True
     assert any("Cooling down" in message for message in warns.warnings)
@@ -515,11 +495,11 @@ async def test_cooldown_skips_next_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     first = _pipeline(
-        session_factory, client=_FakeClient(PAGES, block=True), notifier=_FakeNotifier()
+        session_factory, client=_FakeClient(PAGES, block=True), claude_fire=_FakeFire()
     )
     await first.run_once(now=NOW)
 
-    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=_FakeNotifier())
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=_FakeFire())
     outcome = await second.run_once(now=NOW + timedelta(minutes=15))
     assert outcome.error == "skipped: in cooldown"
     async with session_factory() as db_session:
@@ -529,7 +509,7 @@ async def test_cooldown_skips_next_run(
 async def test_three_consecutive_failures_warn_once(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    warns = _FakeNotifier()
+    warns = _FakeFire()
     for index in range(3):
         pipeline = Pipeline(
             settings=_settings(),
@@ -537,7 +517,7 @@ async def test_three_consecutive_failures_warn_once(
             session_factory=session_factory,
             client_factory=_BrokenClient,
             matcher=_FakeMatcher(),
-            notifier=warns,
+            claude_fire=warns,
         )
         outcome = await pipeline.run_once(now=NOW + timedelta(minutes=15 * index))
         assert outcome.is_error is True
@@ -569,25 +549,27 @@ class _MatchAllMatcher:
         )
 
 
-class _CommitProbeNotifier:
+class _CommitProbeFire:
     """Checks from a separate session that the evaluation is already committed."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
         self.saw_committed: list[bool] = []
 
-    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool:
+    async def fire(self, message: MatchMessage) -> str | None:
         async with self._session_factory() as probe:
             row = await probe.scalar(
-                select(Evaluation).where(
-                    Evaluation.listing_id == listing_id,
+                select(Evaluation)
+                .join(Listing, Listing.id == Evaluation.listing_id)
+                .where(
+                    Listing.external_url == message.url,
                     Evaluation.stage == EvaluationStage.LLM,
                 )
             )
             self.saw_committed.append(row is not None)
-        return True
+        return "https://claude.ai/code/session_probe"
 
-    async def send_warning(self, text: str) -> bool:
+    async def fire_warning(self, text: str) -> bool:
         return True
 
 
@@ -657,10 +639,9 @@ async def test_evaluations_are_committed_before_notification(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    probe = _CommitProbeNotifier(session_factory)
-    outcome = await _pipeline(session_factory, client=_FakeClient(PAGES), notifier=probe).run_once(
-        now=NOW
-    )
+    probe = _CommitProbeFire(session_factory)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=probe)
+    outcome = await pipeline.run_once(now=NOW)
     assert outcome.notified == 1
     assert probe.saw_committed == [True]  # the send saw durable state, not a dirty session
 
@@ -669,14 +650,14 @@ async def test_onsite_only_match_is_suppressed_once(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier(ok=True)
+    notifier = _FakeFire()
     pipeline = Pipeline(
         settings=_settings(),
         profile=_profile(),
         session_factory=session_factory,
         client_factory=lambda: _FakeClient(PAGES),
         matcher=_MatchAllMatcher(),
-        notifier=notifier,
+        claude_fire=notifier,
     )
     outcome = await pipeline.run_once(now=NOW)
     assert outcome.matched == 2
@@ -688,14 +669,14 @@ async def test_onsite_only_match_is_suppressed_once(
         assert onsite is not None
         assert onsite.notified_at is not None  # marked handled: leaves the pending set
 
-    second_notifier = _FakeNotifier(ok=True)
+    second_notifier = _FakeFire()
     second = Pipeline(
         settings=_settings(),
         profile=_profile(),
         session_factory=session_factory,
         client_factory=lambda: _FakeClient(PAGES),
         matcher=_MatchAllMatcher(),
-        notifier=second_notifier,
+        claude_fire=second_notifier,
     )
     await second.run_once(now=NOW + timedelta(minutes=15))
     assert second_notifier.matches == []  # nothing pending anymore
@@ -773,12 +754,12 @@ async def test_a_broken_llm_is_announced_instead_of_passing_as_a_clean_run(
 ) -> None:
     """Every listing scored `llm_error` still records a successful run — say it out loud."""
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     pipeline = _pipeline(
         session_factory,
         client=_FakeClient(PAGES),
         matcher=_BrokenMatcher(),
-        notifier=notifier,
+        claude_fire=notifier,
     )
 
     outcome = await pipeline.run_once(now=NOW)
@@ -796,12 +777,12 @@ async def test_the_same_broken_llm_is_not_re_announced_every_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     pipeline = _pipeline(
         session_factory,
         client=_FakeClient(PAGES),
         matcher=_BrokenMatcher(),
-        notifier=notifier,
+        claude_fire=notifier,
     )
 
     await pipeline.run_once(now=NOW)
@@ -816,12 +797,12 @@ async def test_a_repaired_llm_is_announced_once(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     pipeline = _pipeline(
         session_factory,
         client=_FakeClient(PAGES),
         matcher=_BrokenMatcher(),
-        notifier=notifier,
+        claude_fire=notifier,
     )
 
     await pipeline.run_once(now=NOW)
@@ -836,8 +817,8 @@ async def test_a_healthy_run_says_nothing_about_the_llm(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
-    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    notifier = _FakeFire()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), claude_fire=notifier)
 
     outcome = await pipeline.run_once(now=NOW)
 
@@ -849,10 +830,10 @@ async def test_a_healthy_run_says_nothing_about_the_llm(
 async def test_preflight_reports_a_broken_model_before_any_scan(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     probe = _FakeProbe(RuntimeError("Error code: 404 - model does not exist"))
     pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=notifier, llm_probe=probe
+        session_factory, client=_FakeClient(PAGES), claude_fire=notifier, llm_probe=probe
     )
 
     issue = await pipeline.check_llm(now=NOW)
@@ -866,9 +847,9 @@ async def test_preflight_reports_a_broken_model_before_any_scan(
 async def test_preflight_is_silent_when_the_model_answers(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    notifier = _FakeNotifier()
+    notifier = _FakeFire()
     pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=notifier, llm_probe=_FakeProbe()
+        session_factory, client=_FakeClient(PAGES), claude_fire=notifier, llm_probe=_FakeProbe()
     )
 
     assert await pipeline.check_llm(now=NOW) is None

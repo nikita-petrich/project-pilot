@@ -14,7 +14,7 @@ class ApplicationDraft(BaseModel):
     """The structured application the LLM must return (used as OpenAI response format).
 
     ``project_title`` is the listing's headline (copied, or written by the model when
-    the description has none) — it names the draft in Slack instead of the first
+    the description has none) — it names the draft instead of the first
     line of a pasted recruiter mail.
     """
 
@@ -31,7 +31,7 @@ class ApplicationDraft(BaseModel):
     @field_validator("project_title")
     @classmethod
     def _single_line_title(cls, value: str) -> str:
-        """One line, short enough for a Slack header and the DB column (512)."""
+        """One line, short enough for a message header and the DB column (512)."""
         return " ".join(value.split())[:TITLE_LIMIT]
 
     @field_validator("subject")

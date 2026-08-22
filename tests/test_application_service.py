@@ -525,19 +525,6 @@ async def test_a_cancelled_draft_stays_immutable(
         await service.revise(view.application_id, "egal")
 
 
-async def test_draft_ref_roundtrip(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    listing_id = await _store(session_factory, _listing())
-    service = _service(session_factory)
-    view = await service.draft_for_listing(listing_id)
-    await service.record_draft_ref(view.application_id, "C0123:1700.42")
-    found = await service.find_by_draft_ref("C0123:1700.42")
-    assert found is not None
-    assert found.application_id == view.application_id
-    assert await service.find_by_draft_ref("C0123:9.9") is None
-
-
 async def test_find_listing_id_by_url_canonicalizes(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

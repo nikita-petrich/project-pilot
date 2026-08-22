@@ -30,19 +30,6 @@ class SmtpConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class SlackConfig:
-    """Validated Slack settings: bot token (Web API), app token (Socket Mode), channel."""
-
-    bot_token: str = field(repr=False)
-    app_token: str = field(repr=False)
-    channel: str = ""
-    # Slack user ids allowed to drive the bot (buttons, slash commands, thread
-    # replies). Empty means "no allow-list configured" — the bot then serves any
-    # member of the channel, which is only safe in a truly single-member channel.
-    allowed_user_ids: frozenset[str] = frozenset()
-
-
-@dataclass(frozen=True, slots=True)
 class CvAttachments:
     """The CV PDFs attached to every application e-mail (DE and EN).
 
@@ -90,13 +77,6 @@ class Settings(BaseSettings):
     )
     contact_mail: str = "you@example.com"
 
-    slack_bot_token: str = Field(default="", repr=False)
-    slack_app_token: str = Field(default="", repr=False)
-    slack_channel: str = ""
-    # Comma-separated Slack user ids (e.g. "U012ABC,U345DEF") permitted to operate
-    # the bot. Left empty, the bot falls back to channel-only trust and warns at boot.
-    slack_allowed_user_ids: Annotated[list[str], NoDecode] = Field(default_factory=list)
-
     openai_api_key: str = Field(default="", repr=False)
     llm_model: str = ""
 
@@ -124,7 +104,6 @@ class Settings(BaseSettings):
     mcp_token: str = Field(default="", repr=False)
     mcp_port: int = 8765
 
-    claude_fire_enabled: bool = False
     claude_routine_fire_url: str = ""
     claude_routine_token: str = Field(default="", repr=False)
 
@@ -138,7 +117,7 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", "slack_allowed_user_ids", mode="before")
+    @field_validator("search_urls", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
@@ -201,23 +180,6 @@ class Settings(BaseSettings):
         if not self.search_urls:
             raise ConfigError("SEARCH_URLS is empty; set at least one search URL")
         return self.search_urls
-
-    def has_slack(self) -> bool:
-        return bool(self.slack_bot_token and self.slack_app_token and self.slack_channel)
-
-    def require_slack(self) -> SlackConfig:
-        if not self.slack_bot_token:
-            raise ConfigError("SLACK_BOT_TOKEN must be set (xoxb-… bot token)")
-        if not self.slack_app_token:
-            raise ConfigError("SLACK_APP_TOKEN must be set (xapp-… token for Socket Mode)")
-        if not self.slack_channel:
-            raise ConfigError("SLACK_CHANNEL must be set (channel id or name to post to)")
-        return SlackConfig(
-            bot_token=self.slack_bot_token,
-            app_token=self.slack_app_token,
-            channel=self.slack_channel,
-            allowed_user_ids=frozenset(self.slack_allowed_user_ids),
-        )
 
     def require_openai(self) -> tuple[str, str]:
         if not self.openai_api_key:

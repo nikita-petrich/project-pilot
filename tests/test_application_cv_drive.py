@@ -122,7 +122,7 @@ async def test_refresh_survives_an_unwritable_cache_directory(
 ) -> None:
     # The container runs as a non-root user under a root-owned /app, so creating or
     # writing the cache file can be denied. That must degrade to "CV missing" like any
-    # other refresh failure, never raise into the Slack apply flow. Patched rather than
+    # other refresh failure, never raise into the apply flow. Patched rather than
     # chmod-ed so the test holds when the suite runs as root.
     de = tmp_path / "cv" / "CV-German.pdf"
 

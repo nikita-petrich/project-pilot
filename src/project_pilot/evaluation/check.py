@@ -1,4 +1,4 @@
-"""Manual match check (Slack ``/check``): hard rules + LLM verdict for one input.
+"""Manual match check: hard rules + LLM verdict for one manually supplied input.
 
 Runs the scan pipeline's stages 2-3 for a single manually supplied listing (URL,
 pasted text, an uploaded file's text, or a screenshot judged by the vision LLM).

@@ -1,6 +1,6 @@
 """Notifier-agnostic display data for a matched listing, and its builder.
 
-Kept separate from any transport (e.g. Slack) so the data shape survives when a
+Kept separate from any transport so the data shape survives when a
 delivery backend is swapped out. ``to_match_message`` turns a stored or freshly
 parsed listing plus an LLM verdict into the display-ready shape; it is shared by
 the scan pipeline and the manual ``/check`` flow.

@@ -35,7 +35,7 @@ def test_subject_collapsed_to_single_line_and_capped() -> None:
 
 
 def test_project_title_collapsed_to_single_line_and_capped() -> None:
-    """The title names a Slack header, so it must stay one short line."""
+    """The title names a message header, so it must stay one short line."""
     draft = ApplicationDraft(
         project_title="Senior Fullstack\nTypeScript Developer",
         subject="s",

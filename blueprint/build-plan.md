@@ -38,4 +38,4 @@
 - [ ] 20b. **ingest_listing MCP-Tool** - Listings aus fremden Quellen (E-Mail, n8n) idempotent anlegen; braucht eine Design-Entscheidung zur external_url-Synthese für URL-lose Quellen
 - [x] 21. **Eval-Suite** - Golden-Set aus der `evaluations`-Tabelle (von Nik gelabelt), pytest-Eval-Runner, CI-Gate gegen Verschlechterung des Urteils
 - [x] 22. **Routine-Anbindung** - Worker feuert die `match-thread`-Routine pro Match (`notification/claude_fire.py`), Session-URL am Listing, Doppel-Fire-Guard; läuft parallel zu Slack
-- [ ] 23. **Slack-Abbau** - nach ~2 Wochen erfolgreichem Parallelbetrieb der Routine: `notification/slack.py`, `slack_bot.py`, `bot`-Command, slack_sdk-Dependency und Slack-Settings entfernen; Warnungen (Cooldown/Failures) auf einen verbleibenden Kanal umziehen (Routine-Fire oder E-Mail)
+- [x] 23. **Slack-Abbau** - nach ~2 Wochen erfolgreichem Parallelbetrieb der Routine: `notification/slack.py`, `slack_bot.py`, `bot`-Command, slack_sdk-Dependency und Slack-Settings entfernen; Warnungen (Cooldown/Failures) auf einen verbleibenden Kanal umziehen (Routine-Fire oder E-Mail)

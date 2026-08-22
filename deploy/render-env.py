@@ -20,15 +20,22 @@ VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
-REQUIRED = ("OPENAI_API_KEY", "LLM_MODEL", "SEARCH_URLS")
+REQUIRED = (
+    "OPENAI_API_KEY",
+    "LLM_MODEL",
+    "SEARCH_URLS",
+    # The match-thread routine is THE notification channel; without it the daemon
+    # aborts at boot by design, so the deploy refuses here instead.
+    "CLAUDE_ROUTINE_FIRE_URL",
+    "CLAUDE_ROUTINE_TOKEN",
+    # The MCP service refuses to start without its bearer token.
+    "MCP_TOKEN",
+)
 
-# The app starts without these, but not usefully: no alerts, or a default password.
+# The app starts without these, but not usefully: no contact mail, or a default password.
 RECOMMENDED = (
     "CONTACT_MAIL",
     "POSTGRES_PASSWORD",
-    "SLACK_APP_TOKEN",
-    "SLACK_BOT_TOKEN",
-    "SLACK_CHANNEL",
 )
 
 

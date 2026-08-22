@@ -2,9 +2,11 @@
 
 > A personal, single-user worker that watches freelancermap.de, persists every
 > listing losslessly, evaluates fresh ones against Nik's profile (hard rules then
-> LLM), and pushes real matches to Slack within minutes. Backend only.
+> LLM), and pushes real matches within minutes: one Claude match-thread session
+> per match, push via the Claude app. Backend only.
 > Binding detail spec: `SPEC.md` at the repo root (Telegram references there are
-> historical — notification moved to Slack with build-plan feature 17).
+> historical — notification moved to Slack with feature 17 and to Claude
+> match-thread sessions with features 19–23; Slack has been removed).
 
 ## Problem
 
@@ -21,7 +23,7 @@ property.
 
 Exactly one user: Nik (freelance full-stack and AI engineer). No multi-tenant, no
 registration, no public product. Nik configures the profile and search URLs,
-receives Slack alerts, and tunes the match threshold over time.
+receives Claude match-thread pushes, and tunes the match threshold over time.
 
 ## Features
 
@@ -34,7 +36,7 @@ Build-plan order (MVP 1-12). The headline is the evaluation-plus-alert loop
 4. **Scraper ingestion** - politeness httpx client, centralized selectors, detail fetch only for new listings, watermark pagination, normalization.
 5. **Freshness gate and hard rules** - analysis-window logic and the deterministic 0-token rule engine over `constraints.yaml`.
 6. **LLM matching** - versioned prompt, OpenAI `.parse()` against `MatchVerdict`, evaluation persistence, threshold decision, retry + `llm_error` fallback.
-7. **Match notification** - compact match message, `notified_at` only after a successful send, `test-notify`. (Built as Telegram; fully replaced by Slack in feature 17.)
+7. **Match notification** - compact match message, `notified_at` only after a successful send, `test-notify`. (Built as Telegram; replaced by Slack in feature 17, by Claude match-thread sessions in features 22–23.)
 8. **Scheduler and pipeline runner** - `AsyncIOScheduler` 15-min loop, seed-run detection, orchestration of stages 0-3, per-listing isolation, `runs` protocol, cron-friendly `run-once`.
 9. **Resilience and self-monitoring** - tenacity retry (never on 403), 403/captcha cooldown, consecutive-failure warning.
 10. **Reporting basis** - verdict distribution, matches per day, top no-match reasons, token cost, via the `stats` command.
@@ -52,7 +54,7 @@ Two separate guarantees drive the whole design:
 - **Lossless DB (completeness).** `source_state` holds a **watermark** (timestamp of the last successful run). Each run paginates the "newest first" search URLs until it only sees known `url_hash` values or entries older than the watermark, so every gap (failure, restart, downtime) is closed on the next run and every listing ever seen lands in `listings`.
 - **Seed run.** On an empty DB the full current inventory is persisted as a reporting baseline with status `skipped_stale` and **zero notifications**.
 - **Analysis only for fresh entries.** `ANALYSIS_WINDOW_MIN` (default 30, = interval x 2) gates evaluation. Freshness signal order: (1) `posted_at` if minute-precise, else (2) gap rule (distance to last successful run <= window). Older new entries are stored `skipped_stale` with a reason JSON. Feature 1 verifies the real time granularity and decides the implementation.
-- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Slack message and sets `notified_at` after success.
+- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) opens a Claude match-thread session (routine fire) and sets `notified_at` after success.
 - **Traceability.** Every entry gets a stored verdict with a reason for match **and** no-match, each `evaluations` row carrying `model`, `prompt_version`, `profile_hash`, token counts and latency.
 
 ## Data model
@@ -126,7 +128,7 @@ lookups: e-mails, phones, persons, research links).
 - **OpenAI SDK** - `.parse()` with a Pydantic `response_format` for structured match verdicts; model from ENV.
 - **tenacity** - retry with backoff on network/5xx/429, never on 403.
 - **typer** - CLI: `init-db`, `run-once`, `daemon`, `test-notify`, `test-filter`, `stats`.
-- **Slack (`slack_sdk`)** - Block Kit messages via AsyncWebClient plus a Socket Mode bot (Apply/Find-contact buttons, `/apply`, `/check`, thread review); no public URL needed.
+- **Claude match-thread routine + MCP (FastMCP)** - one Claude session per match via the routine fire endpoint (push through the Claude app); an MCP server exposes feed, checks, drafts and send to Claude chats and n8n.
 - **pytest + pytest-asyncio + respx + pytest-cov** - fixtures, no live requests.
 - **ruff + mypy --strict** - lint, format, and typing gate.
 - **Docker + Compose** - containerized worker plus postgres on the home server.
@@ -138,15 +140,15 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 ## UI/UX
 
-No web UI. Slack is the entire surface:
+No web UI of its own. The Claude app is the entire surface:
 
-- **Match alert** - a compact Block Kit card per match (title, score, client, location/remote, start, duration, workload, age, top reasons) with 📝 Apply / 🔎 Find contact / 🔗 View project buttons; the full listing (all facts, skills, gaps, risks, complete description) follows as the card's first thread reply.
-- **Application flow** - drafts, revisions, recipient handling, and the guarded Send button live in the match's thread.
-- **Warnings** - one-time messages on source cooldown (403/captcha) and after consecutive failed runs.
+- **Match alert** - each match opens one Claude session (routine fire) whose opening turn carries the full listing facts; the Claude app pushes the completion to phone and laptop, the session title is the feed entry.
+- **Application flow** - drafting, revisions, recipient handling and the human-confirmed send happen in the match's session via the MCP tools (`draft`, `revise`, `set_recipient`, `send`).
+- **Warnings** - source cooldown (403/captcha), LLM health, and consecutive-failure warnings arrive as their own plain-text sessions over the same channel.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.
 
 ## Open questions
 
 > None blocking. Operational inputs Nik supplies at deploy time (profile content,
-> search URLs, Slack and OpenAI credentials, later threshold tuning) are
+> search URLs, routine/MCP and OpenAI credentials, later threshold tuning) are
 > tracked as open items in `SPEC.md` section 9 and the handover, not code gaps.

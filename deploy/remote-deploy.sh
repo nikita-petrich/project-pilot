@@ -37,6 +37,8 @@ cat > compose.override.yaml <<EOF
 services:
   app:
     image: ${IMAGE}
+  mcp:
+    image: ${IMAGE}
 EOF
 
 # `edge` is external, owned by the proxy stack. Compose aborts with a bare "network

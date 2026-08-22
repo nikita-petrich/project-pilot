@@ -1,6 +1,6 @@
-"""Turn Slack uploads (PDF, text, or image) into drafting input.
+"""Turn uploaded files (PDF, text, or image) into drafting input.
 
-Used when a project description arrives as a Slack file upload instead of pasted
+Used when a project description arrives as a file instead of pasted
 text — documents are extracted to text for the ``draft_from_text`` flow, while
 images travel as ``ImageAttachment`` payloads straight into the vision-capable
 LLM call (drafting and revision alike).

@@ -128,7 +128,7 @@ class Repository:
         Covers this run's new matches and any that a prior run failed to send, so a
         failed notification is retried on the next run. ``not_before`` bounds the set
         by ``first_seen_at`` so that lowering ``MATCH_THRESHOLD`` (or configuring
-        Slack after notifier-less runs) does not retro-flood the channel with every
+        the routine after fire-less runs) does not retro-flood the channel with every
         historical listing that was below the old threshold.
         """
         conditions = [
@@ -222,12 +222,6 @@ class Repository:
         )
         await self._session.flush()
         return result.first() is not None
-
-    async def get_application_by_draft_ref(self, draft_ref: str) -> Application | None:
-        result = await self._session.scalars(
-            select(Application).where(Application.draft_ref == draft_ref)
-        )
-        return result.first()
 
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)

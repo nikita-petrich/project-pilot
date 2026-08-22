@@ -391,18 +391,6 @@ class ApplicationService:
             await session.flush()
             return self._view(sent)
 
-    async def record_draft_ref(self, application_id: int, draft_ref: str) -> None:
-        """Remember the Slack message (``channel:ts``) that shows the draft (routing key)."""
-        async with session_scope(self._session_factory) as session:
-            application = await Repository(session).get_application(application_id)
-            if application is not None:
-                application.draft_ref = draft_ref
-
-    async def find_by_draft_ref(self, draft_ref: str) -> DraftView | None:
-        async with session_scope(self._session_factory) as session:
-            application = await Repository(session).get_application_by_draft_ref(draft_ref)
-            return self._view(application) if application is not None else None
-
     async def find_listing_id_by_url(self, url: str) -> int | None:
         url_hash = compute_url_hash(canonicalize_url(url, BASE_URL))
         async with session_scope(self._session_factory) as session:

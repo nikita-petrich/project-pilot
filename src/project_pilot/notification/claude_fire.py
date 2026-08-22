@@ -1,10 +1,11 @@
-"""Fire the Claude Code routine that opens a match-thread session per match.
+"""Fire the Claude Code routine: THE notification channel.
 
-Each successful match notification also POSTs the listing's facts to the
-``match-thread`` routine's fire endpoint. Claude then creates one session for
-the match, summarizes it, and the Claude app pushes the completion to the phone
-— the whole notification surface of the target architecture
-(``blueprint/reference/zielarchitektur.drawio``).
+A match POSTs the listing's facts to the ``match-thread`` routine's fire
+endpoint; Claude creates one session per match, summarizes it, and the Claude
+app pushes the completion to the phone — the whole notification surface of the
+target architecture (``blueprint/reference/zielarchitektur.drawio``). Operator
+warnings (cooldown, LLM health, consecutive failures) travel the same way as
+plain-text sessions.
 
 The fire endpoint is experimental (beta header below) and has no idempotency
 key: every POST creates a new session. The caller guards against double fires
@@ -83,9 +84,9 @@ class ClaudeRoutineFire:
     async def fire(self, message: MatchMessage) -> str | None:
         """The new session's URL, or None when firing failed (never raises).
 
-        A failed fire must not fail the pipeline run: the Slack notification
-        already went out, so the match is not lost — only its thread is, and the
-        MCP feed shows the gap via the missing session URL.
+        A failed fire must not fail the pipeline run: the listing stays
+        unnotified and is retried on the next run, exactly like a failed send
+        on the previous channel.
         """
         try:
             payload = await self._post(fire_text(message))
@@ -97,6 +98,19 @@ class ClaudeRoutineFire:
             logger.warning("routine fire returned no session url for %s", message.url)
             return None
         return session_url
+
+    async def fire_warning(self, text: str) -> bool:
+        """Deliver an operator warning as its own session; False on failure.
+
+        Warnings are best-effort by design (the callers already log them), so
+        this never raises either.
+        """
+        try:
+            await self._post(f"⚠️ project-pilot Betriebswarnung\n\n{text}"[:MAX_TEXT_CHARS])
+        except (httpx.HTTPError, ValueError) as err:
+            logger.warning("warning fire failed: %s", err)
+            return False
+        return True
 
     @retry(
         retry=retry_if_exception(_is_retryable),

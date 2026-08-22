@@ -78,15 +78,12 @@ class Matcher(Protocol):
     async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation: ...
 
 
-class Notifier(Protocol):
-    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool: ...
-    async def send_warning(self, text: str) -> bool: ...
-
-
 class MatchFire(Protocol):
-    """Opens the Claude match-thread session for one match (feature 22)."""
+    """The notification channel: one Claude match-thread session per match,
+    plain-text sessions for operator warnings."""
 
     async def fire(self, message: MatchMessage) -> str | None: ...
+    async def fire_warning(self, text: str) -> bool: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -126,7 +123,6 @@ class Pipeline:
         session_factory: async_sessionmaker[AsyncSession],
         client_factory: ClientFactory,
         matcher: Matcher,
-        notifier: Notifier | None,
         base_url: str = BASE_URL,
         llm_probe: LlmProbe | None = None,
         alerter: HealthAlerter | None = None,
@@ -137,7 +133,6 @@ class Pipeline:
         self._session_factory = session_factory
         self._client_factory = client_factory
         self._matcher = matcher
-        self._notifier = notifier
         self._base_url = base_url
         self._source = SOURCE_NAME
         self._llm_probe = llm_probe
@@ -148,7 +143,7 @@ class Pipeline:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
 
         Notification runs only after the main unit of work has committed, so a
-        delivered Slack message can never be un-marked by a failed run commit; the
+        opened match thread can never be un-marked by a failed run commit; the
         run row is finalized in its own short session for the same reason.
         """
         now = now or _utcnow()
@@ -261,10 +256,10 @@ class Pipeline:
 
     async def _send_operator_message(self, text: str) -> None:
         """Deliver an operator message verbatim (the caller owns the wording and icon)."""
-        if self._notifier is not None:
-            await self._notifier.send_warning(text)
+        if self._claude_fire is not None:
+            await self._claude_fire.fire_warning(text)
         else:
-            logger.warning("operator message (no notifier): %s", text)
+            logger.warning("operator message (no fire configured): %s", text)
 
     async def _execute(
         self,
@@ -496,12 +491,14 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Send pending match notifications, each made durable as soon as it is sent.
+        """Open one match-thread session per pending match, durable per send.
 
         Runs in its own session after the scan's unit of work has committed, and
-        commits after every successful send: a delivered Slack message can never be
-        rolled back into "unnotified" (which would re-send it — and re-pay its
-        evaluation — on the next run).
+        commits after every successful fire: an opened session can never be
+        rolled back into "unnotified" (which would open a duplicate — the fire
+        endpoint has no idempotency key, so ``notified_at`` plus the stored
+        session URL are the guard). A failed fire leaves the listing pending and
+        it is retried on the next run.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -510,11 +507,11 @@ class Pipeline:
             )
             if not pending:
                 return
-            if self._notifier is None:
-                logger.info("dry-run: %d match(es) not sent (no notifier configured)", len(pending))
+            if self._claude_fire is None:
+                logger.info("dry-run: %d match(es) not fired (no fire configured)", len(pending))
                 return
             failed = 0
-            for listing in pending:  # one message per match, marked only on a successful send
+            for listing in pending:  # one session per match, marked only on a successful fire
                 message = _to_match_message(listing, now)
                 if message.onsite_only:
                     # Mark it handled so it leaves the pending set after one skip
@@ -525,38 +522,17 @@ class Pipeline:
                         listing.external_url,
                     )
                     continue
-                if await self._notifier.send_match(message, listing_id=listing.id):
+                session_url = await self._claude_fire.fire(message)
+                if session_url is not None:
+                    await repo.set_claude_session_url(listing, session_url)
                     await repo.mark_notified([listing], now)
                     await session.commit()
                     outcome.notified += 1
-                    await self._open_match_thread(repo, session, listing, message)
+                    logger.info("match thread opened: %s -> %s", listing.external_url, session_url)
                 else:
                     failed += 1
             if failed:
-                logger.warning("notifier send failed; %d match(es) will retry next run", failed)
-
-    async def _open_match_thread(
-        self,
-        repo: Repository,
-        session: AsyncSession,
-        listing: Listing,
-        message: MatchMessage,
-    ) -> None:
-        """Fire the match-thread routine once per listing; a failure never fails the run.
-
-        Guarded on ``claude_session_url`` because the fire endpoint has no
-        idempotency key: without the guard, a notify retry would open a second
-        session for the same match.
-        """
-        if self._claude_fire is None or listing.claude_session_url is not None:
-            return
-        session_url = await self._claude_fire.fire(message)
-        if session_url is None:
-            logger.warning("match thread not opened for %s (fire failed)", listing.external_url)
-            return
-        await repo.set_claude_session_url(listing, session_url)
-        await session.commit()
-        logger.info("match thread opened: %s -> %s", listing.external_url, session_url)
+                logger.warning("routine fire failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

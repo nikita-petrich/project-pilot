@@ -25,7 +25,7 @@ LLM_COMPONENT = "llm"
 # evening outage is one message rather than a wall of them, short enough to remain a
 # standing reminder that the pilot is not doing its job.
 DEFAULT_REPEAT_AFTER = timedelta(hours=6)
-# Slack alerts are read on a phone; the provider's own error is a diagnostic tail, not
+# Alerts are read on a phone; the provider's own error is a diagnostic tail, not
 # the message, so it is trimmed to one glance.
 MAX_DETAIL_CHARS = 300
 
@@ -109,7 +109,7 @@ class HealthIssue:
 
 
 def _trim(detail: str) -> str:
-    """One-line, backtick-free diagnostic tail (it is rendered inside Slack code marks)."""
+    """One-line, backtick-free diagnostic tail (kept safe for message formatting)."""
     flat = " ".join(detail.split()).replace("`", "'")
     if len(flat) <= MAX_DETAIL_CHARS:
         return flat

@@ -1,9 +1,10 @@
 """End-to-end smoke test of the alert chain, driven by ``project-pilot test-match``.
 
 The unit suite proves each stage against fakes; this proves the *wiring* against the
-real services — profile, hard rules, the LLM, and Slack — by pushing one listing all
-the way to a posted message. Nothing is stored and the scan watermark is untouched,
-so it is safe to run against production at any time.
+real services — profile, hard rules, the LLM, and the match-thread routine — by
+pushing one listing all the way to an opened Claude session (with its push).
+Nothing is stored and the scan watermark is untouched, so it is safe to run
+against production at any time; it does cost one routine run.
 """
 
 import logging
@@ -13,11 +14,6 @@ from typing import Protocol
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.models import EvaluationStage
 from project_pilot.notification.messages import MatchMessage
-from project_pilot.notification.slack import (
-    Block,
-    check_fallback_text,
-    format_check_blocks,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -53,18 +49,11 @@ class Checker(Protocol):
     async def check_stored(self, listing_id: int) -> CheckResult: ...
 
 
-class Poster(Protocol):
-    """The ``SlackClient`` subset used to post a check verdict."""
+class Fire(Protocol):
+    """The ``ClaudeRoutineFire`` subset used to open the test session."""
 
-    async def post_blocks(
-        self, blocks: list[Block], text: str, *, thread_ts: str | None = None
-    ) -> object | None: ...
-
-
-class MatchNotifier(Protocol):
-    """The ``SlackNotifier`` subset used to post a real match card."""
-
-    async def send_match(self, message: MatchMessage, *, listing_id: int) -> bool: ...
+    async def fire(self, message: MatchMessage) -> str | None: ...
+    async def fire_warning(self, text: str) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,34 +78,32 @@ class SelfTestReport:
 
 
 class SelfTestService:
-    """Pushes one listing through evaluation into Slack and reports every link.
+    """Pushes one listing through evaluation into a Claude session and reports every link.
 
     A diagnostic deliberately reports failures instead of raising them: a broken LLM
-    must still yield a report that shows Slack was reached, which is the whole point
-    of running it.
+    must still yield a report that shows the routine was reached, which is the whole
+    point of running it.
     """
 
     def __init__(
         self,
         *,
         checker: Checker,
-        poster: Poster,
-        notifier: MatchNotifier,
+        fire: Fire,
         profile_hash: str,
     ) -> None:
         self._checker = checker
-        self._poster = poster
-        self._notifier = notifier
+        self._fire = fire
         self._profile_hash = profile_hash
 
     async def run(
         self, *, text: str | None = None, listing_id: int | None = None
     ) -> SelfTestReport:
-        """Evaluate one listing and post the outcome to Slack.
+        """Evaluate one listing and prove the fire channel.
 
-        ``listing_id`` uses a stored listing and posts the real match card, so the
-        Apply and Find-contact buttons carry a resolvable id; otherwise ``text`` (or
-        the built-in demo) is evaluated and rendered like a manual ``/check``.
+        ``listing_id`` evaluates a stored listing; otherwise ``text`` (or the
+        built-in demo) is evaluated. A match opens a real match-thread session;
+        a no-match proves the channel with a warning session instead.
         """
         steps = [SelfTestStep("profile", True, f"loaded, hash {self._profile_hash[:12]}")]
 
@@ -132,27 +119,26 @@ class SelfTestService:
             return SelfTestReport(steps=steps, result=None)
 
         steps.append(_evaluation_step(result))
-        steps.append(await self._post(result, listing_id))
+        steps.append(await self._fire_step(result))
         return SelfTestReport(steps=steps, result=result)
 
-    async def _post(self, result: CheckResult, listing_id: int | None) -> SelfTestStep:
-        """Post the verdict, preferring the real match card when an id is available."""
+    async def _fire_step(self, result: CheckResult) -> SelfTestStep:
+        """Prove the channel: a match opens its thread, anything else fires a warning."""
         try:
-            if result.passed and result.message is not None and listing_id is not None:
-                sent = await self._notifier.send_match(result.message, listing_id=listing_id)
-                detail = "match card + thread detail posted (Apply / Find contact are live)"
-            else:
-                posted = await self._poster.post_blocks(
-                    format_check_blocks(result), check_fallback_text(result)
-                )
-                sent = posted is not None
-                detail = "check verdict posted"
+            if result.passed and result.message is not None:
+                session_url = await self._fire.fire(result.message)
+                if session_url is None:
+                    return SelfTestStep("fire", False, "routine fire failed (see the log)")
+                return SelfTestStep("fire", True, f"match thread opened: {session_url}")
+            sent = await self._fire.fire_warning(
+                f"test-match: Kanal-Probe (Verdict: {result.verdict.value})"
+            )
+            if not sent:
+                return SelfTestStep("fire", False, "routine fire failed (see the log)")
+            return SelfTestStep("fire", True, "warning session opened (channel proven)")
         except Exception as err:
-            logger.exception("self-test Slack post failed")
-            return SelfTestStep("slack", False, f"{type(err).__name__}: {err}")
-        if not sent:
-            return SelfTestStep("slack", False, "Slack rejected the message (see the log)")
-        return SelfTestStep("slack", True, detail)
+            logger.exception("self-test fire failed")
+            return SelfTestStep("fire", False, f"{type(err).__name__}: {err}")
 
 
 def _evaluation_step(result: CheckResult) -> SelfTestStep:

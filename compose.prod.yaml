@@ -50,13 +50,31 @@ services:
     restart: unless-stopped
     networks:
       # `default` reaches postgres. `edge` is the shared stack network; the worker
-      # serves nothing over it (no HTTP, and Slack runs over an outbound Socket Mode
-      # connection), it just lives alongside the rest of the stack. The alias gives it
+      # serves nothing over it (notifications go outbound to the routine fire
+      # endpoint), it just lives alongside the rest of the stack. The alias gives it
       # a distinctive name there, since a bare `app` would be easy to collide with.
       default: {}
       edge:
         aliases:
           - project-pilot
+
+  mcp:
+    image: ghcr.io/nikita-petrich/project-pilot:latest
+    command: ["mcp"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+    restart: unless-stopped
+    networks:
+      # The reverse proxy on `edge` routes the public MCP hostname to
+      # project-pilot-mcp:${MCP_PORT:-8765}; no host port is published directly.
+      default: {}
+      edge:
+        aliases:
+          - project-pilot-mcp
 
 volumes:
   pgdata:

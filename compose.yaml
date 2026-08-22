@@ -33,12 +33,7 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-  # Opt-in until MCP_TOKEN exists in the server's .env: start it with
-  # `docker compose --profile mcp up -d`. Without the profile guard, a deploy
-  # before the token is configured would crash-loop this service (fail-fast
-  # config validation is intentional).
   mcp:
-    profiles: ["mcp"]
     build: .
     command: ["mcp"]
     depends_on:

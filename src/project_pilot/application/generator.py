@@ -81,7 +81,7 @@ class ApplicationGenerator:
     """One call plus one retry; a second failure raises ``LlmSchemaError``.
 
     Unlike stage-3 matching there is no silent fallback: drafting is interactive,
-    so the error surfaces to the Slack bot and Nik simply retries.
+    so the error surfaces to the caller and Nik simply retries.
     """
 
     def __init__(

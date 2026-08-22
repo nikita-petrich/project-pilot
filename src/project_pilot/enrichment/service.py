@@ -1,6 +1,6 @@
 """Contact enrichment orchestration: website discovery, page reading, extraction.
 
-Pure of any database or Slack concern: it takes a company/person, reaches the
+Pure of any database or transport concern: it takes a company/person, reaches the
 company website through the injected fetcher and search provider, and returns a
 ``ContactEnrichment``. A failed page fetch never breaks the lookup — the caller
 always gets whatever was found plus the LinkedIn/Google research links.
