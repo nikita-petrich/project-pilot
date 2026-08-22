@@ -135,7 +135,7 @@ async def list_matches(deps: McpDeps, limit: int = 10) -> list[dict[str, object]
 
 async def get_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
     async with session_scope(deps.session_factory) as session:
-        listing = await Repository(session).get_listing(listing_id)
+        listing = await Repository(session).get_listing_with_evaluations(listing_id)
         if listing is None:
             raise ApplicationStateError(f"Project {listing_id} not found")
         detail = _listing_summary(listing)
