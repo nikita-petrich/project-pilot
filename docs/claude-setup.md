@@ -60,8 +60,11 @@ Danach behandeln wir das Projekt hier im Chat. Regeln dafür:
   application_id 7" oder "lokal, zum Kopieren"), damit ich es merke.
 - Wenn ich dir hier etwas anderes reinwerfe — eine URL, einen Recruiter-Text,
   ein PDF, einen Screenshot: mach daraus zuerst Text (Screenshot abtippen,
-  PDF lesen) und schick den dann durch project_pilot_check_text. Rate nie den
-  Inhalt einer URL.
+  PDF lesen), leg es dann mit project_pilot_ingest_listing an (origin: chat,
+  mail, pdf, image, url oder api — das, was wirklich zutrifft) und arbeite ab
+  da mit der zurückgegebenen Listing-ID weiter. Erst dann prüfen oder bewerben.
+  Rate nie den Inhalt einer URL. Nur wenn ich ausdrücklich sage "nicht
+  speichern", nimm project_pilot_check_text.
 - Verschicke nie eine Bewerbung, solange ich es nicht ausdrücklich in diesem
   Chat sage. project_pilot_send_application ist der einzige Weg nach draußen,
   und nur nachdem ich den Entwurf gelesen und bestätigt habe. Frag auch nicht
@@ -94,42 +97,57 @@ chattable session is the whole acceptance test.
 
 ## 2. Publishing the MCP server
 
-The `mcp` container publishes no host port; it sits on the shared `edge` network
-under the name `project-pilot-mcp`, and a reverse proxy owns the public hostname
-and the certificate.
+The `mcp` container publishes no host port. It joins the reverse proxy's own
+Docker network as `project-pilot-mcp:8765`, and the proxy
+([nikita-petrich/reverse-proxy](https://github.com/nikita-petrich/reverse-proxy),
+`valian/docker-nginx-auto-ssl`) owns the public hostname and the certificate.
 
-**DNS first.** At Strato (Domainverwaltung → `sequenz.io` → DNS), add an
-**A record** for the subdomain `mcp` pointing at the VPS's IPv4 address (an AAAA
-record too if the VPS has IPv6). Let's Encrypt validates over port 80 and
-rate-limits repeated failures, so let the record resolve before starting Caddy:
+One subdomain per MCP server, and that is all it takes: that image orders a
+certificate per hostname over HTTP-01 on first request. No wildcard, no DNS-01,
+nothing to re-issue when the next MCP server arrives.
+
+**1. DNS at Strato.** Domainverwaltung → `sequenz.io` → an `A` record for `mcp`
+pointing at the VPS (plus `AAAA` if it has IPv6). Verify before touching the
+proxy — failed certificate orders count against Let's Encrypt's rate limit:
 
 ```sh
-dig +short mcp.sequenz.io      # must answer with the VPS address
+dig +short mcp.sequenz.io
 ```
 
-One subdomain per MCP server, no wildcard: a `*.sequenz.io` certificate needs a
-DNS-01 challenge against the registrar's API, and Strato offers none. Adding the
-second MCP later is therefore an A record, a block in the `Caddyfile`, and a
-reload — no re-architecture.
+**2. `ALLOWED_DOMAINS`.** The proxy's regex decides which hostnames may get a
+certificate. It has to match `mcp.sequenz.io`; a pattern covering one subdomain
+level (`^([a-z0-9-]+\.)?sequenz\.io$`) already does.
 
-**Then the proxy.** If the VPS has no reverse proxy yet, the repo ships one that
-already carries the `mcp.sequenz.io` route:
+**3. The site config.** Copy [`../deploy/proxy-site/mcp.sequenz.io.conf`](../deploy/proxy-site/mcp.sequenz.io.conf)
+next to the proxy's `compose.yml` and mount it as a **single file**:
+
+```yaml
+    volumes:
+      - ssl-data:/etc/resty-auto-ssl
+      - ./mcp.sequenz.io.conf:/etc/nginx/conf.d/mcp.sequenz.io.conf:ro
+```
+
+Leave `mcp.sequenz.io` **out** of `SITES` — the entrypoint renders SITES entries
+into that same directory and would fail writing over a read-only mount, and its
+generic template keeps nginx's defaults (`proxy_buffering on`,
+`proxy_read_timeout 60s`, gzip). MCP streams over Server-Sent Events, so those
+defaults delay every tool call until the response ends and cut an idle
+notification stream once a minute. The file is that template plus the four lines
+that fix it, and it resolves the upstream through Docker's DNS per request, so a
+redeployed `mcp` container does not leave the proxy serving 502s.
+
+**4. The shared network.** Set `PROXY_NETWORK` in the `prod` environment to the
+network the proxy container runs on (`docker network ls` on the VPS names it).
+`app` and `mcp` attach to it; `postgres` deliberately does not. The deploy fails
+fast if the variable is unset, because a wrong network produces a healthy
+container nobody can reach.
+
+Then, in the proxy's directory:
 
 ```sh
-scp -r deploy/proxy <user>@<host>:/opt/stacks/proxy
-ssh <user>@<host>
-cd /opt/stacks/proxy
-cp .env.example .env && nano .env      # ACME_EMAIL
-docker network create edge             # no-op if a project-pilot deploy created it
 docker compose up -d
-docker compose logs -f caddy           # watch the certificate being issued
+docker compose logs -f nginx
 ```
-
-If a proxy already runs there, add the route to that one instead; see
-[`../deploy/proxy/README.md`](../deploy/proxy/README.md) for the Traefik, Nginx
-Proxy Manager and plain-nginx equivalents. Two requirements hold either way: the
-proxy must be on the `edge` network, and it must not buffer responses — MCP
-streams over Server-Sent Events, and a buffering proxy makes every call hang.
 
 Check it from your laptop:
 
@@ -167,7 +185,7 @@ secret it contains — HTTPS only, no sharing, and rotate it by changing
 `MCP_TOKEN` and redeploying.
 
 In the Claude app: **Settings → Connectors → Add custom connector**, paste the
-path-form URL, name it `project-pilot`. Nine tools should appear; if the dialog
+path-form URL, name it `project-pilot`. Ten tools should appear; if the dialog
 reports no tools, the proxy is buffering (section 2).
 
 Once connected, any Claude chat — and every match-thread session — can run the
@@ -176,6 +194,7 @@ feed and the application flow:
 ```
 project_pilot_list_matches        the feed: recent matches, ids, scores, session links
 project_pilot_get_listing         one listing in full, with its stored evaluations
+project_pilot_ingest_listing      store a listing that did not come from the scanner
 project_pilot_check_listing       re-run the verdict on a stored listing
 project_pilot_check_text          run the verdict on a pasted description or mail
 project_pilot_draft_application   subject, body, LinkedIn message

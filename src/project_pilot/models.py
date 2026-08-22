@@ -28,6 +28,24 @@ class ListingStatus(StrEnum):
     SKIPPED_STALE = "skipped_stale"
 
 
+class ListingOrigin(StrEnum):
+    """How a listing entered the database — its provenance.
+
+    Everything the scanner fetches is ``SCAN``. The rest arrive through
+    ``ingest_listing`` on the MCP surface: pasted into a chat, forwarded as a
+    recruiter mail, read out of a PDF, transcribed from a screenshot, fetched
+    from a link, or pushed in by an automation (n8n).
+    """
+
+    SCAN = "scan"
+    CHAT = "chat"
+    MAIL = "mail"
+    PDF = "pdf"
+    IMAGE = "image"
+    URL = "url"
+    API = "api"
+
+
 class EvaluationStage(StrEnum):
     FRESHNESS = "freshness"
     HARD_RULE = "hard_rule"
@@ -99,6 +117,12 @@ class Listing(Base):
 
     first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # Provenance: how this row got here. The scanner's rows are `scan`; anything
+    # ingested through the MCP surface names the channel it arrived on, and the
+    # detail (a note, the original file name) rides in `raw["ingest"]`.
+    origin: Mapped[ListingOrigin] = mapped_column(
+        _pg_enum(ListingOrigin, "listing_origin"), default=ListingOrigin.SCAN
+    )
     status: Mapped[ListingStatus] = mapped_column(
         _pg_enum(ListingStatus, "listing_status"), default=ListingStatus.NEW
     )

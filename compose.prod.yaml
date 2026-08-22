@@ -80,7 +80,10 @@ volumes:
   pgdata:
 
 networks:
-  # Owned by the proxy stack. The deploy creates it when missing so a fresh host does
-  # not fail with a bare "network edge not found".
+  # The reverse proxy's own Docker network, joined by name so the proxy can reach
+  # `project-pilot-mcp` by container name. PROXY_NETWORK (in .env) names the real
+  # one — the proxy stack owns it, this stack only attaches. The deploy creates it
+  # when missing so a fresh host does not fail with a bare "network not found".
   edge:
     external: true
+    name: ${PROXY_NETWORK:-edge}

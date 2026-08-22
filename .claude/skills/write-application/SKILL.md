@@ -43,21 +43,24 @@ missing and ask, rather than inventing a project.
 If `check-project` returned `no_match` for this listing earlier in the chat, say
 so and ask whether to draft anyway before writing.
 
-## 1a. Prefer the pipeline over your own writing
+## 1a. Store it, then draft through the pipeline
 
-When the `project_pilot_*` MCP tools are connected and the listing is **stored**,
-draft through them - that draft is persisted, revisable, and the only one Nik can
-later send:
+When the `project_pilot_*` MCP tools are connected, draft through them - that
+draft is persisted, revisable, and the only one Nik can actually send:
 
-1. `project_pilot_draft_application(listing_id)`.
-2. Changes → `project_pilot_revise_application(application_id, instruction)`.
-3. Recipient → `project_pilot_set_recipient(application_id, email)`.
+1. Listing not stored yet → `project_pilot_ingest_listing(text, origin, …)` first,
+   with the `origin` that applies (`chat`, `mail`, `pdf`, `image`, `url`, `api`).
+   It returns the `listing_id`, and re-ingesting the same text or URL returns the
+   existing one rather than a duplicate.
+2. `project_pilot_draft_application(listing_id)`.
+3. Changes → `project_pilot_revise_application(application_id, instruction)`.
+4. Recipient → `project_pilot_set_recipient(application_id, email)`.
 
-Draft here in the chat instead (steps 2-4) when the tools are absent or erroring,
-**or** when the listing is not stored - a pasted mail, a PDF, a screenshot. There
-is no tool that ingests a new listing, so that case is always drafted here, and
-the draft is Nik's to copy and send by hand. Say in one line which path you took
-(`via MCP, application_id N` / `local draft`).
+So a pasted mail, a PDF or a transcribed screenshot goes down the same path as a
+scanned listing - ingest first, then draft. Draft here in the chat instead
+(steps 2-4) only when the tools are absent or erroring; that draft is Nik's to
+copy and send by hand. Say in one line which path you took
+(`via MCP, application_id N` / `lokal, zum Kopieren`).
 
 Sending is not a step in either path. See the hard rule above:
 `project_pilot_send_application` is Nik's call, made in his own words, never

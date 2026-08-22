@@ -31,20 +31,33 @@ transcribe first and rule-check the transcription - never skip stage 2 silently.
 
 Empty or near-empty input: ask for the description rather than judging nothing.
 
-## 1a. Prefer the pipeline over your own reading
+## 1a. Store it, then let the pipeline judge it
 
-When the `project_pilot_*` MCP tools are connected, they are the authority,
-because they run the real scan code rather than a re-reading of it:
+When the `project_pilot_*` MCP tools are connected, they are the authority: they
+run the real scan code rather than a re-reading of it, and what they store is
+what the rest of the system can act on later.
 
-1. Stored listing → `project_pilot_check_listing(listing_id)`.
-2. Anything else, once you have the text → `project_pilot_check_text(text)`.
-3. Report that verdict, in the step 6 format.
+1. Not stored yet → `project_pilot_ingest_listing(text, origin, …)` first. Pass
+   the `origin` that actually applies - `chat` for something pasted here, `mail`
+   for a forwarded recruiter mail, `pdf`, `image` for a transcribed screenshot,
+   `url` for a fetched link, `api` for an automation. Add `title`, `url` and
+   `company` when you have them, and `note` for anything worth remembering about
+   how it arrived. It returns a `listing_id`, and `already_known: true` when this
+   text or URL was stored before.
+2. Then `project_pilot_check_listing(listing_id)`.
+3. Report that verdict, in the step 6 format, naming the `listing_id` so the
+   listing can be drafted from and sent later.
+
+Ingest is the default even for a quick question, because a listing that is only
+in the chat cannot be applied to, reported on, or found again. Skip it only when
+the user explicitly wants a throwaway look ("nur mal kurz gucken, nicht
+speichern") - then use `project_pilot_check_text(text)`, which stores nothing.
 
 Fall back to judging it yourself (steps 2-5) whenever the tools are absent, error,
 or time out - that is what the rest of this skill is for, and it is a full
 fallback, not a degraded one. Say in one line which path you took
-(`via MCP` / `local`), so a silently missing connector is visible rather than
-invisible.
+(`via MCP, listing_id 42` / `local, nicht gespeichert`), so a silently missing
+connector is visible rather than invisible.
 
 ## 2. Read the sources
 

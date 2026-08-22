@@ -93,18 +93,20 @@ Three services, two networks, no published ports:
 | `mcp` | `default`, `edge` | `project-pilot-mcp:8765`, for the reverse proxy |
 | `postgres` | `default` only | nothing outside the stack |
 
-`edge` is the shared external network the reverse proxy lives on. `app` joins it
-only to sit alongside the rest of the stack; the one thing actually served over it
-is the MCP server, and even that publishes no host port — the proxy owns the
-public hostname and the certificate. Setting that up is
-[`claude-setup.md`](claude-setup.md) §2, and the repo ships a ready proxy stack in
-[`deploy/proxy/`](../deploy/proxy).
+`edge` is only this stack's local name for the reverse proxy's own network;
+`PROXY_NETWORK` in the `prod` environment maps it to the real one on the host.
+`app` joins it just to sit alongside the rest of the stack — the one thing
+actually served over it is the MCP server, and even that publishes no host port,
+because the reverse proxy owns the public hostname and the certificate. Setting
+that up is
+[`claude-setup.md`](claude-setup.md) §2; the site config for the proxy already
+running on the VPS is [`deploy/proxy-site/`](../deploy/proxy-site).
 
 `postgres` stays off `edge` deliberately: nothing outside this stack should reach
 the database, and a second stack publishing its own `postgres` service there would
 collide on that network's DNS.
 
-If `edge` does not exist yet, the deploy creates it rather than failing.
+If that network does not exist yet, the deploy creates it rather than failing.
 
 ## GitHub secrets
 
@@ -145,8 +147,9 @@ Required — the container dies at boot without them:
 | `CLAUDE_ROUTINE_FIRE_URL` | the match-thread routine's fire endpoint — THE notification channel |
 | `CLAUDE_ROUTINE_TOKEN` | that routine's bearer token (`sk-ant-oat01-…`) |
 | `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
+| `PROXY_NETWORK` | the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 
-The last three come from [`claude-setup.md`](claude-setup.md). The deploy fails at
+The routine and MCP values come from [`claude-setup.md`](claude-setup.md). The deploy fails at
 the *Install .env* step if any of them is missing, before the server is touched:
 without a notification channel the worker would find matches it cannot deliver, so
 refusing to deploy beats a crash loop over SSH.

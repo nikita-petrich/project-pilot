@@ -16,6 +16,7 @@ import hmac
 import logging
 from collections.abc import Awaitable, Callable, MutableMapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from fastmcp import FastMCP
@@ -24,9 +25,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.application.service import ApplicationService, DraftView
 from project_pilot.db import session_scope
 from project_pilot.enrichment.schemas import ContactEnrichment
-from project_pilot.errors import ApplicationStateError
+from project_pilot.errors import ApplicationStateError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
-from project_pilot.models import Listing
+from project_pilot.ingestion.manual import build_manual_listing
+from project_pilot.models import Listing, ListingOrigin
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -72,6 +74,7 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
         "location": listing.location,
         "remote_status": listing.remote_status.value,
         "status": listing.status.value,
+        "origin": listing.origin.value,
         "first_seen_at": listing.first_seen_at.isoformat(),
         "notified_at": listing.notified_at.isoformat() if listing.notified_at else None,
         "claude_session_url": listing.claude_session_url,
@@ -157,6 +160,51 @@ async def get_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
         return detail
 
 
+async def ingest_listing(
+    deps: McpDeps,
+    text: str,
+    origin: str,
+    title: str | None = None,
+    url: str | None = None,
+    company: str | None = None,
+    note: str | None = None,
+) -> dict[str, object]:
+    """Store a listing that did not come from the scanner, with its provenance."""
+    if not text.strip():
+        raise ApplicationStateError("Cannot ingest an empty listing text")
+    try:
+        channel = ListingOrigin(origin)
+    except ValueError as err:
+        allowed = ", ".join(member.value for member in ListingOrigin)
+        raise ApplicationStateError(f"Unknown origin {origin!r}; use one of: {allowed}") from err
+    if channel is ListingOrigin.SCAN:
+        raise ApplicationStateError("origin 'scan' belongs to the scanner; name the real channel")
+
+    listing = build_manual_listing(
+        text=text,
+        origin=channel,
+        now=datetime.now(UTC),
+        title=title,
+        url=url,
+        company=company,
+        note=note,
+    )
+    async with session_scope(deps.session_factory) as session:
+        repo = Repository(session)
+        # upsert_listing dedupes on url_hash, so re-ingesting the same mail (or a
+        # link the scanner already stored) touches that row instead of forking one.
+        stored, created = await repo.upsert_listing(listing)
+        # Re-read with the evaluations eager-loaded: an already-known listing comes
+        # back from a plain select, and summarizing it would lazy-load under async.
+        full = assert_defined(
+            await repo.get_listing_with_evaluations(assert_defined(stored.id, "listing id")),
+            "ingested listing",
+        )
+        payload = _listing_summary(full)
+        payload["already_known"] = not created
+        return payload
+
+
 async def check_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
     return _check_payload(await deps.check_service.check_stored(listing_id))
 
@@ -221,6 +269,29 @@ def build_mcp(deps: McpDeps) -> FastMCP:
         """Full detail for one listing: description, skills, and every stored
         evaluation. Use before discussing, checking, or applying to a project."""
         return await get_listing(deps, listing_id)
+
+    @mcp.tool
+    async def project_pilot_ingest_listing(
+        text: str,
+        origin: str,
+        title: str | None = None,
+        url: str | None = None,
+        company: str | None = None,
+        note: str | None = None,
+    ) -> dict[str, object]:
+        """Store a project listing that did not come from the scanner, and return
+        its listing_id. Call this FIRST for anything the user brings in by hand -
+        a pasted description, a forwarded recruiter mail, a PDF, a screenshot you
+        transcribed, a link - before checking or drafting, so the listing is in
+        the database and the whole flow (check, draft, send, reporting) works on
+        it. `origin` records how it arrived and must be one of: chat, mail, pdf,
+        image, url, api. Pass the listing text itself as `text` (transcribe an
+        image first); `title`, `url`, `company` and `note` when known. Ingesting
+        the same text or URL twice returns the existing listing rather than a
+        duplicate (`already_known: true`)."""
+        return await ingest_listing(
+            deps, text, origin, title=title, url=url, company=company, note=note
+        )
 
     @mcp.tool
     async def project_pilot_check_listing(listing_id: int) -> dict[str, object]:

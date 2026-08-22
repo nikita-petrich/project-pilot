@@ -95,6 +95,7 @@ gitignored and `.env.example` is the template):
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `CLAUDE_ROUTINE_FIRE_URL` / `CLAUDE_ROUTINE_TOKEN` | the match-thread routine's fire endpoint and its token — the notification channel |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
+| `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
@@ -127,23 +128,38 @@ Two pieces, both in [`docs/claude-setup.md`](docs/claude-setup.md):
    with this repository attached and push notifications on. Its API trigger yields
    `CLAUDE_ROUTINE_FIRE_URL` and `CLAUDE_ROUTINE_TOKEN`. The worker POSTs one match
    to it per session; there is no inbound port and no webhook to expose.
-2. **The MCP server** behind a reverse proxy, added to the Claude app as a custom
-   connector. That is what turns a pushed session into a working surface: the feed,
-   the checks, the drafts, and the send are its tools. The repo ships a ready proxy
-   stack in [`deploy/proxy/`](deploy/proxy).
+2. **The MCP server** behind the reverse proxy, added to the Claude app as a
+   custom connector. That is what turns a pushed session into a working surface:
+   the feed, the checks, the drafts, and the send are its tools. The site config
+   for the proxy is in [`deploy/proxy-site/`](deploy/proxy-site).
 
-Nine tools are exposed, and any Claude chat that has the connector can use them:
+Ten tools are exposed, and any Claude chat that has the connector can use them:
 
 | Tool | Does |
 |---|---|
 | `list_matches` / `get_listing` | the feed and one listing in full, with its evaluations |
+| `ingest_listing` | store a listing that did not come from the scanner, with its provenance |
 | `check_listing` / `check_text` | re-run the verdict on a stored listing or on pasted text |
 | `draft_application` / `revise_application` | write and rework a draft |
 | `set_recipient` / `send_application` | address it, and — only on your explicit go — send it |
 | `enrich_company` | contact data from the company's own website |
 
-n8n speaks the same protocol, so a workflow can run `check_text` over incoming
+n8n speaks the same protocol, so a workflow can ingest and check incoming
 recruiter mails without duplicating any of the judgment.
+
+### Listings that did not come from the scanner
+
+A recruiter mails, a client sends a PDF, someone screenshots a listing.
+`ingest_listing` stores it like any other listing and records **how it arrived** —
+`listings.origin` is one of `scan`, `chat`, `mail`, `pdf`, `image`, `url`, `api`,
+and `raw["ingest"]` keeps the detail (a note, the supplied URL, the timestamp).
+Everything downstream then works on it unchanged: check, draft, revise, send,
+reporting.
+
+Dedupe is the scanner's own: a pasted freelancermap link is canonicalized and
+hashed exactly as the scraper does it, so a link you check by hand and the page
+the scanner later fetches are **one** row, not two. Text with no URL is keyed by
+the text, so the same mail pasted twice is the same listing.
 
 ## Applying from a match thread
 
