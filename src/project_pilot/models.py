@@ -129,7 +129,6 @@ class Listing(Base):
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     # The Claude match-thread session opened for this listing (feature 22); also
     # the double-fire guard, since the routine fire endpoint has no idempotency key.
-    claude_session_url: Mapped[str | None] = mapped_column(String(512), default=None)
 
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
 

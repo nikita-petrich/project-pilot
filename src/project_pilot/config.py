@@ -104,8 +104,9 @@ class Settings(BaseSettings):
     mcp_token: str = Field(default="", repr=False)
     mcp_port: int = 8765
 
-    claude_routine_fire_url: str = ""
-    claude_routine_token: str = Field(default="", repr=False)
+    ntfy_topic_url: str = ""
+    ntfy_token: str = Field(default="", repr=False)
+    claude_project_url: str = ""
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
@@ -188,12 +189,12 @@ class Settings(BaseSettings):
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
 
-    def require_claude_fire(self) -> tuple[str, str]:
-        if not self.claude_routine_fire_url:
-            raise ConfigError("CLAUDE_ROUTINE_FIRE_URL must be set (the routine's /fire URL)")
-        if not self.claude_routine_token:
-            raise ConfigError("CLAUDE_ROUTINE_TOKEN must be set (sk-ant-oat01-… routine token)")
-        return self.claude_routine_fire_url, self.claude_routine_token
+    def require_ntfy(self) -> str:
+        if not self.ntfy_topic_url:
+            raise ConfigError(
+                "NTFY_TOPIC_URL must be set (the push topic, e.g. https://ntfy.sh/<topic>)"
+            )
+        return self.ntfy_topic_url
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

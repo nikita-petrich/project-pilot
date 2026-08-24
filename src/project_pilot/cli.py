@@ -34,7 +34,7 @@ from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
-from project_pilot.notification.claude_fire import ClaudeRoutineFire
+from project_pilot.notification.push import NtfyPush
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
@@ -133,8 +133,11 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     llm_client = OpenAiStructuredClient(api_key)
     matcher = _matcher(llm_client, model, profile)
 
-    fire_url, fire_token = settings.require_claude_fire()
-    claude_fire = ClaudeRoutineFire(fire_url=fire_url, token=fire_token)
+    notifier = NtfyPush(
+        topic_url=settings.require_ntfy(),
+        token=settings.ntfy_token,
+        target_url=settings.claude_project_url,
+    )
 
     pipeline = Pipeline(
         settings=settings,
@@ -143,7 +146,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         client_factory=client_factory,
         matcher=matcher,
         llm_probe=llm_client,
-        claude_fire=claude_fire,
+        notifier=notifier,
     )
 
     async def closer() -> None:
@@ -257,12 +260,12 @@ async def _build_report(settings: Settings) -> str:
 async def _run_selftest(
     settings: Settings, *, text: str | None, listing_id: int | None
 ) -> SelfTestReport:
-    """Wire the real checker and the routine fire, then push one listing through both."""
+    """Wire the real checker and the push channel, then run one listing through both."""
     profile = ProfileService(Path("profile")).load()
     api_key, model = settings.require_openai()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    fire_url, fire_token = settings.require_claude_fire()
+    topic_url = settings.require_ntfy()
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
@@ -270,7 +273,11 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        fire=ClaudeRoutineFire(fire_url=fire_url, token=fire_token),
+        notifier=NtfyPush(
+            topic_url=topic_url,
+            token=settings.ntfy_token,
+            target_url=settings.claude_project_url,
+        ),
         profile_hash=profile.profile_hash,
     )
     try:
@@ -435,9 +442,9 @@ def test_match(
         help="Evaluate a stored listing instead of pasted text.",
     ),
 ) -> None:
-    """Push one listing through hard rules, LLM, and the match-thread routine (stores nothing)."""
+    """Push one listing through hard rules, LLM, and the push channel (stores nothing)."""
     settings = _load_settings()
-    settings.require_claude_fire()
+    settings.require_ntfy()
     if file is not None:
         if text is not None:
             typer.echo("use either --text or --file, not both")

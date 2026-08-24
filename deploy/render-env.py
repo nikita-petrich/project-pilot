@@ -17,10 +17,8 @@ import sys
 # These configure the deploy, not the app, so they must not land in the app's .env.
 DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-# The routine fire endpoint, as the API trigger's modal hands it out.
-FIRE_URL_RE = re.compile(
-    r"^https://api\.anthropic\.com/v1/claude_code/routines/[A-Za-z0-9_-]+/fire/?$"
-)
+# An ntfy topic address: server plus exactly one topic segment.
+NTFY_URL_RE = re.compile(r"^https?://[A-Za-z0-9.\-]+(?::\d+)?/[A-Za-z0-9_\-]+/?$")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -28,10 +26,9 @@ REQUIRED = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "SEARCH_URLS",
-    # The match-thread routine is THE notification channel; without it the daemon
-    # aborts at boot by design, so the deploy refuses here instead.
-    "CLAUDE_ROUTINE_FIRE_URL",
-    "CLAUDE_ROUTINE_TOKEN",
+    # ntfy is THE notification channel; without it the daemon aborts at boot by
+    # design, so the deploy refuses here instead.
+    "NTFY_TOPIC_URL",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
     # The reverse proxy's Docker network. Wrong or unset, the MCP container comes
@@ -81,25 +78,25 @@ def problems(settings: dict[str, str]) -> list[str]:
             found.append(f"{key} has leading or trailing whitespace")
         elif " #" in value:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
-    found.extend(_fire_url_problems(settings.get("CLAUDE_ROUTINE_FIRE_URL", "")))
+    found.extend(_ntfy_url_problems(settings.get("NTFY_TOPIC_URL", "")))
     return found
 
 
-def _fire_url_problems(url: str) -> list[str]:
-    """Catch the routine's *page* URL being stored instead of its fire endpoint.
+def _ntfy_url_problems(url: str) -> list[str]:
+    """Catch a topic address that would push into the void.
 
-    Both are shown in the Claude UI and only one of them fires anything; the wrong
-    one answers 403 at the first real match, hours after a deploy that looked
-    perfectly healthy. The shape is fixed, so check it here rather than discover it
-    from a warning session that cannot be sent either.
+    A bare server with no topic, or a path with extra segments, is accepted by
+    ntfy's HTTP layer but delivers to nobody — and the failure only shows up as a
+    match that never reaches the phone, hours after a deploy that looked healthy.
+    The shape is fixed, so check it here.
     """
     if not url:
         return []  # absence is already reported by the REQUIRED check
-    if not FIRE_URL_RE.match(url):
+    if not NTFY_URL_RE.match(url):
         return [
-            f"CLAUDE_ROUTINE_FIRE_URL is {url!r}, which is not a routine fire endpoint. "
-            "Expected https://api.anthropic.com/v1/claude_code/routines/trig_.../fire "
-            "— a https://claude.ai/code/routines/... address is the page, not the API."
+            f"NTFY_TOPIC_URL is {url!r}, which is not a topic address. "
+            "Expected https://<server>/<topic>, e.g. https://ntfy.sh/project-pilot-a8f3k2m9x "
+            "— the server alone pushes to nobody."
         ]
     return []
 

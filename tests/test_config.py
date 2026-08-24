@@ -225,18 +225,10 @@ def test_require_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_mcp() == "s3cret"
 
 
-def test_require_claude_fire(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDE_ROUTINE_FIRE_URL", raising=False)
-    monkeypatch.delenv("CLAUDE_ROUTINE_TOKEN", raising=False)
-    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_FIRE_URL"):
-        Settings().require_claude_fire()
+def test_require_ntfy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("NTFY_TOPIC_URL", raising=False)
+    with pytest.raises(ConfigError, match="NTFY_TOPIC_URL"):
+        Settings().require_ntfy()
 
-    monkeypatch.setenv("CLAUDE_ROUTINE_FIRE_URL", "https://api.anthropic.com/v1/x/fire")
-    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_TOKEN"):
-        Settings().require_claude_fire()
-
-    monkeypatch.setenv("CLAUDE_ROUTINE_TOKEN", "sk-ant-oat01-x")
-    assert Settings().require_claude_fire() == (
-        "https://api.anthropic.com/v1/x/fire",
-        "sk-ant-oat01-x",
-    )
+    monkeypatch.setenv("NTFY_TOPIC_URL", "https://ntfy.sh/pilot-test")
+    assert Settings().require_ntfy() == "https://ntfy.sh/pilot-test"

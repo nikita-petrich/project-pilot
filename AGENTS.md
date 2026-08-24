@@ -10,8 +10,8 @@ there is a single source of truth.
 project-pilot is a personal, single-user worker that watches freelancermap.de for
 new project listings, persists every listing losslessly in PostgreSQL, evaluates
 fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
-and pushes real matches within minutes: each match opens a Claude match-thread
-session, with the push arriving through the Claude app; the MCP server exposes
+and pushes real matches within minutes: the worker sends an ntfy push whose one
+tap opens the Claude project that collects the match chats; the MCP server exposes
 every function to Claude chats and n8n.
 
 **Only the scraper is freelancermap-specific** (its parser, `SEARCH_URLS`, the
@@ -60,7 +60,7 @@ adapter folders so Codex and Claude Code stay aligned.
 ## Domain-Skills
 
 Beyond the workflow skills below, two skills carry project-pilot's own judgment
-into any Claude surface (Claude Code today, the match-thread routine of the target
+into any Claude surface (Claude Code sessions today, any Claude chat via the account
 architecture next):
 
 - `/check-project` - judge one project listing against Nik's profile, exactly as
@@ -122,12 +122,12 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
-- Scheduler daemon (scan loop; every notified match opens a Claude match-thread
-  session via the routine's fire endpoint — `CLAUDE_ROUTINE_FIRE_URL` +
-  `CLAUDE_ROUTINE_TOKEN` are required): `uv run project-pilot daemon`
+- Scheduler daemon (scan loop; every notified match sends an ntfy push whose
+  click target opens the Claude match project — `NTFY_TOPIC_URL` is required):
+  `uv run project-pilot daemon`
 - MCP server (Streamable HTTP + `MCP_TOKEN` bearer auth, for Claude connectors/n8n): `uv run project-pilot mcp`
-- End-to-end smoke test (rules + LLM + routine fire, stores nothing, costs one
-  routine run): `uv run project-pilot test-match`
+- End-to-end smoke test (rules + LLM + a real push, stores nothing):
+  `uv run project-pilot test-match`
   (`--text`/`--file` for your own description, `--listing-id N` for a stored listing)
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
 - Find a company's contact data (opt-in `ENRICHMENT_ENABLED`): `uv run project-pilot enrich "<company>"` or `enrich --listing-id <id>`

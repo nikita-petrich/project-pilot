@@ -16,7 +16,7 @@ Actions builds, the server pulls). This page is what to do once it runs.
   on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
   `OPENAI_API_KEY`, `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"),
-  `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`, `MCP_TOKEN`, and optionally
+  `NTFY_TOPIC_URL`, `MCP_TOKEN`, and optionally
   `POSTGRES_PASSWORD`. Do not set `DATABASE_URL` in `.env`; compose sets it to reach
   the postgres service.
 
@@ -74,7 +74,7 @@ identical call would fail identically, the same rule the scraper applies to a 40
 ```sh
 docker compose exec app project-pilot stats         # reporting summary
 docker compose exec app project-pilot run-once      # one scan now (exit != 0 on failure)
-docker compose exec app project-pilot test-match    # rules + LLM + a real routine fire
+docker compose exec app project-pilot test-match    # rules + LLM + a real push
 docker compose exec app project-pilot healthcheck   # liveness/freshness probe
 docker compose logs -f mcp                          # the MCP server's requests
 ```

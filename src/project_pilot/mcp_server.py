@@ -78,7 +78,6 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
         "origin": listing.origin.value,
         "first_seen_at": listing.first_seen_at.isoformat(),
         "notified_at": listing.notified_at.isoformat() if listing.notified_at else None,
-        "claude_session_url": listing.claude_session_url,
     }
 
 

@@ -175,10 +175,6 @@ class Repository:
             listing.notified_at = when
         await self._session.flush()
 
-    async def set_claude_session_url(self, listing: Listing, url: str) -> None:
-        listing.claude_session_url = url
-        await self._session.flush()
-
     async def get_listing(self, listing_id: int) -> Listing | None:
         return await self._session.get(Listing, listing_id)
 

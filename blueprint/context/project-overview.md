@@ -54,7 +54,7 @@ Two separate guarantees drive the whole design:
 - **Lossless DB (completeness).** `source_state` holds a **watermark** (timestamp of the last successful run). Each run paginates the "newest first" search URLs until it only sees known `url_hash` values or entries older than the watermark, so every gap (failure, restart, downtime) is closed on the next run and every listing ever seen lands in `listings`.
 - **Seed run.** On an empty DB the full current inventory is persisted as a reporting baseline with status `skipped_stale` and **zero notifications**.
 - **Analysis only for fresh entries.** `ANALYSIS_WINDOW_MIN` (default 30, = interval x 2) gates evaluation. Freshness signal order: (1) `posted_at` if minute-precise, else (2) gap rule (distance to last successful run <= window). Older new entries are stored `skipped_stale` with a reason JSON. Feature 1 verifies the real time granularity and decides the implementation.
-- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) opens a Claude match-thread session (routine fire) and sets `notified_at` after success.
+- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends an ntfy push (whose click target opens the Claude project of the match chats) and sets `notified_at` after success.
 - **Traceability.** Every entry gets a stored verdict with a reason for match **and** no-match, each `evaluations` row carrying `model`, `prompt_version`, `profile_hash`, token counts and latency.
 
 ## Data model
@@ -141,7 +141,7 @@ lookups: e-mails, phones, persons, research links).
 - **OpenAI SDK** - `.parse()` with a Pydantic `response_format` for structured match verdicts; model from ENV.
 - **tenacity** - retry with backoff on network/5xx/429, never on 403.
 - **typer** - CLI: `init-db`, `run-once`, `daemon`, `test-notify`, `test-filter`, `stats`.
-- **Claude match-thread routine + MCP (FastMCP)** - one Claude session per match via the routine fire endpoint (push through the Claude app); an MCP server exposes feed, checks, drafts and send to Claude chats and n8n.
+- **ntfy + MCP (FastMCP)** - the worker pushes every match itself (one retried HTTP POST); the push's click target opens the Claude project that collects the match chats, and an MCP server exposes feed, checks, drafts and send to Claude chats and n8n.
 - **pytest + pytest-asyncio + respx + pytest-cov** - fixtures, no live requests.
 - **ruff + mypy --strict** - lint, format, and typing gate.
 - **Docker + Compose** - containerized worker plus postgres on the home server.
@@ -155,7 +155,7 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 No web UI of its own. The Claude app is the entire surface:
 
-- **Match alert** - each match opens one Claude session (routine fire) whose opening turn carries the full listing facts; the Claude app pushes the completion to phone and laptop, the session title is the feed entry.
+- **Match alert** - an ntfy push carries the match card to phone and desktop within seconds; one tap opens the Claude project that collects the match chats, where the account skills and the MCP tools are ready and the push body names the command to type.
 - **Application flow** - drafting, revisions, recipient handling and the human-confirmed send happen in the match's session via the MCP tools (`draft`, `revise`, `set_recipient`, `send`).
 - **Warnings** - source cooldown (403/captcha), LLM health, and consecutive-failure warnings arrive as their own plain-text sessions over the same channel.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.
@@ -163,5 +163,5 @@ No web UI of its own. The Claude app is the entire surface:
 ## Open questions
 
 > None blocking. Operational inputs Nik supplies at deploy time (profile content,
-> search URLs, routine/MCP and OpenAI credentials, later threshold tuning) are
+> search URLs, ntfy/MCP and OpenAI credentials, later threshold tuning) are
 > tracked as open items in `SPEC.md` section 9 and the handover, not code gaps.

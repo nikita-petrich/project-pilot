@@ -78,12 +78,12 @@ class Matcher(Protocol):
     async def evaluate(self, *, profile_text: str, listing_text: str) -> LlmEvaluation: ...
 
 
-class MatchFire(Protocol):
-    """The notification channel: one Claude match-thread session per match,
-    plain-text sessions for operator warnings."""
+class MatchNotifier(Protocol):
+    """The notification channel: one push per match carrying the link that opens
+    its Claude session, and operator warnings over the same channel."""
 
-    async def fire(self, message: MatchMessage) -> str | None: ...
-    async def fire_warning(self, text: str) -> bool: ...
+    async def notify(self, message: MatchMessage) -> bool: ...
+    async def notify_warning(self, text: str) -> bool: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -126,7 +126,7 @@ class Pipeline:
         base_url: str = BASE_URL,
         llm_probe: LlmProbe | None = None,
         alerter: HealthAlerter | None = None,
-        claude_fire: MatchFire | None = None,
+        notifier: MatchNotifier | None = None,
     ) -> None:
         self._settings = settings
         self._profile = profile
@@ -137,7 +137,7 @@ class Pipeline:
         self._source = SOURCE_NAME
         self._llm_probe = llm_probe
         self._alerter = alerter or HealthAlerter(self._send_operator_message)
-        self._claude_fire = claude_fire
+        self._notifier = notifier
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
@@ -256,10 +256,10 @@ class Pipeline:
 
     async def _send_operator_message(self, text: str) -> None:
         """Deliver an operator message verbatim (the caller owns the wording and icon)."""
-        if self._claude_fire is not None:
-            await self._claude_fire.fire_warning(text)
+        if self._notifier is not None:
+            await self._notifier.notify_warning(text)
         else:
-            logger.warning("operator message (no fire configured): %s", text)
+            logger.warning("operator message (no notifier configured): %s", text)
 
     async def _execute(
         self,
@@ -491,14 +491,12 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Open one match-thread session per pending match, durable per send.
+        """Push one notification per pending match, durable per send.
 
         Runs in its own session after the scan's unit of work has committed, and
-        commits after every successful fire: an opened session can never be
-        rolled back into "unnotified" (which would open a duplicate — the fire
-        endpoint has no idempotency key, so ``notified_at`` plus the stored
-        session URL are the guard). A failed fire leaves the listing pending and
-        it is retried on the next run.
+        commits after every successful push, so a delivered notification can
+        never be rolled back into "unnotified" and pushed twice. A failed push
+        leaves the listing pending and it is retried on the next run.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -507,11 +505,13 @@ class Pipeline:
             )
             if not pending:
                 return
-            if self._claude_fire is None:
-                logger.info("dry-run: %d match(es) not fired (no fire configured)", len(pending))
+            if self._notifier is None:
+                logger.info(
+                    "dry-run: %d match(es) not pushed (no notifier configured)", len(pending)
+                )
                 return
             failed = 0
-            for listing in pending:  # one session per match, marked only on a successful fire
+            for listing in pending:  # one push per match, marked only on success
                 message = _to_match_message(listing, now)
                 if message.onsite_only:
                     # Mark it handled so it leaves the pending set after one skip
@@ -522,17 +522,15 @@ class Pipeline:
                         listing.external_url,
                     )
                     continue
-                session_url = await self._claude_fire.fire(message)
-                if session_url is not None:
-                    await repo.set_claude_session_url(listing, session_url)
+                if await self._notifier.notify(message):
                     await repo.mark_notified([listing], now)
                     await session.commit()
                     outcome.notified += 1
-                    logger.info("match thread opened: %s -> %s", listing.external_url, session_url)
+                    logger.info("match pushed: %s", listing.external_url)
                 else:
                     failed += 1
             if failed:
-                logger.warning("routine fire failed; %d match(es) will retry next run", failed)
+                logger.warning("push failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

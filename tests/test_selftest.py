@@ -1,4 +1,4 @@
-"""Self-test: the report reflects each link, and the fire step proves the channel."""
+"""Self-test: the report reflects each link, and the push step proves the channel."""
 
 from project_pilot.evaluation.check import CheckResult
 from project_pilot.models import EvaluationStage, Verdict
@@ -17,17 +17,17 @@ class _FakeChecker:
         return self._result
 
 
-class _FakeFire:
+class _FakeNotifier:
     def __init__(self, *, ok: bool = True) -> None:
         self.ok = ok
         self.matches: list[MatchMessage] = []
         self.warnings: list[str] = []
 
-    async def fire(self, message: MatchMessage) -> str | None:
+    async def notify(self, message: MatchMessage) -> bool:
         self.matches.append(message)
-        return "https://claude.ai/code/session_01T" if self.ok else None
+        return self.ok
 
-    async def fire_warning(self, text: str) -> bool:
+    async def notify_warning(self, text: str) -> bool:
         self.warnings.append(text)
         return self.ok
 
@@ -47,28 +47,30 @@ def _result(*, passed: bool) -> CheckResult:
     )
 
 
-def _service(result: CheckResult, fire: _FakeFire) -> SelfTestService:
-    return SelfTestService(checker=_FakeChecker(result), fire=fire, profile_hash="abc123def456")
+def _service(result: CheckResult, notifier: _FakeNotifier) -> SelfTestService:
+    return SelfTestService(
+        checker=_FakeChecker(result), notifier=notifier, profile_hash="abc123def456"
+    )
 
 
-async def test_match_opens_thread() -> None:
-    fire = _FakeFire()
-    report = await _service(_result(passed=True), fire).run()
+async def test_match_pushes_card() -> None:
+    notifier = _FakeNotifier()
+    report = await _service(_result(passed=True), notifier).run()
     assert report.ok
-    assert len(fire.matches) == 1
-    assert "session_01T" in format_selftest(report)
+    assert len(notifier.matches) == 1
+    assert "match card pushed" in format_selftest(report)
 
 
 async def test_no_match_proves_channel_via_warning() -> None:
-    fire = _FakeFire()
-    report = await _service(_result(passed=False), fire).run()
+    notifier = _FakeNotifier()
+    report = await _service(_result(passed=False), notifier).run()
     assert report.ok
-    assert fire.matches == []
-    assert len(fire.warnings) == 1
+    assert notifier.matches == []
+    assert len(notifier.warnings) == 1
 
 
-async def test_failed_fire_fails_the_report() -> None:
-    fire = _FakeFire(ok=False)
-    report = await _service(_result(passed=True), fire).run()
+async def test_failed_push_fails_the_report() -> None:
+    notifier = _FakeNotifier(ok=False)
+    report = await _service(_result(passed=True), notifier).run()
     assert not report.ok
     assert "FAIL" in format_selftest(report)
