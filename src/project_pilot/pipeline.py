@@ -530,7 +530,7 @@ class Pipeline:
                 else:
                     failed += 1
             if failed:
-                logger.warning("push failed; %d match(es) will retry next run", failed)
+                logger.warning("notification failed; %d match(es) will retry next run", failed)
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

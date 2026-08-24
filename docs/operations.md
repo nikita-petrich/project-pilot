@@ -16,7 +16,7 @@ Actions builds, the server pulls). This page is what to do once it runs.
   on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
   `OPENAI_API_KEY`, `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"),
-  `NTFY_TOPIC_URL`, `MCP_TOKEN`, and optionally
+  `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `MCP_TOKEN`, and optionally
   `POSTGRES_PASSWORD`. Do not set `DATABASE_URL` in `.env`; compose sets it to reach
   the postgres service.
 

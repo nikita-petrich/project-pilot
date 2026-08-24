@@ -137,14 +137,18 @@ def test_draft_payload_carries_send_status() -> None:
     assert payload["recipient"] == "jobs@acme.de"
 
 
-async def test_build_mcp_registers_all_tools() -> None:
-    deps = McpDeps(
+def _bare_deps() -> McpDeps:
+    """Deps with nothing wired: enough to inspect what build_mcp registers."""
+    return McpDeps(
         session_factory=None,  # type: ignore[arg-type]
         check_service=CheckService.__new__(CheckService),
         application_service=ApplicationService.__new__(ApplicationService),
         enricher=None,
     )
-    tools = {tool.name for tool in await build_mcp(deps).list_tools()}
+
+
+async def test_build_mcp_registers_all_tools() -> None:
+    tools = {tool.name for tool in await build_mcp(_bare_deps()).list_tools()}
     assert tools == EXPECTED_TOOLS
 
 
@@ -282,3 +286,43 @@ async def test_ingest_listing_rejects_empty_text_and_bad_origin(
     # `scan` is the scanner's own label; an ingest must name the real channel.
     with pytest.raises(ApplicationStateError, match="scanner"):
         await ingest_listing(deps, "Text", "scan")
+
+
+async def test_prompts_are_discoverable_with_their_descriptions() -> None:
+    """The command menu of every surface is generated from this list."""
+    prompts = await build_mcp(_bare_deps()).list_prompts()
+    assert {prompt.name for prompt in prompts} == {
+        "check_project",
+        "write_application",
+        "send_application",
+        "enrich_company",
+    }
+    # The description is what a bot renders next to the command, so it must be there.
+    assert all(prompt.description for prompt in prompts)
+
+
+async def test_prompt_body_carries_the_argument_and_names_its_tools() -> None:
+    mcp = build_mcp(_bare_deps())
+    rendered = await mcp.render_prompt("check_project", {"argument": "Listing 42"})
+    text = str(rendered.messages[0].content)
+    assert "Listing 42" in text
+    # The procedure must route through the tools, not around them.
+    assert "project_pilot_check_listing" in text
+    assert "project_pilot_ingest_listing" in text
+
+
+async def test_send_prompt_demands_an_explicit_confirmation() -> None:
+    # The one irreversible action: the wording that gates it is worth a test.
+    mcp = build_mcp(_bare_deps())
+    rendered = await mcp.render_prompt("send_application", {"argument": "12"})
+    text = str(rendered.messages[0].content)
+    assert "explicit yes" in text
+    assert "project_pilot_send_application" in text
+
+
+async def test_missing_argument_does_not_leave_a_raw_placeholder() -> None:
+    mcp = build_mcp(_bare_deps())
+    rendered = await mcp.render_prompt("write_application", {})
+    text = str(rendered.messages[0].content)
+    assert "{listing}" not in text
+    assert "(not given)" in text

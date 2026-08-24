@@ -34,7 +34,7 @@ from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
-from project_pilot.notification.push import NtfyPush
+from project_pilot.notification.telegram import TelegramNotifier
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
@@ -133,9 +133,10 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     llm_client = OpenAiStructuredClient(api_key)
     matcher = _matcher(llm_client, model, profile)
 
-    notifier = NtfyPush(
-        topic_url=settings.require_ntfy(),
-        token=settings.ntfy_token,
+    bot_token, chat_id = settings.require_telegram()
+    notifier = TelegramNotifier(
+        bot_token=bot_token,
+        chat_id=chat_id,
         target_url=settings.claude_project_url,
     )
 
@@ -265,7 +266,7 @@ async def _run_selftest(
     api_key, model = settings.require_openai()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    topic_url = settings.require_ntfy()
+    bot_token, chat_id = settings.require_telegram()
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
@@ -273,9 +274,9 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        notifier=NtfyPush(
-            topic_url=topic_url,
-            token=settings.ntfy_token,
+        notifier=TelegramNotifier(
+            bot_token=bot_token,
+            chat_id=chat_id,
             target_url=settings.claude_project_url,
         ),
         profile_hash=profile.profile_hash,
@@ -444,7 +445,7 @@ def test_match(
 ) -> None:
     """Push one listing through hard rules, LLM, and the push channel (stores nothing)."""
     settings = _load_settings()
-    settings.require_ntfy()
+    settings.require_telegram()
     if file is not None:
         if text is not None:
             typer.echo("use either --text or --file, not both")

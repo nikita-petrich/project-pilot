@@ -223,12 +223,3 @@ def test_require_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("MCP_TOKEN", "s3cret")
     assert Settings().require_mcp() == "s3cret"
-
-
-def test_require_ntfy(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("NTFY_TOPIC_URL", raising=False)
-    with pytest.raises(ConfigError, match="NTFY_TOPIC_URL"):
-        Settings().require_ntfy()
-
-    monkeypatch.setenv("NTFY_TOPIC_URL", "https://ntfy.sh/pilot-test")
-    assert Settings().require_ntfy() == "https://ntfy.sh/pilot-test"

@@ -144,12 +144,13 @@ Required — the container dies at boot without them:
 | `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
 | `LLM_MODEL` | model name, e.g. a small, cheap one |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
-| `NTFY_TOPIC_URL` | the push topic (`https://ntfy.sh/<topic>`) — THE notification channel |
+| `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE notification channel |
+| `TELEGRAM_CHAT_ID` | the chat the bot sends to |
 | `CLAUDE_PROJECT_URL` | the Claude project a tapped push opens |
 | `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
 | `PROXY_NETWORK` | the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 
-The ntfy and MCP values come from [`claude-setup.md`](claude-setup.md). The deploy fails at
+The Telegram and MCP values come from [`claude-setup.md`](claude-setup.md). The deploy fails at
 the *Install .env* step if any of them is missing, before the server is touched:
 without a notification channel the worker would find matches it cannot deliver, so
 refusing to deploy beats a crash loop over SSH.

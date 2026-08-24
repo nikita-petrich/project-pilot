@@ -104,8 +104,8 @@ class Settings(BaseSettings):
     mcp_token: str = Field(default="", repr=False)
     mcp_port: int = 8765
 
-    ntfy_topic_url: str = ""
-    ntfy_token: str = Field(default="", repr=False)
+    telegram_bot_token: str = Field(default="", repr=False)
+    telegram_chat_id: str = ""
     claude_project_url: str = ""
 
     enrichment_enabled: bool = False
@@ -189,12 +189,12 @@ class Settings(BaseSettings):
             raise ConfigError("LLM_MODEL must be set")
         return self.openai_api_key, self.llm_model
 
-    def require_ntfy(self) -> str:
-        if not self.ntfy_topic_url:
-            raise ConfigError(
-                "NTFY_TOPIC_URL must be set (the push topic, e.g. https://ntfy.sh/<topic>)"
-            )
-        return self.ntfy_topic_url
+    def require_telegram(self) -> tuple[str, str]:
+        if not self.telegram_bot_token:
+            raise ConfigError("TELEGRAM_BOT_TOKEN must be set (the bot token from @BotFather)")
+        if not self.telegram_chat_id:
+            raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
+        return self.telegram_bot_token, self.telegram_chat_id
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

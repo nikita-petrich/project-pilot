@@ -28,6 +28,7 @@ from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import ApplicationStateError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
+from project_pilot.mcp_prompts import PROMPTS
 from project_pilot.models import Listing, ListingOrigin
 from project_pilot.repository import Repository
 
@@ -345,7 +346,33 @@ def build_mcp(deps: McpDeps) -> FastMCP:
         from its own website. Read-only research; sends nothing."""
         return await enrich_company(deps, listing_id)
 
+    _register_prompts(mcp)
     return mcp
+
+
+def _register_prompts(mcp: FastMCP) -> None:
+    """Expose the workflow prompts, so one definition serves every surface.
+
+    Registered in a loop from :data:`~project_pilot.mcp_prompts.PROMPTS` rather
+    than one decorated function each: the bodies are data, and a surface that
+    renders its own command menu reads the same list over ``prompts/list``.
+    """
+    for name, (description, body) in PROMPTS.items():
+        mcp.prompt(name=name, description=description)(_prompt_fn(body))
+
+
+# Every prompt body names exactly one slot; filling them all with the single
+# argument keeps one signature across prompts whose slot happens to differ.
+_PROMPT_SLOTS = ("listing", "application", "target")
+
+
+def _prompt_fn(body: str) -> Callable[[str], Awaitable[str]]:
+    """One prompt callable, closing over its own body rather than the loop var."""
+
+    async def prompt(argument: str = "") -> str:
+        return body.format(**dict.fromkeys(_PROMPT_SLOTS, argument or "(not given)"))
+
+    return prompt
 
 
 def _header_token(scope: Scope) -> bytes:

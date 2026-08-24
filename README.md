@@ -23,7 +23,7 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. Pushes an ntfy notification for every match at or above
+4. Sends a Telegram notification for every match at or above
    `MATCH_THRESHOLD`. That opens one Claude session carrying the match card, the
    remaining facts and the full description; Claude repeats the card and adds its
    own reading, and the Claude app pushes the finished session to your phone and
@@ -56,7 +56,7 @@ arrive the same way, as their own sessions.
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
 - An OpenAI API key, and a Claude plan with Claude Code on the web for the
-  ntfy push and the Claude surface ([`docs/claude-setup.md`](docs/claude-setup.md))
+  Telegram notification and the Claude surface ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -110,7 +110,7 @@ gitignored and `.env.example` is the template):
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
-| `NTFY_TOPIC_URL` / `NTFY_TOKEN` | the push topic (`https://ntfy.sh/<topic>`) and, for a protected instance, its token — the notification channel |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and the chat it sends to — the notification channel |
 | `CLAUDE_PROJECT_URL` | the Claude project a tapped notification opens |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
@@ -142,8 +142,9 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The ntfy push**, sent by the worker itself over one retried HTTP POST
-   (`NTFY_TOPIC_URL`). Delivery never depends on a model judging a run worth
+1. **The Telegram message**, sent by the worker itself over one retried HTTP
+   POST. Send-only: no polling, no webhook, no inbound port. Delivery never
+   depends on a model judging a run worth
    reporting, and there is no inbound port and no webhook to expose. The push
    carries the match card and the command to type; its click target is the
    Claude project that collects the match chats (`CLAUDE_PROJECT_URL`).
@@ -151,10 +152,12 @@ Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
    custom connector. That is what turns the opened session into a working
    surface: the feed, the checks, the drafts, and the send are its tools. The
    site config for the proxy is in [`deploy/proxy-site/`](deploy/proxy-site).
-3. **The account skills** in [`deploy/claudeai-skills/`](deploy/claudeai-skills),
-   uploaded once at claude.ai, so `/check-project`, `/write-application`,
-   `/send-application`, `/enrich-company` and `/list-matches` appear in the slash
-   menu of every chat and session.
+3. **The workflow prompts**, exposed by the MCP server itself
+   (`mcp_prompts.py`), so one definition serves every surface: Claude Code
+   lists them as `/mcp__project-pilot__check_project`, a bot renders its own
+   command menu from `prompts/list`, and n8n calls them the same way. The
+   account skills in [`deploy/claudeai-skills/`](deploy/claudeai-skills) are
+   thin wrappers over the same tools for surfaces that don't show MCP prompts.
 
 Ten tools are exposed, and any Claude chat that has the connector can use them:
 
@@ -202,7 +205,7 @@ Only the scraper. Everything else was built source-agnostic and stays that way:
 | data model (`listings.source` per row, `source_state` keyed by source) | no |
 | evaluation (`constraints.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
 | application drafting, enrichment, sending | no |
-| MCP tools, the ntfy push, the skills | no |
+| MCP tools, the Telegram notification, the skills | no |
 
 So a second board reaches the database today through `ingest_listing` (an n8n
 workflow forwarding its mails costs no code at all), and *scanning* one is a new
@@ -317,7 +320,7 @@ configuration of its own — the app's `.env` is rendered from the secrets of th
 `prod` environment and written on every deploy. Setup, secrets, and rollback are in
 [`docs/deployment.md`](docs/deployment.md).
 
-The deploy refuses to start if `NTFY_TOPIC_URL`
+The deploy refuses to start if `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
 or `MCP_TOKEN` is missing, and fails before touching the server: a worker that
 finds matches it cannot deliver is worse than one that does not run.
 
@@ -355,7 +358,7 @@ matches are missed. Restart the worker after changing `.env`.
   session naming the cause — wrong model, rejected key, or an account out of credit
   — then announces recovery once it works again. See `docs/operations.md`.
 - **No push for a match**: delivery failed. `docker compose logs app` shows
-  `ntfy push failed`; the listing keeps `notified_at` empty and the next scan
+  `telegram send failed`; the listing keeps `notified_at` empty and the next scan
   retries it, so nothing is lost while the channel is down.
 
 ## Development
@@ -405,7 +408,8 @@ src/project_pilot/
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, check, prompts/
   enrichment/   fetch, render, search, extract, links, message, service, listing
-  notification/ push (the ntfy channel), messages
+  notification/ telegram (the channel), messages
+  mcp_prompts   the workflow prompts, one source for every surface
   application/  generator, service, mailer, documents, cv_drive (apply flow)
   mcp_server.py the tools any Claude surface calls
   pipeline.py scheduler.py reporting.py cli.py
