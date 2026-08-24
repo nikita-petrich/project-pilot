@@ -19,6 +19,8 @@ DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A bot token as @BotFather hands it out: numeric bot id, colon, secret.
 BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
+# A supergroup chat id: negative, and Telegram prefixes supergroups with -100.
+GROUP_CHAT_ID_RE = re.compile(r"^-100\d+$")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -80,7 +82,27 @@ def problems(settings: dict[str, str]) -> list[str]:
         elif " #" in value:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
     found.extend(_bot_token_problems(settings.get("TELEGRAM_BOT_TOKEN", "")))
+    found.extend(_chat_id_problems(settings.get("TELEGRAM_CHAT_ID", "")))
     return found
+
+
+def _chat_id_problems(chat_id: str) -> list[str]:
+    """Catch a private chat id where the match supergroup belongs.
+
+    Topics only exist in a forum supergroup, whose id is negative and starts
+    with -100. A personal chat id is positive, accepted by sendMessage, and then
+    every match silently lands in a chat that can never hold a topic.
+    """
+    if not chat_id:
+        return []  # absence is already reported by the REQUIRED check
+    if not GROUP_CHAT_ID_RE.match(chat_id):
+        return [
+            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a supergroup id. "
+            "Expected the forum supergroup the match topics live in, a negative "
+            "id starting with -100 — a positive id is a personal chat and cannot "
+            "hold topics."
+        ]
+    return []
 
 
 def _bot_token_problems(token: str) -> list[str]:

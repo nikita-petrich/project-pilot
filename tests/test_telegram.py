@@ -10,7 +10,9 @@ from project_pilot.config import Settings
 from project_pilot.errors import ConfigError
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.telegram import (
+    ICON_COLOR_BLUE,
     MAX_TEXT_CHARS,
+    MAX_TOPIC_NAME_CHARS,
     TelegramNotifier,
     match_text,
 )
@@ -18,6 +20,7 @@ from project_pilot.notification.telegram import (
 BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+TOPIC_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/createForumTopic"
 PROJECT_URL = "https://claude.ai/cowork/project/01a032c6-7b1d-728a-a279-78c39ce45076"
 
 
@@ -136,3 +139,65 @@ def test_require_telegram_names_the_missing_half(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv("TELEGRAM_CHAT_ID", CHAT_ID)
     assert Settings().require_telegram() == (BOT_TOKEN, CHAT_ID)
+
+
+@respx.mock
+async def test_create_topic_returns_the_thread_id_and_marks_it_new() -> None:
+    route = respx.post(TOPIC_URL).respond(
+        200, json={"ok": True, "result": {"message_thread_id": 4711, "name": "x"}}
+    )
+    assert await _notifier().create_topic(_message()) == 4711
+    payload = json.loads(route.calls.last.request.read())
+    assert payload["chat_id"] == CHAT_ID
+    assert payload["name"] == "⭐ 87 · Senior Python Developer · ACME GmbH"
+    # Blue is "fresh match"; the other colors become status in a later feature.
+    assert payload["icon_color"] == ICON_COLOR_BLUE
+
+
+@respx.mock
+async def test_create_topic_truncates_an_overlong_name() -> None:
+    # Telegram rejects a longer name outright, which would cost the whole match.
+    route = respx.post(TOPIC_URL).respond(
+        200, json={"ok": True, "result": {"message_thread_id": 1}}
+    )
+    long = MatchMessage(title="T" * 400, url="https://example.com/p/1", score=87)
+    await _notifier().create_topic(long)
+    assert len(json.loads(route.calls.last.request.read())["name"]) == MAX_TOPIC_NAME_CHARS
+
+
+@respx.mock
+async def test_create_topic_returns_none_when_the_chat_is_not_a_forum() -> None:
+    # Not a forum, or the bot is not an admin: degrade to a plain message.
+    route = respx.post(TOPIC_URL).respond(
+        400, json={"ok": False, "description": "Bad Request: the chat is not a forum"}
+    )
+    assert await _notifier().create_topic(_message()) is None
+    assert route.call_count == 1  # a config error never burns retries
+
+
+@respx.mock
+async def test_create_topic_returns_none_without_a_thread_id() -> None:
+    respx.post(TOPIC_URL).respond(200, json={"ok": True, "result": {}})
+    assert await _notifier().create_topic(_message()) is None
+
+
+@respx.mock
+async def test_notify_sends_into_the_topic_when_one_is_given() -> None:
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    assert await _notifier().notify(_message(), thread_id=4711) is True
+    assert json.loads(route.calls.last.request.read())["message_thread_id"] == 4711
+
+
+@respx.mock
+async def test_notify_without_a_topic_omits_the_thread_id() -> None:
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    await _notifier().notify(_message())
+    assert "message_thread_id" not in json.loads(route.calls.last.request.read())
+
+
+@respx.mock
+async def test_warning_never_goes_into_a_topic() -> None:
+    # An operator warning belongs to the worker, not to any one listing.
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    await _notifier().notify_warning("Quelle im Cooldown")
+    assert "message_thread_id" not in json.loads(route.calls.last.request.read())

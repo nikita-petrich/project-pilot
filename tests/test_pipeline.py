@@ -104,15 +104,27 @@ class _FakeMatcher:
 
 
 class _FakeNotifier:
-    """The full channel fake: matches and warnings record, delivery is switchable."""
+    """The full channel fake: topics, matches and warnings record, delivery is switchable."""
 
-    def __init__(self, *, delivers: bool = True) -> None:
+    def __init__(self, *, delivers: bool = True, topics: bool = True) -> None:
         self.delivers = delivers
+        self.topics = topics
         self.matches: list[MatchMessage] = []
         self.warnings: list[str] = []
+        self.created_topics: list[MatchMessage] = []
+        self.sent_threads: list[int | None] = []
+        self._next_thread = 1000
 
-    async def notify(self, message: MatchMessage) -> bool:
+    async def create_topic(self, message: MatchMessage) -> int | None:
+        if not self.topics:
+            return None
+        self.created_topics.append(message)
+        self._next_thread += 1
+        return self._next_thread
+
+    async def notify(self, message: MatchMessage, thread_id: int | None = None) -> bool:
         self.matches.append(message)
+        self.sent_threads.append(thread_id)
         return self.delivers
 
     async def notify_warning(self, text: str) -> bool:
@@ -554,7 +566,7 @@ class _CommitProbeNotifier:
         self._session_factory = session_factory
         self.saw_committed: list[bool] = []
 
-    async def notify(self, message: MatchMessage) -> bool:
+    async def notify(self, message: MatchMessage, thread_id: int | None = None) -> bool:
         async with self._session_factory() as probe:
             row = await probe.scalar(
                 select(Evaluation)
@@ -566,6 +578,9 @@ class _CommitProbeNotifier:
             )
             self.saw_committed.append(row is not None)
         return True
+
+    async def create_topic(self, message: MatchMessage) -> int | None:
+        return None
 
     async def notify_warning(self, text: str) -> bool:
         return True
@@ -852,3 +867,66 @@ async def test_preflight_is_silent_when_the_model_answers(
 
     assert await pipeline.check_llm(now=NOW) is None
     assert notifier.warnings == []
+
+
+async def test_each_match_gets_its_own_topic_and_the_mapping_is_stored(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier()
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    await pipeline.run_once(now=NOW)
+
+    assert len(notifier.created_topics) == len(notifier.matches)
+    # The card goes into the topic that was just opened, never to the group root.
+    assert all(thread is not None for thread in notifier.sent_threads)
+
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        thread = await repo.get_thread(listing.id)
+        assert thread is not None
+        assert thread.thread_id == notifier.sent_threads[0]
+
+
+async def test_a_rerun_reuses_the_stored_topic(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A failed send must not cost a second topic: the mapping is committed as
+    # soon as the topic exists, so the retry sends into the same thread.
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    failing = _FakeNotifier(delivers=False)
+    first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing)
+    await first.run_once(now=NOW)
+    assert len(failing.created_topics) == 1
+    opened = failing.sent_threads[0]
+
+    ok = _FakeNotifier()
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok)
+    outcome = await second.run_once(now=NOW + timedelta(minutes=15))
+
+    assert outcome.notified == 1
+    assert ok.created_topics == []  # reused, not reopened
+    assert ok.sent_threads == [opened]
+
+
+async def test_a_chat_without_topics_still_gets_the_card(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Not a forum, or the bot is not an admin: send to the general area rather
+    # than dropping the match, and keep the run green.
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    notifier = _FakeNotifier(topics=False)
+    pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
+    outcome = await pipeline.run_once(now=NOW)
+
+    assert outcome.status is RunStatus.SUCCESS
+    assert outcome.notified == 1
+    assert notifier.sent_threads == [None]
+
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        assert await repo.get_thread(listing.id) is None  # nothing to map

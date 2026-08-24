@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -127,8 +127,6 @@ class Listing(Base):
         _pg_enum(ListingStatus, "listing_status"), default=ListingStatus.NEW
     )
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    # The Claude match-thread session opened for this listing (feature 22); also
-    # the double-fire guard, since the routine fire endpoint has no idempotency key.
 
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
 
@@ -239,6 +237,25 @@ class ContactLead(Base):
     sources: Mapped[list[str]] = mapped_column(JSONB, default=list)
     links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
     linkedin_message: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class TelegramThread(Base):
+    """The forum topic a match got, and the listing it belongs to.
+
+    Telegram's ``message_thread_id`` is the handle for everything that happens in
+    that topic: sending into it now, and routing an incoming message back to its
+    listing later. The unique constraint on ``listing_id`` is what keeps a
+    repeated run from opening a second topic for the same project.
+    """
+
+    __tablename__ = "telegram_threads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), unique=True
+    )
+    thread_id: Mapped[int] = mapped_column(BigInteger)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 

@@ -125,3 +125,34 @@ async def test_unnotified_matches_recency_bound(session: AsyncSession) -> None:
 
     bounded = await repo.get_unnotified_matches(min_score=60, not_before=now - timedelta(days=2))
     assert {listing.url_hash for listing in bounded} == {"recent"}
+
+
+async def test_record_thread_stores_the_topic_and_reads_back(session: AsyncSession) -> None:
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t1"))
+
+    thread = await repo.record_thread(listing.id, 4711)
+    assert thread.thread_id == 4711
+
+    found = await repo.get_thread(listing.id)
+    assert found is not None
+    assert found.thread_id == 4711
+
+
+async def test_get_thread_is_none_before_a_topic_exists(session: AsyncSession) -> None:
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t2"))
+    assert await repo.get_thread(listing.id) is None
+
+
+async def test_record_thread_is_idempotent_per_listing(session: AsyncSession) -> None:
+    # A rerun must not open a second topic for the same project: the unique
+    # constraint would otherwise fail the whole run rather than this one listing.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t3"))
+
+    first = await repo.record_thread(listing.id, 100)
+    second = await repo.record_thread(listing.id, 200)
+
+    assert second.id == first.id
+    assert second.thread_id == 100  # the first topic wins; the second is ignored

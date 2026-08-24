@@ -17,6 +17,7 @@ from project_pilot.models import (
     Run,
     RunStatus,
     SourceState,
+    TelegramThread,
     Verdict,
 )
 
@@ -218,6 +219,28 @@ class Repository:
         )
         await self._session.flush()
         return result.first() is not None
+
+    async def get_thread(self, listing_id: int) -> TelegramThread | None:
+        """The forum topic recorded for this listing, or None if it has none yet."""
+        result = await self._session.scalars(
+            select(TelegramThread).where(TelegramThread.listing_id == listing_id)
+        )
+        return result.first()
+
+    async def record_thread(self, listing_id: int, thread_id: int) -> TelegramThread:
+        """Record the topic a listing got, or return the one it already had.
+
+        Idempotent on purpose: a rerun that reaches this point must not open a
+        second topic for the same project, and the unique constraint would fail
+        the whole run rather than the one listing.
+        """
+        existing = await self.get_thread(listing_id)
+        if existing is not None:
+            return existing
+        thread = TelegramThread(listing_id=listing_id, thread_id=thread_id)
+        self._session.add(thread)
+        await self._session.flush()
+        return thread
 
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)

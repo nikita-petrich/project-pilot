@@ -9,11 +9,13 @@ session. Two independent pieces, wired by one link:
    with the account skills and the project-pilot MCP tools.
 
 ```
-Match → Telegram message  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
-        text   → /check-project 42  +  the match card
+Match → new forum topic  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
+        card   → /check-project 42  +  the match card, inside that topic
         button → CLAUDE_PROJECT_URL (the project holding the match chats)
         ↓ tap
     new chat in that project: type the command from the message
+        ↓ done
+    close the topic: out of the list, kept and reopenable
         ↓ skills + MCP tools: check, draft, revise, send
 ```
 
@@ -49,9 +51,33 @@ stored; the old channel waited for a whole Claude run to finish first.
    ```
 
    That number is `TELEGRAM_CHAT_ID`.
-3. Put both in the `prod` GitHub environment. The deploy refuses to render an
-   `.env` without them, and rejects a token that is not shaped like one (the
-   usual mix-up is pasting the chat id or the bot's `@name`).
+3. Put the token in the `prod` GitHub environment as `TELEGRAM_BOT_TOKEN`. The
+   deploy refuses to render an `.env` without it, and rejects a value that is
+   not shaped like a token (the usual mix-up is pasting the chat id or the
+   bot's `@name`).
+
+### 1b. The match supergroup
+
+Every match opens its own **forum topic**, so one project is one thread and a
+finished one can be closed rather than deleted. Topics only exist in a forum
+supergroup, so the bot sends there rather than into your private chat:
+
+1. In Telegram: **New Group** → name it (e.g. *project-pilot*) → add your bot as
+   the only other member → create.
+2. Open the group → **Edit** → turn on **Topics**. Telegram converts it to a
+   forum supergroup.
+3. **Edit → Administrators → add your bot**, and give it **Manage Topics**.
+   Without that one right it cannot open a topic, and every match would land in
+   the group's general area instead.
+4. Read the group's id: post any message in the group, then
+
+   ```sh
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":-[0-9]*'
+   ```
+
+   It is negative and starts with `-100`. That is `TELEGRAM_CHAT_ID` in the
+   `prod` environment — the deploy rejects a positive one, because a personal
+   chat can never hold a topic.
 
 The bot only ever sends. There is no polling loop, no webhook and no inbound
 port, so nothing here can be reached from outside.
@@ -116,15 +142,16 @@ a chat that has the connector.
 
 ## Working a match
 
-1. The message arrives on phone and desktop. Its first line is the whole
-   overview: `⭐ 95 · Rolle · Firma`.
+1. A new topic appears in the group, named `⭐ 95 · Rolle · Firma`, with the
+   card inside. The notification reaches phone and desktop.
 2. Tap the button. The match project opens; start a chat and type the command
    the message already names: `/check-project 42`.
 3. Work the match in that chat: check, draft, revise, set the recipient, send.
    `send_application` is guarded by the skill's confirmation step and by the
    pipeline's own status guard against double sends.
-4. The chat stays in the project, so the whole run is reproducible later — and
-   extensible, when a new skill (interview prep, follow-up) joins the set.
+4. When you are done, **close the topic** (long-press → Close). It leaves the
+   active list and stays fully readable and reopenable, and the Claude chat
+   stays in the project — so the whole run is reproducible later.
 
 Match chats live in their own project, so they never mix with everyday chats.
 
@@ -159,6 +186,8 @@ card, a no-match sends a warning — either way the channel is proven.
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
 | Button does nothing | Claude app not installed | The link opens in the browser; log in there, or install the app |
 | Tap opens the listing, not Claude | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
+| Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
+| Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
 | Chat has no `/check-project` | Account skills not uploaded or disabled | Upload the zips, then toggle each skill on |
 | Session has no `project_pilot_*` tools | Connector missing or token rotated | Re-add the connector URL with the current `MCP_TOKEN` |
 | `test-match` fails at `push` | Bad token or chat id | The log names the HTTP status; a 4xx is config, a 5xx is retried |
