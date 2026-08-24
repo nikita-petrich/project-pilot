@@ -13,6 +13,7 @@ from typing import Any, cast
 import typer
 import uvicorn
 
+from project_pilot.agent import ThreadAgent
 from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
 from project_pilot.application.generator import (
     ApplicationGenerator,
@@ -40,6 +41,7 @@ from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 from project_pilot.selftest import SelfTestReport, SelfTestService, format_selftest
+from project_pilot.telegram_bot import TelegramBot
 
 logger = logging.getLogger(__name__)
 
@@ -365,6 +367,31 @@ def daemon() -> None:
     """Run the scheduler (scan every SCAN_INTERVAL_MIN minutes) until SIGTERM."""
     settings = _load_settings()
     asyncio.run(_run_daemon(settings))
+
+
+@app.command("telegram-bot")
+def telegram_bot() -> None:
+    """Answer in the match topics: long polling, no inbound port, MCP tools only."""
+    settings = _load_settings()
+    bot_token, chat_id = settings.require_telegram()
+    api_key, mcp_url = settings.require_agent()
+    engine = create_engine(settings.database_url)
+    session_factory = create_session_factory(engine)
+    bot = TelegramBot(
+        bot_token=bot_token,
+        chat_id=chat_id,
+        allowed_user_ids=settings.telegram_allowed_user_ids,
+        agent=ThreadAgent(api_key=api_key, mcp_url=mcp_url, model=settings.agent_model),
+        session_factory=session_factory,
+    )
+
+    async def _serve() -> None:
+        try:
+            await bot.run_forever()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_serve())
 
 
 @app.command("mcp")

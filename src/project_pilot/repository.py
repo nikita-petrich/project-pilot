@@ -242,6 +242,30 @@ class Repository:
         await self._session.flush()
         return thread
 
+    async def get_thread_by_thread_id(self, thread_id: int) -> TelegramThread | None:
+        """The topic mapping for an incoming Telegram message, or None if unknown.
+
+        An unknown thread means the message arrived somewhere the bot did not
+        open — the group's general area, or a topic a human created.
+        """
+        result = await self._session.scalars(
+            select(TelegramThread).where(TelegramThread.thread_id == thread_id)
+        )
+        return result.first()
+
+    async def append_history(
+        self, thread: TelegramThread, turns: Sequence[dict[str, str]], *, keep: int
+    ) -> TelegramThread:
+        """Append turns to a thread's conversation, keeping only the last ``keep``.
+
+        Bounded here rather than at read time so the stored row cannot grow
+        without limit over a long-running topic.
+        """
+        thread.history = [*thread.history, *turns][-keep:]
+        thread.updated_at = _utcnow()
+        await self._session.flush()
+        return thread
+
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)
         await self._session.flush()

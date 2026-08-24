@@ -58,6 +58,21 @@ services:
         aliases:
           - project-pilot
 
+  bot:
+    # Answers in the match topics. Long polling, so it publishes no port and
+    # joins no network but the one that reaches postgres.
+    image: ghcr.io/nikita-petrich/project-pilot:latest
+    command: ["telegram-bot"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+    restart: unless-stopped
+    networks:
+      - default
+
   mcp:
     image: ghcr.io/nikita-petrich/project-pilot:latest
     command: ["mcp"]

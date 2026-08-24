@@ -255,8 +255,14 @@ class TelegramThread(Base):
     listing_id: Mapped[int] = mapped_column(
         ForeignKey("listings.id", ondelete="CASCADE"), unique=True
     )
-    thread_id: Mapped[int] = mapped_column(BigInteger)
+    thread_id: Mapped[int] = mapped_column(BigInteger, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The conversation held in this topic, as plain text turns:
+    # [{"role": "user" | "assistant", "text": "..."}]. Deliberately no tool
+    # blocks — the tools are the source of truth and every turn re-reads the
+    # state from the database, which keeps this small and free of replay rules.
+    history: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
 
 
 class SourceState(Base):

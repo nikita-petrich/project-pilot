@@ -156,3 +156,34 @@ async def test_record_thread_is_idempotent_per_listing(session: AsyncSession) ->
 
     assert second.id == first.id
     assert second.thread_id == 100  # the first topic wins; the second is ignored
+
+
+async def test_thread_is_findable_by_its_telegram_thread_id(session: AsyncSession) -> None:
+    # Incoming messages carry only the thread id; that is the routing key.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t4"))
+    await repo.record_thread(listing.id, 5150)
+
+    found = await repo.get_thread_by_thread_id(5150)
+    assert found is not None
+    assert found.listing_id == listing.id
+    assert await repo.get_thread_by_thread_id(999) is None
+
+
+async def test_append_history_keeps_only_the_last_turns(session: AsyncSession) -> None:
+    # Bounded on write so a long-running topic cannot grow the row without limit.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t5"))
+    thread = await repo.record_thread(listing.id, 5151)
+
+    await repo.append_history(
+        thread, [{"role": "user", "text": "eins"}, {"role": "assistant", "text": "zwei"}], keep=3
+    )
+    await repo.append_history(
+        thread, [{"role": "user", "text": "drei"}, {"role": "assistant", "text": "vier"}], keep=3
+    )
+
+    stored = await repo.get_thread_by_thread_id(5151)
+    assert stored is not None
+    assert [turn["text"] for turn in stored.history] == ["zwei", "drei", "vier"]
+    assert stored.updated_at >= stored.created_at

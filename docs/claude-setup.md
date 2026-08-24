@@ -10,10 +10,9 @@ session. Two independent pieces, wired by one link:
 
 ```
 Match → new forum topic  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
-        card   → /check-project 42  +  the match card, inside that topic
-        button → CLAUDE_PROJECT_URL (the project holding the match chats)
-        ↓ tap
-    new chat in that project: type the command from the message
+        card inside that topic
+        ↓ you type in the topic
+    the agent answers there: checks, drafts, revises, sends
         ↓ done
     close the topic: out of the list, kept and reopenable
         ↓ skills + MCP tools: check, draft, revise, send
@@ -114,7 +113,33 @@ The session needs the project-pilot tools. Add the custom connector once at
 Rotating `MCP_TOKEN` means: new value in the `prod` environment, redeploy, then
 update the connector URL.
 
-### 4. The account skills
+### 4. The thread agent
+
+The bot answers inside the match topics. Two secrets in the `prod` environment:
+
+| Secret | Value |
+|---|---|
+| `ANTHROPIC_API_KEY` | from console.anthropic.com — billed per token, separate from any Claude subscription |
+| `MCP_PUBLIC_URL` | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` |
+| `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot); anyone else is ignored |
+
+Two things worth knowing about how this is built:
+
+- **The agent has exactly one tool source: project-pilot's own MCP server.** It
+  is wired through the Messages API's MCP connector, not the Claude Agent SDK,
+  so shell, filesystem and web tools do not exist for it — they are absent
+  rather than configured away. Sending stays gated behind an explicit yes in
+  the thread, on top of the pipeline's own guard against double sends.
+- **Anthropic's servers call the MCP endpoint directly**, which is why
+  `MCP_PUBLIC_URL` must be the public address including its token path.
+
+Cost: the judging and drafting still run on your own server against OpenAI; the
+agent only orchestrates, so a thread costs cents rather than euros.
+
+Turn off the bot at any time by scaling its service to zero — matches keep
+arriving, only the answering stops.
+
+### 5. The account skills
 
 Repository skills load in a session that checks out the repo, but the web slash
 menu does not list them. The account skills do appear in `/`, in every chat and
