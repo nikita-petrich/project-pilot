@@ -13,7 +13,6 @@ from typing import Any, cast
 import typer
 import uvicorn
 
-from project_pilot.agent import ThreadAgent
 from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
 from project_pilot.application.generator import (
     ApplicationGenerator,
@@ -41,7 +40,7 @@ from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 from project_pilot.selftest import SelfTestReport, SelfTestService, format_selftest
-from project_pilot.telegram_bot import TelegramBot
+from project_pilot.telegram_bot import TelegramButtons
 
 logger = logging.getLogger(__name__)
 
@@ -136,11 +135,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     matcher = _matcher(llm_client, model, profile)
 
     bot_token, chat_id = settings.require_telegram()
-    notifier = TelegramNotifier(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        target_url=settings.claude_project_url,
-    )
+    notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
 
     pipeline = Pipeline(
         settings=settings,
@@ -276,11 +271,7 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        notifier=TelegramNotifier(
-            bot_token=bot_token,
-            chat_id=chat_id,
-            target_url=settings.claude_project_url,
-        ),
+        notifier=TelegramNotifier(bot_token=bot_token, chat_id=chat_id),
         profile_hash=profile.profile_hash,
     )
     try:
@@ -371,23 +362,38 @@ def daemon() -> None:
 
 @app.command("telegram-bot")
 def telegram_bot() -> None:
-    """Answer in the match topics: long polling, no inbound port, MCP tools only."""
+    """Handle the match cards' buttons: accept drafts, decline deletes."""
     settings = _load_settings()
     bot_token, chat_id = settings.require_telegram()
-    api_key, mcp_url = settings.require_agent()
+    profile = ProfileService(Path("profile")).load()
+    api_key, model = settings.require_openai()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    bot = TelegramBot(
+
+    cv_attachments = settings.cv_attachments()
+    drafter = ApplicationService(
+        session_factory=session_factory,
+        generator=ApplicationGenerator(
+            OpenAiDraftClient(api_key), model=model, prompt_template=load_application_prompt()
+        ),
+        profile=profile,
+        # Drafting only: the accept button never sends, so the bot process has
+        # no outbound mail path at all.
+        mailer=None,
+        cv_attachments=cv_attachments,
+        cv_refresher=_build_cv_refresher(settings, cv_attachments),
+    )
+    buttons = TelegramButtons(
         bot_token=bot_token,
         chat_id=chat_id,
         allowed_user_ids=settings.telegram_allowed_user_ids,
-        agent=ThreadAgent(api_key=api_key, mcp_url=mcp_url, model=settings.agent_model),
-        session_factory=session_factory,
+        drafter=drafter,
+        project_url=settings.claude_project_url,
     )
 
     async def _serve() -> None:
         try:
-            await bot.run_forever()
+            await buttons.run_forever()
         finally:
             await engine.dispose()
 

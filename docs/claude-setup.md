@@ -9,12 +9,14 @@ session. Two independent pieces, wired by one link:
    with the account skills and the project-pilot MCP tools.
 
 ```
-Match → new forum topic  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
-        card inside that topic
-        ↓ you type in the topic
-    the agent answers there: checks, drafts, revises, sends
-        ↓ done
-    close the topic: out of the list, kept and reopenable
+Match → one card in Telegram: the whole listing, facts, verdict, description
+        [🔗 Projekt öffnen]  [✅ Annehmen]  [🗑 Abnehmen]
+           │                    │              └─ card is deleted, done
+           │                    └─ application is drafted right away,
+           │                       card becomes [💬 In Claude öffnen]
+           └─ the listing on its own board
+        ↓ tap "In Claude öffnen"
+    the match project: /write-application 42 → review, revise, send
         ↓ skills + MCP tools: check, draft, revise, send
 ```
 
@@ -113,31 +115,32 @@ The session needs the project-pilot tools. Add the custom connector once at
 Rotating `MCP_TOKEN` means: new value in the `prod` environment, redeploy, then
 update the connector URL.
 
-### 4. The thread agent
+### 4. The button handler
 
-The bot answers inside the match topics. Two secrets in the `prod` environment:
+A second process (`project-pilot telegram-bot`) watches the cards' buttons. It
+holds no conversation and answers no messages — it only long-polls for button
+presses, so the worker still publishes no port.
 
 | Secret | Value |
 |---|---|
-| `ANTHROPIC_API_KEY` | from console.anthropic.com — billed per token, separate from any Claude subscription |
-| `MCP_PUBLIC_URL` | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` |
-| `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot); anyone else is ignored |
+| `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot). Anyone else's press is refused — those buttons write applications |
+| `CLAUDE_PROJECT_URL` | the Claude project the accepted card points at |
 
-Two things worth knowing about how this is built:
+What the buttons do:
 
-- **The agent has exactly one tool source: project-pilot's own MCP server.** It
-  is wired through the Messages API's MCP connector, not the Claude Agent SDK,
-  so shell, filesystem and web tools do not exist for it — they are absent
-  rather than configured away. Sending stays gated behind an explicit yes in
-  the thread, on top of the pipeline's own guard against double sends.
-- **Anthropic's servers call the MCP endpoint directly**, which is why
-  `MCP_PUBLIC_URL` must be the public address including its token path.
+- **🔗 Projekt öffnen** — a plain link to the listing on its board. No code.
+- **✅ Annehmen** — drafts the application immediately, through the same
+  `ApplicationService` the MCP tools use, so there is one drafting path rather
+  than two. The card is then rewritten to name the application id and the
+  commands to type, with a single button into the Claude project. **It never
+  sends** — the bot process is wired without a mailer at all, so sending is
+  impossible from here even by accident.
+- **🗑 Abnehmen** — deletes the card. The database keeps the record either way,
+  so the feed stays clean without losing the history.
 
-Cost: the judging and drafting still run on your own server against OpenAI; the
-agent only orchestrates, so a thread costs cents rather than euros.
-
-Turn off the bot at any time by scaling its service to zero — matches keep
-arriving, only the answering stops.
+The listing id travels inside every button (`accept:42`), never resolved
+against some "current" listing, so two cards can never be confused for one
+another.
 
 ### 5. The account skills
 
