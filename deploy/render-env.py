@@ -19,8 +19,8 @@ DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A bot token as @BotFather hands it out: numeric bot id, colon, secret.
 BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
-# A supergroup chat id: negative, and Telegram prefixes supergroups with -100.
-GROUP_CHAT_ID_RE = re.compile(r"^-100\d+$")
+# A chat id is an integer: negative for a group, positive for a private chat.
+CHAT_ID_RE = re.compile(r"^-?\d+$")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -87,20 +87,21 @@ def problems(settings: dict[str, str]) -> list[str]:
 
 
 def _chat_id_problems(chat_id: str) -> list[str]:
-    """Catch a private chat id where the match supergroup belongs.
+    """Catch a value that is not a chat id at all.
 
-    Topics only exist in a forum supergroup, whose id is negative and starts
-    with -100. A personal chat id is positive, accepted by sendMessage, and then
-    every match silently lands in a chat that can never hold a topic.
+    A chat id is a plain integer — negative for a group, positive for a private
+    chat; both receive the match cards. The usual mix-up is pasting the group's
+    @name or its invite link, which sendMessage answers with 400 at the first
+    real match, hours after a deploy that looked healthy.
     """
     if not chat_id:
         return []  # absence is already reported by the REQUIRED check
-    if not GROUP_CHAT_ID_RE.match(chat_id):
+    if not CHAT_ID_RE.match(chat_id):
         return [
-            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a supergroup id. "
-            "Expected the forum supergroup the match topics live in, a negative "
-            "id starting with -100 — a positive id is a personal chat and cannot "
-            "hold topics."
+            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a chat id. Expected "
+            "the integer getUpdates reports — negative for a group (usually "
+            "starting -100), positive for your private chat — not an @name or "
+            "an invite link."
         ]
     return []
 

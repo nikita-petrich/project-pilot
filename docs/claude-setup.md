@@ -57,31 +57,27 @@ stored; the old channel waited for a whole Claude run to finish first.
    not shaped like a token (the usual mix-up is pasting the chat id or the
    bot's `@name`).
 
-### 1b. The match supergroup
+### 1b. Where the cards land
 
-Every match opens its own **forum topic**, so one project is one thread and a
-finished one can be closed rather than deleted. Topics only exist in a forum
-supergroup, so the bot sends there rather than into your private chat:
+`TELEGRAM_CHAT_ID` is any chat the bot can write to: your private chat with it,
+or a group holding only the two of you. A group keeps the match feed out of the
+personal chat list and is what this setup uses:
 
 1. In Telegram: **New Group** → name it (e.g. *project-pilot*) → add your bot as
    the only other member → create.
-2. Open the group → **Edit** → turn on **Topics**. Telegram converts it to a
-   forum supergroup.
-3. **Edit → Administrators → add your bot**, and give it **Manage Topics**.
-   Without that one right it cannot open a topic, and every match would land in
-   the group's general area instead.
-4. Read the group's id: post any message in the group, then
+2. Read the group's id: post any message in the group, then
 
    ```sh
-   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":-[0-9]*'
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":-\?[0-9]*'
    ```
 
-   It is negative and starts with `-100`. That is `TELEGRAM_CHAT_ID` in the
-   `prod` environment — the deploy rejects a positive one, because a personal
-   chat can never hold a topic.
+   That is `TELEGRAM_CHAT_ID` in the `prod` environment. For a group it is
+   negative (usually starting `-100`); for a private chat it is your own user
+   id. The deploy rejects anything that is not an integer, so an @name or an
+   invite link fails at deploy rather than at the first match.
 
-The bot only ever sends. There is no polling loop, no webhook and no inbound
-port, so nothing here can be reached from outside.
+The worker only ever sends. Button presses are read by a separate process
+(section 4) over long polling, so there is still no webhook and no inbound port.
 
 Install the Telegram **desktop app** as well and let it start with the system:
 that is what makes a match notify you at the desk with nothing open — the
@@ -212,10 +208,10 @@ card, a no-match sends a warning — either way the channel is proven.
 | No message at all | Wrong chat id, or the bot was never messaged first | Message the bot, re-read the id from `getUpdates` |
 | `401 Unauthorized` in the log | Token revoked or mistyped | Regenerate with @BotFather, update the secret, redeploy |
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
-| Button does nothing | Claude app not installed | The link opens in the browser; log in there, or install the app |
-| Tap opens the listing, not Claude | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
-| Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
-| Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
+| Annehmen/Abnehmen do nothing | The `bot` container is down, or your id is not in `TELEGRAM_ALLOWED_USER_IDS` | `docker compose logs bot`; the refusal is logged with the id that pressed |
+| Annehmen answers, but the Claude button is missing | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
+| Claude button opens the browser, not the app | Claude app not installed | Log in there, or install the app |
+| Deploy rejects the chat id | An @name or an invite link instead of the id | Read the integer from `getUpdates` |
 | Chat has no `/check-project` | Account skills not uploaded or disabled | Upload the zips, then toggle each skill on |
 | Session has no `project_pilot_*` tools | Connector missing or token rotated | Re-add the connector URL with the current `MCP_TOKEN` |
 | `test-match` fails at `push` | Bad token or chat id | The log names the HTTP status; a 4xx is config, a 5xx is retried |
