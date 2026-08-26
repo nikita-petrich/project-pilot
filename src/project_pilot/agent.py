@@ -207,11 +207,33 @@ def _clip(text: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class AgentReply:
-    """What the agent produced, and the session to continue it in."""
+    """What the agent produced, the session to continue it in, what it acted on."""
 
     text: str
     ok: bool
     session_id: str | None = None
+    # The listing its tools were called with, if any. A thread that had none
+    # gets bound to it, so what the agent ingested becomes the thread's subject.
+    listing_id: int | None = None
+
+
+def _listing_of(messages: list[Message]) -> int | None:
+    """The listing the run's own tools were called with, latest wins.
+
+    Read off the tool inputs rather than guessed from prose: every
+    ``project_pilot_*`` call that acts on a listing names it as an argument.
+    """
+    found: int | None = None
+    for message in messages:
+        if not isinstance(message, AssistantMessage):
+            continue
+        for block in message.content:
+            if not isinstance(block, ToolUseBlock) or MCP_SERVER not in block.name:
+                continue
+            listing_id = block.input.get("listing_id")
+            if isinstance(listing_id, int):
+                found = listing_id
+    return found
 
 
 def _text_of(messages: list[Message]) -> str:
@@ -380,6 +402,7 @@ class ThreadAgent:
                     if isinstance(block, ToolUseBlock):
                         await progress(step_label(block.name))
         text = _text_of(messages)
+        acted_on = _listing_of(messages)
         started = next(
             (m.session_id for m in reversed(messages) if isinstance(m, ResultMessage)),
             session_id,
@@ -391,8 +414,9 @@ class ThreadAgent:
                 text="⚠️ Der Assistent hat nichts geantwortet. Frag noch einmal.",
                 ok=False,
                 session_id=started,
+                listing_id=acted_on,
             )
-        return AgentReply(text=text, ok=True, session_id=started)
+        return AgentReply(text=text, ok=True, session_id=started, listing_id=acted_on)
 
 
 def _default_runner(*, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:

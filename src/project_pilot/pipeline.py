@@ -39,7 +39,7 @@ from project_pilot.models import (
     SourceState,
     Verdict,
 )
-from project_pilot.notification.messages import MatchMessage, to_match_message
+from project_pilot.notification.messages import MatchMessage, from_stored
 from project_pilot.profile_loader import Profile
 from project_pilot.repository import Repository
 
@@ -519,7 +519,7 @@ class Pipeline:
             notifier = self._notifier  # narrowed above; the helper needs it non-optional
             failed = 0
             for listing in pending:  # one push per match, marked only on success
-                message = _to_match_message(listing, now)
+                message = from_stored(listing, now)
                 if message.onsite_only:
                     # Mark it handled so it leaves the pending set after one skip
                     # instead of being re-loaded and re-skipped on every run.
@@ -594,36 +594,4 @@ def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -
         last_seen_at=now,
         status=ListingStatus.NEW,
         raw=parsed.raw,
-    )
-
-
-def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
-    matches = [
-        evaluation
-        for evaluation in listing.evaluations
-        if evaluation.stage is EvaluationStage.LLM and evaluation.verdict is Verdict.MATCH
-    ]
-    if not matches:
-        return None
-    return max(matches, key=lambda evaluation: evaluation.created_at)
-
-
-def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
-    if evaluation is None:
-        return []
-    value = evaluation.reason.get(key)
-    return [str(item) for item in value] if isinstance(value, list) else []
-
-
-def _to_match_message(listing: Listing, now: datetime) -> MatchMessage:
-    evaluation = _latest_match_evaluation(listing)
-    score = evaluation.score if evaluation is not None and evaluation.score is not None else 0
-    return to_match_message(
-        listing,
-        now,
-        score=score,
-        reasons=_eval_list(evaluation, "reasons"),
-        matching_skills=_eval_list(evaluation, "matching_skills"),
-        missing_requirements=_eval_list(evaluation, "missing_requirements"),
-        risk_flags=_eval_list(evaluation, "risk_flags"),
     )

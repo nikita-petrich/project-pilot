@@ -18,7 +18,7 @@ from project_pilot.ingestion.normalize import (
     resolve_contact_name,
 )
 from project_pilot.ingestion.parser import ParsedListing
-from project_pilot.models import Listing
+from project_pilot.models import Evaluation, EvaluationStage, Listing, Verdict
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,3 +268,41 @@ def render_match_details(message: MatchMessage) -> str:
     if message.url:
         blocks.append(f"🔗 {message.url}")
     return "\n\n".join(block for block in blocks if block)
+
+
+def _latest_match_evaluation(listing: Listing) -> Evaluation | None:
+    """The newest LLM verdict on a listing, which is the one that decided it."""
+    matches = [
+        evaluation
+        for evaluation in listing.evaluations
+        if evaluation.stage is EvaluationStage.LLM and evaluation.verdict is Verdict.MATCH
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda evaluation: evaluation.created_at)
+
+
+def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
+    if evaluation is None:
+        return []
+    value = evaluation.reason.get(key)
+    return [str(item) for item in value] if isinstance(value, list) else []
+
+
+def from_stored(listing: Listing, now: datetime) -> MatchMessage:
+    """The display shape for a listing already judged and stored.
+
+    Reads the verdict off the listing's own evaluations rather than asking the
+    LLM again, so showing a match a second time costs nothing.
+    """
+    evaluation = _latest_match_evaluation(listing)
+    score = evaluation.score if evaluation is not None and evaluation.score is not None else 0
+    return to_match_message(
+        listing,
+        now,
+        score=score,
+        reasons=_eval_list(evaluation, "reasons"),
+        matching_skills=_eval_list(evaluation, "matching_skills"),
+        missing_requirements=_eval_list(evaluation, "missing_requirements"),
+        risk_flags=_eval_list(evaluation, "risk_flags"),
+    )

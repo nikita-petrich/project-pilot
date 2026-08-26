@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot import telegram_bot
 from project_pilot.agent import AgentReply, Approve, Progress, allow_everything, report_nothing
 from project_pilot.mcp_prompts import PROMPTS
-from project_pilot.models import Listing
+from project_pilot.models import Evaluation, EvaluationStage, Listing, Verdict
 from project_pilot.repository import Repository
 from project_pilot.telegram_bot import (
     ALLOW,
@@ -54,12 +54,14 @@ class _FakeAgent:
         session: str | None = "sess-1",
         asks: list[tuple[str, str]] | None = None,
         steps: list[str] | None = None,
+        acted_on: int | None = None,
     ) -> None:
         self.text = text
         self.ok = ok
         self.session = session
         self.asks = asks or []
         self.steps = steps or []
+        self.acted_on = acted_on
         self.approvals: list[bool] = []
         self.calls: list[tuple[int | None, str | None, str]] = []
 
@@ -77,7 +79,9 @@ class _FakeAgent:
             self.approvals.append(await approve(tool, detail))
         for label in self.steps:
             await progress(label)
-        return AgentReply(text=self.text, ok=self.ok, session_id=self.session)
+        return AgentReply(
+            text=self.text, ok=self.ok, session_id=self.session, listing_id=self.acted_on
+        )
 
 
 def _update(
@@ -135,6 +139,34 @@ async def _poll(bot: TelegramBot, client: httpx.AsyncClient) -> int:
     taken = await bot.poll_once(client)
     await bot.drain()
     return taken
+
+
+async def _seed_listing(
+    session_factory: async_sessionmaker[AsyncSession], *, score: int = 87
+) -> int:
+    """A stored listing with the LLM verdict a card is rendered from."""
+    async with session_factory() as session:
+        repo = Repository(session)
+        listing, _ = await repo.upsert_listing(
+            Listing(
+                source="freelancermap",
+                external_url="https://example.test/checked",
+                url_hash="hchecked",
+                title="Senior Python Developer",
+                raw={"company": "ACME GmbH"},
+            )
+        )
+        await repo.add_evaluation(
+            Evaluation(
+                listing_id=listing.id,
+                stage=EvaluationStage.LLM,
+                verdict=Verdict.MATCH,
+                score=score,
+                reason={"reasons": ["Stack passt"], "risk_flags": []},
+            )
+        )
+        await session.commit()
+        return listing.id
 
 
 async def _seed_thread(
@@ -288,9 +320,14 @@ async def test_a_message_in_the_main_area_gets_a_thread_of_its_own(
         await _poll(_bot(session_factory, agent), client)
 
     assert json.loads(opened.calls.last.request.read())["name"] == "prüf mal https://x.test/p"
+    posted = [json.loads(call.request.read()) for call in send.calls]
+    # A pointer stays in the main area, so the new thread is one tap away.
+    assert posted[0]["text"] == "→ prüf mal https://x.test/p"
+    assert "message_thread_id" not in posted[0]
+    assert posted[0]["reply_markup"]["inline_keyboard"][0][0]["url"].endswith("/8080")
     # What was written is repeated in the thread, so it reads on its own.
-    assert json.loads(send.calls[0].request.read())["text"] == "prüf mal https://x.test/p"
-    assert all(json.loads(call.request.read())["message_thread_id"] == 8080 for call in send.calls)
+    assert posted[1]["text"] == "prüf mal https://x.test/p"
+    assert all(entry["message_thread_id"] == 8080 for entry in posted[1:])
     assert agent.calls[0][0] is None  # no listing yet — the agent ingests it
 
     async with session_factory() as session:
@@ -871,3 +908,48 @@ async def test_the_same_step_twice_in_a_row_is_not_reported_again(
         await _poll(_bot(session_factory, _FakeAgent(steps=["lese eine Datei"] * 3)), client)
 
     assert edited.call_count == 0
+
+
+@respx.mock
+async def test_the_card_appears_once_the_agent_takes_a_listing_on(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Paste a link in a thread of your own and you get the same card a scan
+    # match gets, built from the stored verdict rather than written by the model.
+    listing_id = await _seed_listing(session_factory, score=87)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=4321)]})
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    agent = _FakeAgent(acted_on=listing_id)
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    card = json.loads(send.calls[0].request.read())
+    assert "🏢 Company: ACME GmbH" in card["text"]
+    assert "🎯 Score: 87/100" in card["text"]
+    assert [b["callback_data"] for row in card["reply_markup"]["inline_keyboard"] for b in row] == [
+        f"accept:{listing_id}",
+        f"decline:{listing_id}",
+        f"describe:{listing_id}",
+    ]
+    # And the thread is now about that listing, so the next message knows it.
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(4321)
+        assert thread is not None
+        assert thread.listing_id == listing_id
+
+
+@respx.mock
+async def test_the_card_is_not_repeated_for_a_thread_that_already_has_its_listing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A match's own topic was opened with its card; showing it again is noise.
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    agent = _FakeAgent(acted_on=listing_id)
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert [json.loads(call.request.read())["text"] for call in send.calls] == ["Antwort."]

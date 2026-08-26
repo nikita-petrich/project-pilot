@@ -268,6 +268,22 @@ class Repository:
         )
         return result.first()
 
+    async def set_listing_id(self, thread: TelegramThread, listing_id: int) -> bool:
+        """Bind a listing-less topic to the listing it turned out to be about.
+
+        Refuses when that listing already has a topic of its own: two topics for
+        one match is exactly what the unique constraint exists to prevent, and a
+        constraint error here would fail the answer rather than the binding.
+        """
+        if thread.listing_id is not None:
+            return False
+        if await self.get_thread(listing_id) is not None:
+            return False
+        thread.listing_id = listing_id
+        thread.updated_at = _utcnow()
+        await self._session.flush()
+        return True
+
     async def set_session_id(
         self, thread: TelegramThread, session_id: str | None
     ) -> TelegramThread:

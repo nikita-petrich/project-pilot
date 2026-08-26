@@ -135,9 +135,15 @@ project-pilot opened is about its match. A topic you open yourself is about
 whatever you bring into it — paste a description, a link or a PDF and the agent
 stores it with `ingest_listing` first, then works with the listing id it gets
 back. And anything written in the group's main area gets a thread opened for
-it, named after what you wrote, with your message repeated inside so it reads
-on its own; only a chat that cannot hold topics is answered in place. Each
-thread keeps its own session, so several are several separate conversations.
+it, named after what you wrote, with a `💬 Zum Thread` button left behind in the
+main area and your message repeated inside so the thread reads on its own; only
+a chat that cannot hold topics is answered in place. Each thread keeps its own
+session, so several are several separate conversations.
+
+Once the agent's tools act on a listing, a thread that had none is bound to it
+and **the match card appears** — the same card a scan match gets, buttons and
+all, built from the stored verdict rather than written by the model. So pasting
+a link into a thread of your own ends in the same place a real match does.
 
 What the agent is:
 

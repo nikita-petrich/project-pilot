@@ -51,9 +51,12 @@ def _assistant(text: str) -> AssistantMessage:
     return AssistantMessage(content=[TextBlock(text=text)], model="claude-opus-5")
 
 
-def _assistant_tools(*names: str) -> AssistantMessage:
+def _assistant_tools(*names: str, tool_input: dict[str, object] | None = None) -> AssistantMessage:
     return AssistantMessage(
-        content=[ToolUseBlock(id=f"t{i}", name=name, input={}) for i, name in enumerate(names)],
+        content=[
+            ToolUseBlock(id=f"t{i}", name=name, input=dict(tool_input or {}))
+            for i, name in enumerate(names)
+        ],
         model="claude-opus-5",
     )
 
@@ -287,3 +290,34 @@ async def test_a_thread_without_a_listing_is_told_to_ingest_first(tmp_path: Path
     assert isinstance(prompt, dict)
     assert "project_pilot_ingest_listing" in prompt["append"]
     assert "Listing None" not in prompt["append"]
+
+
+@pytest.mark.asyncio
+async def test_the_listing_the_tools_acted_on_comes_back(tmp_path: Path) -> None:
+    # Read off the tool inputs, so binding a thread to a listing never depends
+    # on parsing prose.
+    runs = _Runs(
+        [
+            _assistant_tools(
+                "mcp__project_pilot__project_pilot_check_listing",
+                tool_input={"listing_id": 11},
+            ),
+            _assistant_tools(
+                "mcp__project_pilot__project_pilot_draft_application",
+                tool_input={"listing_id": 12},
+            ),
+            _result(),
+        ]
+    )
+    reply = await _agent(runs, tmp_path).reply(listing_id=None, session_id=None, message="hi")
+
+    assert reply.listing_id == 12  # the latest call wins
+
+
+@pytest.mark.asyncio
+async def test_a_run_that_touched_no_listing_names_none(tmp_path: Path) -> None:
+    runs = _Runs([_assistant_tools("Bash"), _result()])
+
+    reply = await _agent(runs, tmp_path).reply(listing_id=None, session_id=None, message="hi")
+
+    assert reply.listing_id is None

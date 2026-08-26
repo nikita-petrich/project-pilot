@@ -23,6 +23,7 @@ import logging
 import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -30,6 +31,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from project_pilot.agent import AgentReply, Approve, Progress, ThreadAgent
 from project_pilot.db import session_scope
 from project_pilot.mcp_prompts import PROMPTS, render
+from project_pilot.notification.messages import from_stored
+from project_pilot.notification.telegram import match_keyboard, match_text
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -52,6 +55,7 @@ TOPIC_NAME_CHARS = 60
 UNNAMED_TOPIC = "Neue Anfrage"
 # The green Telegram offers; a thread you started should not look like a match.
 ICON_COLOR_GREEN = 9367192
+OPENED = "💬 Zum Thread"
 ALLOW, DENY = "allow", "deny"
 ACCEPT, DECLINE, DESCRIBE = "accept", "decline", "describe"
 CARD_ACTIONS = (ACCEPT, DECLINE, DESCRIBE)
@@ -451,8 +455,17 @@ class TelegramBot:
             # Anything written in the group's main area gets a thread of its own,
             # so the answer, its steps and every follow-up stay together instead
             # of interleaving with the next thing you drop there.
-            thread_id = await self._open_topic(client, topic_name(message.text))
+            name = topic_name(message.text)
+            thread_id = await self._open_topic(client, name)
             if thread_id is not None:
+                # A link back, because the new topic is only visible in the
+                # sidebar otherwise and the main area shows no trace of it.
+                await self._send(
+                    client,
+                    f"→ {name}",
+                    thread_id=None,
+                    keyboard=self._topic_link(thread_id),
+                )
                 await self._send(client, message.text, thread_id=thread_id)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -540,8 +553,36 @@ class TelegramBot:
                 # Stored even when the turn failed: the session exists either
                 # way, and losing its id would restart the topic from nothing.
                 await repo.set_session_id(thread, reply.session_id)
-                await session.commit()
+            bound = (
+                reply.listing_id is not None
+                and listing_id is None
+                and await repo.set_listing_id(thread, reply.listing_id)
+            )
+            await session.commit()
+            if bound and reply.listing_id is not None:
+                await self._show_card(client, repo, reply.listing_id, thread_id=thread_id)
             return reply
+
+    async def _show_card(
+        self,
+        client: httpx.AsyncClient,
+        repo: Repository,
+        listing_id: int,
+        *,
+        thread_id: int | None,
+    ) -> None:
+        """Show the match card for a listing the agent just took on.
+
+        The same card a scan match gets, buttons and all, built from the stored
+        verdict rather than by asking the model to format one.
+        """
+        listing = await repo.get_listing_with_evaluations(listing_id)
+        if listing is None:
+            return
+        message = from_stored(listing, datetime.now(UTC))
+        await self._send(
+            client, match_text(message), thread_id=thread_id, keyboard=match_keyboard(message)
+        )
 
     def _approver(self, client: httpx.AsyncClient, thread_id: int | None) -> Approve:
         """A permission question bound to one topic, as the agent expects it."""
@@ -659,6 +700,19 @@ class TelegramBot:
             )
         except httpx.HTTPError as err:  # cosmetic; the decision already stands
             logger.debug("clearing the keyboard on %s failed: %s", message_id, err)
+
+    def _topic_link(self, thread_id: int) -> dict[str, object] | None:
+        """A button opening one topic, for chats whose id can address one.
+
+        Only a supergroup has the ``t.me/c/<id>/<thread>`` form; anything else
+        gets no button rather than a link that goes nowhere.
+        """
+        if not self._chat_id.startswith("-100"):
+            return None
+        internal = self._chat_id.removeprefix("-100")
+        return {
+            "inline_keyboard": [[{"text": OPENED, "url": f"https://t.me/c/{internal}/{thread_id}"}]]
+        }
 
     async def _open_topic(self, client: httpx.AsyncClient, name: str) -> int | None:
         """Open a thread for a message from the main area; None if it cannot.
