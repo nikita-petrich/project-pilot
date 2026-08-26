@@ -146,7 +146,7 @@ Required — the container dies at boot without them:
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE notification channel |
 | `TELEGRAM_CHAT_ID` | the chat the bot sends to |
-| `CLAUDE_PROJECT_URL` | the Claude project a tapped push opens |
+| `ANTHROPIC_API_KEY` | the thread agent's own key |
 | `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
 | `PROXY_NETWORK` | the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 

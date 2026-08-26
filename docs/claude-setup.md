@@ -86,19 +86,24 @@ that is what makes a match notify you at the desk with nothing open — the
 reason this channel beat a push service, whose browser delivery needs a running
 browser and lapses after a week of inactivity.
 
-### 2. The Claude project
+### 2. Privacy mode — the bot has to be allowed to read the topic
 
-Create one project on claude.ai that collects the match chats, and put its URL
-in `CLAUDE_PROJECT_URL` (`https://claude.ai/cowork/project/<id>`). That keeps
-match work out of the everyday chat list without a second surface.
+A bot in a group runs with **privacy mode** on by default, and then only ever
+receives commands, replies to its own messages, and service messages. Ordinary
+text is never delivered to it, which looks exactly like a bot that ignores you:
+topics still open, cards still arrive, and nothing you write gets an answer.
 
-Leave its instructions **empty**. Profile, judging rules and writing rules live
-behind the MCP server and are read at runtime; copying any of them into project
-instructions would create a second copy to maintain and would bind the workflow
-to this one project, while n8n and other consumers use the same tools.
+Telegram exempts a bot that was *added to the group as an admin*. Promoting it
+afterwards does not reliably count, so make it explicit:
 
-Without the setting a tapped push opens the listing on its own board instead —
-useful, but no work surface.
+1. [@BotFather](https://t.me/BotFather) → `/setprivacy` → your bot → **Disable**
+2. Remove the bot from the group and add it back — the setting only takes
+   effect on a fresh join.
+3. Give it **Manage Topics** again; that right is what lets it open a topic per
+   match.
+
+The `/` menu the bot publishes at startup is the fallback either way: a command
+reaches a bot even with privacy mode on.
 
 ### 3. The MCP connector
 
@@ -252,8 +257,7 @@ docker compose logs -f bot               # what the agent did, and who pressed w
 | No message at all | Wrong chat id, or the bot was never messaged first | Message the bot, re-read the id from `getUpdates` |
 | `401 Unauthorized` in the log | Token revoked or mistyped | Regenerate with @BotFather, update the secret, redeploy |
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
-| Button does nothing | Claude app not installed | The link opens in the browser; log in there, or install the app |
-| Tap opens the listing, not Claude | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
+| Nothing you write gets an answer, `/pruefen` does | Privacy mode still on | @BotFather → `/setprivacy` → Disable, then re-add the bot to the group |
 | Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
 | Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
 | The agent never answers in a topic | The `bot` container is down, or your id is not in `TELEGRAM_ALLOWED_USER_IDS` | `docker compose logs bot`; a refused message is logged with the id that sent it |

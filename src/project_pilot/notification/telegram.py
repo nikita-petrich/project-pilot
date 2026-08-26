@@ -7,10 +7,9 @@ previous channel (a Claude routine whose completion push was a per-run model
 decision) lost notifications.
 
 Send-only, deliberately. There is no polling loop, no webhook and no inbound
-port: the message carries an inline button to the Claude project that holds the
-match chats (``CLAUDE_PROJECT_URL``), and every action — checking, drafting,
-sending — happens there through the skills and the MCP tools. Nothing to
-maintain here but one endpoint.
+port here: the message carries one inline button to the listing on its own
+board, and every action — checking, drafting, sending — happens in the topic
+itself, where the thread agent answers (``telegram_bot.py``, its own process).
 
 Each match gets its own **forum topic** in the target supergroup, so one project
 is one thread rather than one line in a growing chat. Telegram can close a topic,
@@ -58,26 +57,21 @@ def _is_retryable(err: BaseException) -> bool:
 
 
 def match_text(message: MatchMessage) -> str:
-    """The message body: the headline, the command to type, then the card.
+    """The message body: the headline, then the card.
 
-    The command leads because the chat the button opens starts empty — the id is
-    what gets typed there (``/check-project 42``), and the card below it is the
-    overview that decides whether it is worth typing at all.
+    Nothing to type is named here any more: the work happens in this topic, by
+    writing to the agent, so a pointer at a command in another app would only
+    send you somewhere you no longer need to go.
     """
-    parts = [headline(message)]
-    if message.listing_id is not None:
-        parts.append(f"→ /check-project {message.listing_id}")
-    parts.append(render_match_card(message))
-    return "\n\n".join(parts)[:MAX_TEXT_CHARS]
+    return "\n\n".join([headline(message), render_match_card(message)])[:MAX_TEXT_CHARS]
 
 
 class TelegramNotifier:
     """Sends one match (or one warning) to a Telegram chat."""
 
-    def __init__(self, *, bot_token: str, chat_id: str, target_url: str = "") -> None:
+    def __init__(self, *, bot_token: str, chat_id: str) -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
         self._chat_id = chat_id
-        self._target_url = target_url.strip()
 
     async def create_topic(self, message: MatchMessage) -> int | None:
         """Open a forum topic for one match; None when the chat cannot host one.
@@ -107,13 +101,12 @@ class TelegramNotifier:
         A failed send must not fail the pipeline run: the listing stays
         unnotified and is retried on the next run.
         """
-        # Never a dead end: without a configured project the button opens the
-        # listing on its own board instead.
-        link = self._target_url or message.url
         payload: dict[str, object] = {"text": match_text(message)}
-        if link:
+        if message.url:
+            # The one link worth a button here: the listing on its own board.
+            # Everything else about this match happens in the topic itself.
             payload["reply_markup"] = {
-                "inline_keyboard": [[{"text": "🚀 Im Claude-Projekt öffnen", "url": link}]]
+                "inline_keyboard": [[{"text": "🔗 Projekt öffnen", "url": message.url}]]
             }
         if thread_id is not None:
             payload["message_thread_id"] = thread_id

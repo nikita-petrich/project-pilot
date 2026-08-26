@@ -107,7 +107,6 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
     telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
-    claude_project_url: str = ""
 
     anthropic_api_key: str = Field(default="", repr=False)
     agent_model: str = "claude-opus-5"

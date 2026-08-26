@@ -136,11 +136,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     matcher = _matcher(llm_client, model, profile)
 
     bot_token, chat_id = settings.require_telegram()
-    notifier = TelegramNotifier(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        target_url=settings.claude_project_url,
-    )
+    notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
 
     pipeline = Pipeline(
         settings=settings,
@@ -276,11 +272,7 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        notifier=TelegramNotifier(
-            bot_token=bot_token,
-            chat_id=chat_id,
-            target_url=settings.claude_project_url,
-        ),
+        notifier=TelegramNotifier(bot_token=bot_token, chat_id=chat_id),
         profile_hash=profile.profile_hash,
     )
     try:

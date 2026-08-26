@@ -16,6 +16,7 @@ from project_pilot.repository import Repository
 from project_pilot.telegram_bot import (
     ALLOW,
     CHUNK_CHARS,
+    COMMANDS,
     DENY,
     NO_THREAD,
     Incoming,
@@ -475,3 +476,29 @@ async def test_a_question_telegram_refuses_counts_as_a_no(
         await _poll(_bot(session_factory, agent), client)
 
     assert agent.approvals == [False]
+
+
+@respx.mock
+async def test_the_command_menu_is_published_on_start(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The menu is also the way in that survives the bot's privacy mode, since a
+    # command is always delivered to a bot.
+    route = respx.post(f"{API}/setMyCommands").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        assert await _bot(session_factory, _FakeAgent()).register_commands(client) is True
+
+    published = json.loads(route.calls.last.request.read())["commands"]
+    assert [entry["command"] for entry in published] == [name for name, _ in COMMANDS]
+    assert all(entry["description"] for entry in published)
+
+
+@respx.mock
+async def test_a_refused_command_menu_does_not_stop_the_bot(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    respx.post(f"{API}/setMyCommands").respond(400, json={"ok": False})
+
+    async with httpx.AsyncClient() as client:
+        assert await _bot(session_factory, _FakeAgent()).register_commands(client) is False

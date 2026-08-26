@@ -111,7 +111,6 @@ gitignored and `.env.example` is the template):
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and the chat it sends to — the notification channel |
-| `CLAUDE_PROJECT_URL` | the Claude project a tapped notification opens |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
 | `ANTHROPIC_API_KEY` | the thread agent's own key (`MCP_URL` defaults to the mcp service next to it) |
 | `TELEGRAM_ALLOWED_USER_IDS` | who may drive that agent — anyone else's message is dropped |
@@ -145,16 +144,17 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The Telegram message**, sent by the worker itself over one retried HTTP
-   POST. Send-only: no polling, no webhook, no inbound port. Delivery never
-   depends on a model judging a run worth
-   reporting, and there is no inbound port and no webhook to expose. The push
-   carries the match card and the command to type; its click target is the
-   Claude project that collects the match chats (`CLAUDE_PROJECT_URL`).
-2. **The MCP server** behind the reverse proxy, added to the Claude app as a
-   custom connector. That is what turns the opened session into a working
-   surface: the feed, the checks, the drafts, and the send are its tools. The
-   site config for the proxy is in [`deploy/proxy-site/`](deploy/proxy-site).
+1. **The Telegram topic**, opened by the worker itself: one forum topic per
+   match, carrying the card and a button to the listing on its board. Send-only
+   from the worker — no polling, no webhook, no inbound port — and delivery
+   never depends on a model judging a run worth reporting.
+2. **The thread agent** (`project-pilot telegram-bot`), a full Claude Code agent
+   on the Claude Agent SDK that answers inside those topics. Reading runs
+   freely; writing, running a command and sending ask for a button press first.
+   Its domain layer is the MCP server next door, so profile, judging rules and
+   writing style have one home. The proxy's site config, for the public
+   endpoint Claude chats and n8n use, is in
+   [`deploy/proxy-site/`](deploy/proxy-site).
 3. **The workflow prompts**, exposed by the MCP server itself
    (`mcp_prompts.py`), so one definition serves every surface: Claude Code
    lists them as `/mcp__project-pilot__check_project`, a bot renders its own

@@ -45,6 +45,19 @@ NO_THREAD = (
     "Öffne den Thread des Projekts und frag dort."
 )
 ALLOW, DENY = "allow", "deny"
+
+# The `/` menu Telegram shows in the chat. These are not handled here — they
+# reach the agent as the text they are, and the system prompt says what each
+# one means. Registering them buys two things: the menu itself, and a way in
+# that works even with the bot's privacy mode still on, since a command is
+# always delivered to a bot.
+COMMANDS: tuple[tuple[str, str], ...] = (
+    ("pruefen", "Projekt gegen das Profil prüfen"),
+    ("bewerbung", "Bewerbung für dieses Projekt entwerfen"),
+    ("kontakt", "Kontaktdaten der Firma suchen"),
+    ("senden", "Bewerbung abschicken (fragt vorher)"),
+    ("stand", "Wo steht dieses Projekt gerade?"),
+)
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
 
@@ -202,6 +215,7 @@ class TelegramBot:
         """Poll until cancelled, surviving transient Telegram failures."""
         logger.info("telegram bot started; allowed users: %s", sorted(self._allowed))
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
+            await self.register_commands(client)
             while True:
                 try:
                     await self.poll_once(client)
@@ -237,6 +251,28 @@ class TelegramBot:
             task.add_done_callback(self._answering.discard)
             taken += 1
         return taken
+
+    async def register_commands(self, client: httpx.AsyncClient) -> bool:
+        """Publish the `/` menu; False if Telegram refused it.
+
+        Best effort on purpose: a missing menu is a worse chat, not a broken
+        bot, and the agent understands the same words typed out anyway.
+        """
+        try:
+            response = await client.post(
+                f"{self._api}/setMyCommands",
+                json={
+                    "commands": [
+                        {"command": name, "description": description}
+                        for name, description in COMMANDS
+                    ]
+                },
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as err:
+            logger.warning("could not register the command menu: %s", err)
+            return False
+        return True
 
     async def drain(self) -> None:
         """Wait for the answers currently in flight (tests, shutdown)."""

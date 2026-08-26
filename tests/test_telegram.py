@@ -1,6 +1,7 @@
 """Telegram notifier: message shape, the inline button, retries, and failures."""
 
 import json
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -21,7 +22,6 @@ BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 TOPIC_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/createForumTopic"
-PROJECT_URL = "https://claude.ai/cowork/project/01a032c6-7b1d-728a-a279-78c39ce45076"
 
 
 def _message(
@@ -41,24 +41,24 @@ def _message(
     )
 
 
-def _notifier(*, target_url: str = PROJECT_URL) -> TelegramNotifier:
-    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, target_url=target_url)
+def _notifier() -> TelegramNotifier:
+    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID)
 
 
-def test_match_text_leads_with_headline_then_the_command_then_the_card() -> None:
+def test_match_text_leads_with_the_headline_then_the_card() -> None:
     lines = match_text(_message()).splitlines()
     # The headline is what a notification preview shows.
     assert lines[0] == "⭐ 87 · Senior Python Developer · ACME GmbH"
-    # The chat the button opens starts empty, so the body carries the command.
-    assert lines[2] == "→ /check-project 42"
-    assert lines[4] == "🎯 Senior Python Developer  ·  87/100"
+    assert lines[2] == "🎯 Senior Python Developer  ·  87/100"
     assert "✅ Fits: Stack passt, Remote" in match_text(_message())
     assert "⚠️ Risks: kein Budget genannt" in match_text(_message())
 
 
-def test_match_text_omits_the_command_for_an_unstored_listing() -> None:
-    # A manual check has no id; a "/check-project None" would be a dead command.
-    assert "check-project" not in match_text(_message(listing_id=None))
+def test_match_text_names_no_command_to_type_elsewhere() -> None:
+    # The work happens in this topic; a pointer at another app's command would
+    # send you somewhere you no longer need to go.
+    assert "check-project" not in match_text(_message())
+    assert "claude.ai" not in match_text(_message())
 
 
 def test_match_text_is_capped_below_the_telegram_limit() -> None:
@@ -68,7 +68,7 @@ def test_match_text_is_capped_below_the_telegram_limit() -> None:
 
 
 @respx.mock
-async def test_notify_sends_the_card_and_a_button_to_the_project() -> None:
+async def test_notify_sends_the_card_and_a_button_to_the_listing() -> None:
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
     assert await _notifier().notify(_message()) is True
     payload = json.loads(route.calls.last.request.read())
@@ -76,17 +76,19 @@ async def test_notify_sends_the_card_and_a_button_to_the_project() -> None:
     assert payload["text"] == match_text(_message())
     assert payload["disable_web_page_preview"] is True
     button = payload["reply_markup"]["inline_keyboard"][0][0]
-    assert button["url"] == PROJECT_URL
+    assert button["url"] == "https://example.com/p/1"
+    assert button["text"] == "🔗 Projekt öffnen"
     # No parse_mode: an underscore in a listing title would reject the message.
     assert "parse_mode" not in payload
 
 
 @respx.mock
-async def test_button_falls_back_to_the_listing_when_no_project_is_configured() -> None:
+async def test_a_listing_without_a_url_gets_no_button() -> None:
+    # An ingested listing can have no public page; a dead button is worse than none.
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
-    await _notifier(target_url="").notify(_message())
+    await _notifier().notify(replace(_message(), url=""))
     payload = json.loads(route.calls.last.request.read())
-    assert payload["reply_markup"]["inline_keyboard"][0][0]["url"] == "https://example.com/p/1"
+    assert "reply_markup" not in payload
 
 
 @respx.mock
