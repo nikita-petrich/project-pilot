@@ -112,6 +112,10 @@ class Settings(BaseSettings):
     anthropic_api_key: str = Field(default="", repr=False)
     agent_model: str = "claude-opus-5"
     mcp_public_url: str = ""
+    # Where the thread agent works. Empty means the process's own directory,
+    # which is right for a local run; the container points it at a volume so
+    # what the agent writes survives a deploy.
+    agent_workspace: str = ""
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"

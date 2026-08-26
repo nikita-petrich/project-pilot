@@ -10,9 +10,9 @@ there is a single source of truth.
 project-pilot is a personal, single-user worker that watches freelancermap.de for
 new project listings, persists every listing losslessly in PostgreSQL, evaluates
 fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
-and pushes real matches within minutes: the worker sends a Telegram message whose
-tap opens the Claude project that collects the match chats; the MCP server exposes
-every function to Claude chats and n8n.
+and pushes real matches within minutes: the worker opens a Telegram forum topic
+per match, where a full Claude agent works it through project-pilot's own MCP
+tools; the same MCP server exposes every function to Claude chats and n8n.
 
 **Only the scraper is freelancermap-specific** (its parser, `SEARCH_URLS`, the
 watermark) — keep it that way. The data model, the evaluation prompts, the
@@ -122,10 +122,14 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
-- Scheduler daemon (scan loop; every notified match sends a Telegram message
-  whose button opens the Claude match project — `TELEGRAM_BOT_TOKEN` and
-  `TELEGRAM_CHAT_ID` are required):
+- Scheduler daemon (scan loop; every notified match opens its own forum topic in
+  the Telegram match group — `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are
+  required):
   `uv run project-pilot daemon`
+- Thread agent for those topics (long polling, no inbound port; a full Claude
+  Code agent on the Claude Agent SDK with project-pilot's MCP server attached —
+  `ANTHROPIC_API_KEY`, `MCP_PUBLIC_URL` and `TELEGRAM_ALLOWED_USER_IDS` are
+  required): `uv run project-pilot telegram-bot`
 - MCP server (Streamable HTTP + `MCP_TOKEN` bearer auth, for Claude connectors/n8n): `uv run project-pilot mcp`
 - End-to-end smoke test (rules + LLM + a real push, stores nothing):
   `uv run project-pilot test-match`

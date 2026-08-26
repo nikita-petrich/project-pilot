@@ -34,8 +34,9 @@ REQUIRED = (
     "TELEGRAM_CHAT_ID",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
-    # The thread agent (feature 25b) calls Claude and reaches its tools through
-    # the public MCP endpoint; without either the bot starts and can do nothing.
+    # The thread agent calls Claude with its own key and reaches project-pilot's
+    # tools through the public MCP endpoint; without either it starts and can do
+    # nothing useful.
     "ANTHROPIC_API_KEY",
     "MCP_PUBLIC_URL",
     # The reverse proxy's Docker network. Wrong or unset, the MCP container comes

@@ -60,7 +60,8 @@ services:
 
   bot:
     # Answers in the match topics. Long polling, so it publishes no port and
-    # joins no network but the one that reaches postgres.
+    # joins no network but the one that reaches postgres — it reaches the MCP
+    # server the same way Anthropic would, over the public URL.
     image: ghcr.io/nikita-petrich/project-pilot:latest
     command: ["telegram-bot"]
     depends_on:
@@ -69,6 +70,13 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+      # The agent's working directory and the Agent SDK's transcripts. Both live
+      # on the volume below, so a deploy replaces the container without dropping
+      # a topic's session or the files it wrote.
+      AGENT_WORKSPACE: /data/workspace
+      CLAUDE_CONFIG_DIR: /data/claude
+    volumes:
+      - agentdata:/data
     restart: unless-stopped
     networks:
       - default
@@ -93,6 +101,8 @@ services:
 
 volumes:
   pgdata:
+  # The thread agent's workspace and session transcripts.
+  agentdata:
 
 networks:
   # The reverse proxy's own Docker network, joined by name so the proxy can reach

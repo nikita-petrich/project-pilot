@@ -170,20 +170,20 @@ async def test_thread_is_findable_by_its_telegram_thread_id(session: AsyncSessio
     assert await repo.get_thread_by_thread_id(999) is None
 
 
-async def test_append_history_keeps_only_the_last_turns(session: AsyncSession) -> None:
-    # Bounded on write so a long-running topic cannot grow the row without limit.
+async def test_the_session_id_of_a_topic_is_written_and_replaced(
+    session: AsyncSession,
+) -> None:
+    # Replaced, not appended to: the SDK hands back a new id whenever it could
+    # not resume the old one, and a stale id would restart the topic every time.
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t5"))
     thread = await repo.record_thread(listing.id, 5151)
+    assert thread.session_id is None
 
-    await repo.append_history(
-        thread, [{"role": "user", "text": "eins"}, {"role": "assistant", "text": "zwei"}], keep=3
-    )
-    await repo.append_history(
-        thread, [{"role": "user", "text": "drei"}, {"role": "assistant", "text": "vier"}], keep=3
-    )
+    await repo.set_session_id(thread, "sess-1")
+    await repo.set_session_id(thread, "sess-2")
 
     stored = await repo.get_thread_by_thread_id(5151)
     assert stored is not None
-    assert [turn["text"] for turn in stored.history] == ["zwei", "drei", "vier"]
+    assert stored.session_id == "sess-2"
     assert stored.updated_at >= stored.created_at

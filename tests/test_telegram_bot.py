@@ -28,16 +28,17 @@ THREAD = 77
 class _FakeAgent:
     """Records what it was asked and answers with whatever it was given."""
 
-    def __init__(self, *, text: str = "Antwort.", ok: bool = True) -> None:
+    def __init__(
+        self, *, text: str = "Antwort.", ok: bool = True, session: str | None = "sess-1"
+    ) -> None:
         self.text = text
         self.ok = ok
-        self.calls: list[tuple[int, list[dict[str, str]], str]] = []
+        self.session = session
+        self.calls: list[tuple[int, str | None, str]] = []
 
-    async def reply(
-        self, *, listing_id: int, history: list[dict[str, str]], message: str
-    ) -> AgentReply:
-        self.calls.append((listing_id, history, message))
-        return AgentReply(text=self.text, ok=self.ok)
+    async def reply(self, *, listing_id: int, session_id: str | None, message: str) -> AgentReply:
+        self.calls.append((listing_id, session_id, message))
+        return AgentReply(text=self.text, ok=self.ok, session_id=self.session)
 
 
 def _update(
@@ -140,7 +141,7 @@ async def test_a_message_in_a_known_thread_is_answered_there(
 
 
 @respx.mock
-async def test_the_turn_is_remembered_for_the_next_message(
+async def test_the_session_carries_over_to_the_next_message(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_thread(session_factory)
@@ -155,28 +156,29 @@ async def test_the_turn_is_remembered_for_the_next_message(
         respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(2, text="zwei")]})
         await bot.poll_once(client)
 
-    # The second call sees the first exchange.
-    assert [turn["text"] for turn in agent.calls[1][1]] == ["eins", "Antwort."]
+    # The first call opens a session; the second continues it rather than
+    # starting the topic over.
+    assert [call[1] for call in agent.calls] == [None, "sess-1"]
 
 
 @respx.mock
-async def test_a_failed_turn_is_not_remembered(
+async def test_a_failed_turn_still_keeps_its_session(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # The next message should start from the last state that made sense.
+    # The session exists either way; losing its id would restart the topic.
     await _seed_thread(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
-    agent = _FakeAgent(text="⚠️ kaputt", ok=False)
+    agent = _FakeAgent(text="⚠️ kaputt", ok=False, session="sess-7")
     async with httpx.AsyncClient() as client:
         await _bot(session_factory, agent).poll_once(client)
 
     async with session_factory() as session:
         thread = await Repository(session).get_thread_by_thread_id(THREAD)
         assert thread is not None
-        assert thread.history == []
+        assert thread.session_id == "sess-7"
 
 
 @respx.mock

@@ -31,8 +31,6 @@ API_BASE = "https://api.telegram.org"
 POLL_TIMEOUT_S = 50
 # Comfortably under Telegram's own 4096-character message limit.
 CHUNK_CHARS = 3_500
-# Turns kept per topic; the agent bounds what it sends, this bounds what is stored.
-HISTORY_KEEP = 40
 _HTTP_TIMEOUT = POLL_TIMEOUT_S + 15
 
 NO_THREAD = (
@@ -196,25 +194,18 @@ class TelegramBot:
             if thread is None:
                 await self._send(client, NO_THREAD, thread_id=message.thread_id)
                 return None
-            listing_id, history = thread.listing_id, list(thread.history)
+            listing_id, session_id = thread.listing_id, thread.session_id
 
             # Sent before the model call, which can take a while: silence would
             # read as "the bot ignored me".
             await self._typing(client, message.thread_id)
             reply = await self._agent.reply(
-                listing_id=listing_id, history=history, message=message.text
+                listing_id=listing_id, session_id=session_id, message=message.text
             )
-            if reply.ok:
-                # A failed turn is not worth remembering; the next message
-                # should start from the last state that actually made sense.
-                await repo.append_history(
-                    thread,
-                    [
-                        {"role": "user", "text": message.text},
-                        {"role": "assistant", "text": reply.text},
-                    ],
-                    keep=HISTORY_KEEP,
-                )
+            if reply.session_id and reply.session_id != session_id:
+                # Stored even when the turn failed: the session exists either
+                # way, and losing its id would restart the topic from nothing.
+                await repo.set_session_id(thread, reply.session_id)
                 await session.commit()
             return reply
 

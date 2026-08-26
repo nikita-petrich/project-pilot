@@ -115,7 +115,8 @@ update the connector URL.
 
 ### 4. The thread agent
 
-The bot answers inside the match topics. Two secrets in the `prod` environment:
+The bot answers inside the match topics. Three secrets in the `prod`
+environment:
 
 | Secret | Value |
 |---|---|
@@ -123,18 +124,36 @@ The bot answers inside the match topics. Two secrets in the `prod` environment:
 | `MCP_PUBLIC_URL` | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` |
 | `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot); anyone else is ignored |
 
-Two things worth knowing about how this is built:
+Optional: `AGENT_MODEL` (default `claude-opus-5`).
 
-- **The agent has exactly one tool source: project-pilot's own MCP server.** It
-  is wired through the Messages API's MCP connector, not the Claude Agent SDK,
-  so shell, filesystem and web tools do not exist for it — they are absent
-  rather than configured away. Sending stays gated behind an explicit yes in
-  the thread, on top of the pipeline's own guard against double sends.
-- **Anthropic's servers call the MCP endpoint directly**, which is why
-  `MCP_PUBLIC_URL` must be the public address including its token path.
+What the agent is:
 
-Cost: the judging and drafting still run on your own server against OpenAI; the
-agent only orchestrates, so a thread costs cents rather than euros.
+- **A full Claude Code agent**, running on the Claude Agent SDK inside the bot
+  container. Shell, filesystem, file search and the web are all available, and
+  permissions are on `bypassPermissions` because nobody is at a terminal to
+  approve a prompt. The whitelist is what decides who may drive it.
+- **With project-pilot's MCP server attached as its domain layer.** The profile,
+  the judging rules and the writing style live behind those tools, so the system
+  prompt sends every question about Nik or a listing through them instead of the
+  model's memory. The `.claude/` directory of the image is *not* loaded
+  (`setting_sources=[]`): that holds the build workflow, which has no business
+  in a match thread.
+- **Sending is still gated** behind an explicit yes in the thread, on top of the
+  pipeline's own guard against double sends, and the prompt forbids any other
+  delivery route.
+
+Two operational details:
+
+- The agent works in `/data/workspace` and the SDK writes each topic's
+  transcript to `/data/claude`, both on the `agentdata` volume. A deploy
+  replaces the container without dropping a session or the files it wrote. Only
+  the session id per topic lives in Postgres; if a transcript is ever gone, the
+  next message silently starts a fresh session.
+- The SDK bundles its own Claude Code binary (~340 MB), so the image is that
+  much larger and needs no Node.js.
+
+Cost: judging and drafting still run on your own server against OpenAI; per
+message the agent is capped at 60 turns and $5, so a runaway loop stops itself.
 
 Turn off the bot at any time by scaling its service to zero — matches keep
 arriving, only the answering stops.

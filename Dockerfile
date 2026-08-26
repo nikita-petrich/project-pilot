@@ -23,7 +23,12 @@ COPY --from=builder --chown=pilot:pilot /app /app
 # itself stays root-owned (the app must not rewrite its own code). The CV cache is the
 # one path the runtime user writes, so create it and hand it over — otherwise the first
 # Drive refresh dies on mkdir('cv') with a permission error.
-RUN chmod +x /app/docker/entrypoint.sh && install -d -o pilot -g pilot /app/cv
+# /data is the thread agent's own ground: its working directory and the Claude
+# Agent SDK's transcripts. Created here and owned by pilot so that the named
+# volume mounted over it inherits that ownership — a volume Docker creates from
+# a root-owned path would be unwritable for the runtime user.
+RUN chmod +x /app/docker/entrypoint.sh \
+    && install -d -o pilot -g pilot /app/cv /data /data/claude /data/workspace
 USER pilot
 ENTRYPOINT ["/app/docker/entrypoint.sh"]
 CMD ["daemon"]

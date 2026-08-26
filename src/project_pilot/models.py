@@ -258,11 +258,11 @@ class TelegramThread(Base):
     thread_id: Mapped[int] = mapped_column(BigInteger, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    # The conversation held in this topic, as plain text turns:
-    # [{"role": "user" | "assistant", "text": "..."}]. Deliberately no tool
-    # blocks — the tools are the source of truth and every turn re-reads the
-    # state from the database, which keeps this small and free of replay rules.
-    history: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
+    # The agent session this topic continues in. The transcript itself belongs
+    # to the Claude Agent SDK (a file under CLAUDE_CONFIG_DIR); keeping only the
+    # id here means there is one copy of the conversation, not two to reconcile.
+    # Null until the topic's first answer, and again if that session is gone.
+    session_id: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class SourceState(Base):

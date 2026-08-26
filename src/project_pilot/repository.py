@@ -253,15 +253,16 @@ class Repository:
         )
         return result.first()
 
-    async def append_history(
-        self, thread: TelegramThread, turns: Sequence[dict[str, str]], *, keep: int
+    async def set_session_id(
+        self, thread: TelegramThread, session_id: str | None
     ) -> TelegramThread:
-        """Append turns to a thread's conversation, keeping only the last ``keep``.
+        """Point a topic at the agent session its next message should continue.
 
-        Bounded here rather than at read time so the stored row cannot grow
-        without limit over a long-running topic.
+        Written after every successful answer, not only the first: the SDK hands
+        back a fresh id whenever it could not resume the old one, and a stale id
+        here would make the topic start over on every message.
         """
-        thread.history = [*thread.history, *turns][-keep:]
+        thread.session_id = session_id
         thread.updated_at = _utcnow()
         await self._session.flush()
         return thread

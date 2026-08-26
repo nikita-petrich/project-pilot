@@ -371,17 +371,26 @@ def daemon() -> None:
 
 @app.command("telegram-bot")
 def telegram_bot() -> None:
-    """Answer in the match topics: long polling, no inbound port, MCP tools only."""
+    """Answer in the match topics: long polling, no inbound port, full agent."""
     settings = _load_settings()
     bot_token, chat_id = settings.require_telegram()
     api_key, mcp_url = settings.require_agent()
+    # The agent writes here, so it has to exist and be ours before the first run;
+    # in the container this is the volume that outlives a deploy.
+    workspace = Path(settings.agent_workspace) if settings.agent_workspace else Path.cwd()
+    workspace.mkdir(parents=True, exist_ok=True)
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     bot = TelegramBot(
         bot_token=bot_token,
         chat_id=chat_id,
         allowed_user_ids=settings.telegram_allowed_user_ids,
-        agent=ThreadAgent(api_key=api_key, mcp_url=mcp_url, model=settings.agent_model),
+        agent=ThreadAgent(
+            api_key=api_key,
+            mcp_url=mcp_url,
+            workspace=workspace,
+            model=settings.agent_model,
+        ),
         session_factory=session_factory,
     )
 
