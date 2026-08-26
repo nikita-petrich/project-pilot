@@ -79,10 +79,11 @@ class Matcher(Protocol):
 
 
 class MatchNotifier(Protocol):
-    """The notification channel: one card per match with its action buttons, and
-    operator warnings over the same channel."""
+    """The notification channel: one topic per match with its card inside, and
+    operator warnings over the same channel without a topic."""
 
-    async def notify(self, message: MatchMessage) -> bool: ...
+    async def create_topic(self, message: MatchMessage) -> int | None: ...
+    async def notify(self, message: MatchMessage, thread_id: int | None = None) -> bool: ...
     async def notify_warning(self, text: str) -> bool: ...
 
 
@@ -491,12 +492,17 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Send one card per pending match, durable per match.
+        """Open one topic per pending match and send its card, durable per match.
 
         Runs in its own session after the scan's unit of work has committed, and
         commits after every successful send, so a delivered notification can
         never be rolled back into "unnotified" and sent twice. A failed send
         leaves the listing pending and it is retried on the next run.
+
+        The topic mapping is committed as soon as the topic exists, *before* the
+        send: creating a topic is an external side effect that no rollback
+        undoes, so a mapping lost to a failed send would have the retry open a
+        second topic for the same project.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -510,6 +516,7 @@ class Pipeline:
                     "dry-run: %d match(es) not pushed (no notifier configured)", len(pending)
                 )
                 return
+            notifier = self._notifier  # narrowed above; the helper needs it non-optional
             failed = 0
             for listing in pending:  # one push per match, marked only on success
                 message = _to_match_message(listing, now)
@@ -522,15 +529,44 @@ class Pipeline:
                         listing.external_url,
                     )
                     continue
-                if await self._notifier.notify(message):
+                thread_id = await self._thread_for(repo, session, notifier, listing, message)
+                if await notifier.notify(message, thread_id):
                     await repo.mark_notified([listing], now)
                     await session.commit()
                     outcome.notified += 1
-                    logger.info("match sent: %s", listing.external_url)
+                    logger.info("match sent: %s (topic %s)", listing.external_url, thread_id)
                 else:
                     failed += 1
             if failed:
                 logger.warning("notification failed; %d match(es) will retry next run", failed)
+
+    async def _thread_for(
+        self,
+        repo: Repository,
+        session: AsyncSession,
+        notifier: MatchNotifier,
+        listing: Listing,
+        message: MatchMessage,
+    ) -> int | None:
+        """This listing's topic, opening one on first sight; None if impossible.
+
+        Committed right here, because the topic already exists in Telegram by
+        then. None means the chat cannot host topics (not a forum, or the bot is
+        not an admin) — the card then goes to the group's general area rather
+        than nowhere.
+        """
+        existing = await repo.get_thread(listing.id)
+        if existing is not None:
+            return existing.thread_id
+        thread_id = await notifier.create_topic(message)
+        if thread_id is None:
+            logger.warning(
+                "no topic for %s; sending to the group's general area", listing.external_url
+            )
+            return None
+        await repo.record_thread(listing.id, thread_id)
+        await session.commit()
+        return thread_id
 
 
 def _to_listing(parsed: ParsedListing, summary: ListingSummary, now: datetime) -> Listing:

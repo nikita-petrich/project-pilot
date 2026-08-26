@@ -109,6 +109,10 @@ class Settings(BaseSettings):
     telegram_allowed_user_ids: list[int] = Field(default_factory=list)
     claude_project_url: str = ""
 
+    anthropic_api_key: str = Field(default="", repr=False)
+    agent_model: str = "claude-opus-5"
+    mcp_public_url: str = ""
+
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
     enrichment_max_pages: int = 6
@@ -196,6 +200,20 @@ class Settings(BaseSettings):
         if not self.telegram_chat_id:
             raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
         return self.telegram_bot_token, self.telegram_chat_id
+
+    def require_agent(self) -> tuple[str, str]:
+        """The key and the MCP URL the thread agent needs, or a clear abort.
+
+        The MCP URL is the agent's whole tool surface, so an unset one would
+        produce an agent that can talk but not act.
+        """
+        if not self.anthropic_api_key:
+            raise ConfigError("ANTHROPIC_API_KEY must be set (the thread agent calls Claude)")
+        if not self.mcp_public_url:
+            raise ConfigError(
+                "MCP_PUBLIC_URL must be set (the public MCP endpoint, including its token path)"
+            )
+        return self.anthropic_api_key, self.mcp_public_url
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

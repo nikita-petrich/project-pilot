@@ -1,7 +1,7 @@
 # Feature: Karte mit Aktions-Buttons (26)
 
 **From build-plan:** feature 26
-**Status:** done
+**Status:** reverted (see `blueprint/history/fixes/back-to-topic-threads.md`)
 
 ## Goal
 

@@ -59,8 +59,8 @@ services:
           - project-pilot
 
   bot:
-    # Handles the match cards' buttons. Long polling, so it publishes no port
-    # and joins no network but the one that reaches postgres.
+    # Answers in the match topics. Long polling, so it publishes no port and
+    # joins no network but the one that reaches postgres.
     image: ghcr.io/nikita-petrich/project-pilot:latest
     command: ["telegram-bot"]
     depends_on:

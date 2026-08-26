@@ -10,16 +10,17 @@ from project_pilot.config import Settings
 from project_pilot.errors import ConfigError
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.telegram import (
-    MAX_DESCRIPTION_CHARS,
+    ICON_COLOR_BLUE,
     MAX_TEXT_CHARS,
+    MAX_TOPIC_NAME_CHARS,
     TelegramNotifier,
-    match_keyboard,
     match_text,
 )
 
 BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+TOPIC_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/createForumTopic"
 PROJECT_URL = "https://claude.ai/cowork/project/01a032c6-7b1d-728a-a279-78c39ce45076"
 
 
@@ -40,27 +41,24 @@ def _message(
     )
 
 
-def _notifier() -> TelegramNotifier:
-    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID)
+def _notifier(*, target_url: str = PROJECT_URL) -> TelegramNotifier:
+    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, target_url=target_url)
 
 
-def test_match_text_carries_the_whole_listing() -> None:
-    # The card decides at a glance; the description is what the decision is
-    # actually made on, so it travels in the same message.
-    text = match_text(_message(description="Node.js, Express, Docker, Postgres."))
-    lines = text.splitlines()
+def test_match_text_leads_with_headline_then_the_command_then_the_card() -> None:
+    lines = match_text(_message()).splitlines()
+    # The headline is what a notification preview shows.
     assert lines[0] == "⭐ 87 · Senior Python Developer · ACME GmbH"
-    assert lines[2] == "🎯 Senior Python Developer  ·  87/100"
-    assert "✅ Fits: Stack passt, Remote" in text
-    assert "Skills: Python, FastAPI" in text
-    assert text.endswith("Beschreibung:\nNode.js, Express, Docker, Postgres.")
+    # The chat the button opens starts empty, so the body carries the command.
+    assert lines[2] == "→ /check-project 42"
+    assert lines[4] == "🎯 Senior Python Developer  ·  87/100"
+    assert "✅ Fits: Stack passt, Remote" in match_text(_message())
+    assert "⚠️ Risks: kein Budget genannt" in match_text(_message())
 
 
-def test_a_long_description_is_trimmed_not_dropped() -> None:
-    text = match_text(_message(description="x" * (MAX_DESCRIPTION_CHARS * 3)))
-    assert len(text) <= MAX_TEXT_CHARS
-    assert "Beschreibung:" in text
-    assert text.endswith("…")
+def test_match_text_omits_the_command_for_an_unstored_listing() -> None:
+    # A manual check has no id; a "/check-project None" would be a dead command.
+    assert "check-project" not in match_text(_message(listing_id=None))
 
 
 def test_match_text_is_capped_below_the_telegram_limit() -> None:
@@ -69,48 +67,26 @@ def test_match_text_is_capped_below_the_telegram_limit() -> None:
     assert len(match_text(long)) == MAX_TEXT_CHARS
 
 
-def _rows(message: MatchMessage) -> list[list[dict[str, str]]]:
-    """The keyboard's rows, asserting there is one — the caller wants the rows."""
-    keyboard = match_keyboard(message)
-    assert keyboard is not None
-    rows = keyboard["inline_keyboard"]
-    assert isinstance(rows, list)
-    return rows
-
-
-def test_the_keyboard_offers_the_link_and_both_decisions() -> None:
-    rows = _rows(_message())
-    assert rows[0][0] == {"text": "🔗 Projekt öffnen", "url": "https://example.com/p/1"}
-    # The listing id rides in the callback so two cards cannot be confused.
-    assert rows[1][0]["callback_data"] == "accept:42"
-    assert rows[1][1]["callback_data"] == "decline:42"
-
-
-def test_an_unstored_listing_offers_only_the_link() -> None:
-    # A manual check has no id; there is nothing to accept or decline.
-    rows = _rows(_message(listing_id=None))
-    assert len(rows) == 1
-    assert "url" in rows[0][0]
-
-
-def test_a_listing_without_a_url_still_gets_its_decisions() -> None:
-    rows = _rows(MatchMessage(title="T", url="", score=87, listing_id=7))
-    assert len(rows) == 1
-    assert rows[0][0]["callback_data"] == "accept:7"
-
-
 @respx.mock
-async def test_notify_sends_the_card_with_its_buttons() -> None:
+async def test_notify_sends_the_card_and_a_button_to_the_project() -> None:
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
     assert await _notifier().notify(_message()) is True
-
     payload = json.loads(route.calls.last.request.read())
     assert payload["chat_id"] == CHAT_ID
     assert payload["text"] == match_text(_message())
     assert payload["disable_web_page_preview"] is True
-    assert payload["reply_markup"] == match_keyboard(_message())
+    button = payload["reply_markup"]["inline_keyboard"][0][0]
+    assert button["url"] == PROJECT_URL
     # No parse_mode: an underscore in a listing title would reject the message.
     assert "parse_mode" not in payload
+
+
+@respx.mock
+async def test_button_falls_back_to_the_listing_when_no_project_is_configured() -> None:
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    await _notifier(target_url="").notify(_message())
+    payload = json.loads(route.calls.last.request.read())
+    assert payload["reply_markup"]["inline_keyboard"][0][0]["url"] == "https://example.com/p/1"
 
 
 @respx.mock
@@ -121,13 +97,12 @@ async def test_notify_sends_emoji_as_utf8() -> None:
 
 
 @respx.mock
-async def test_warning_carries_no_buttons() -> None:
-    # An operator warning belongs to no listing, so there is nothing to press.
+async def test_warning_is_sent_without_a_button() -> None:
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
     assert await _notifier().notify_warning("Quelle im Cooldown") is True
     payload = json.loads(route.calls.last.request.read())
     assert "Quelle im Cooldown" in payload["text"]
-    assert "reply_markup" not in payload
+    assert "reply_markup" not in payload  # nothing to open for an operator warning
 
 
 @respx.mock
@@ -164,3 +139,65 @@ def test_require_telegram_names_the_missing_half(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setenv("TELEGRAM_CHAT_ID", CHAT_ID)
     assert Settings().require_telegram() == (BOT_TOKEN, CHAT_ID)
+
+
+@respx.mock
+async def test_create_topic_returns_the_thread_id_and_marks_it_new() -> None:
+    route = respx.post(TOPIC_URL).respond(
+        200, json={"ok": True, "result": {"message_thread_id": 4711, "name": "x"}}
+    )
+    assert await _notifier().create_topic(_message()) == 4711
+    payload = json.loads(route.calls.last.request.read())
+    assert payload["chat_id"] == CHAT_ID
+    assert payload["name"] == "⭐ 87 · Senior Python Developer · ACME GmbH"
+    # Blue is "fresh match"; the other colors become status in a later feature.
+    assert payload["icon_color"] == ICON_COLOR_BLUE
+
+
+@respx.mock
+async def test_create_topic_truncates_an_overlong_name() -> None:
+    # Telegram rejects a longer name outright, which would cost the whole match.
+    route = respx.post(TOPIC_URL).respond(
+        200, json={"ok": True, "result": {"message_thread_id": 1}}
+    )
+    long = MatchMessage(title="T" * 400, url="https://example.com/p/1", score=87)
+    await _notifier().create_topic(long)
+    assert len(json.loads(route.calls.last.request.read())["name"]) == MAX_TOPIC_NAME_CHARS
+
+
+@respx.mock
+async def test_create_topic_returns_none_when_the_chat_is_not_a_forum() -> None:
+    # Not a forum, or the bot is not an admin: degrade to a plain message.
+    route = respx.post(TOPIC_URL).respond(
+        400, json={"ok": False, "description": "Bad Request: the chat is not a forum"}
+    )
+    assert await _notifier().create_topic(_message()) is None
+    assert route.call_count == 1  # a config error never burns retries
+
+
+@respx.mock
+async def test_create_topic_returns_none_without_a_thread_id() -> None:
+    respx.post(TOPIC_URL).respond(200, json={"ok": True, "result": {}})
+    assert await _notifier().create_topic(_message()) is None
+
+
+@respx.mock
+async def test_notify_sends_into_the_topic_when_one_is_given() -> None:
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    assert await _notifier().notify(_message(), thread_id=4711) is True
+    assert json.loads(route.calls.last.request.read())["message_thread_id"] == 4711
+
+
+@respx.mock
+async def test_notify_without_a_topic_omits_the_thread_id() -> None:
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    await _notifier().notify(_message())
+    assert "message_thread_id" not in json.loads(route.calls.last.request.read())
+
+
+@respx.mock
+async def test_warning_never_goes_into_a_topic() -> None:
+    # An operator warning belongs to the worker, not to any one listing.
+    route = respx.post(SEND_URL).respond(200, json={"ok": True})
+    await _notifier().notify_warning("Quelle im Cooldown")
+    assert "message_thread_id" not in json.loads(route.calls.last.request.read())

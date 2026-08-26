@@ -17,6 +17,7 @@ from project_pilot.models import (
     Run,
     RunStatus,
     SourceState,
+    TelegramThread,
     Verdict,
 )
 
@@ -218,6 +219,52 @@ class Repository:
         )
         await self._session.flush()
         return result.first() is not None
+
+    async def get_thread(self, listing_id: int) -> TelegramThread | None:
+        """The forum topic recorded for this listing, or None if it has none yet."""
+        result = await self._session.scalars(
+            select(TelegramThread).where(TelegramThread.listing_id == listing_id)
+        )
+        return result.first()
+
+    async def record_thread(self, listing_id: int, thread_id: int) -> TelegramThread:
+        """Record the topic a listing got, or return the one it already had.
+
+        Idempotent on purpose: a rerun that reaches this point must not open a
+        second topic for the same project, and the unique constraint would fail
+        the whole run rather than the one listing.
+        """
+        existing = await self.get_thread(listing_id)
+        if existing is not None:
+            return existing
+        thread = TelegramThread(listing_id=listing_id, thread_id=thread_id)
+        self._session.add(thread)
+        await self._session.flush()
+        return thread
+
+    async def get_thread_by_thread_id(self, thread_id: int) -> TelegramThread | None:
+        """The topic mapping for an incoming Telegram message, or None if unknown.
+
+        An unknown thread means the message arrived somewhere the bot did not
+        open — the group's general area, or a topic a human created.
+        """
+        result = await self._session.scalars(
+            select(TelegramThread).where(TelegramThread.thread_id == thread_id)
+        )
+        return result.first()
+
+    async def append_history(
+        self, thread: TelegramThread, turns: Sequence[dict[str, str]], *, keep: int
+    ) -> TelegramThread:
+        """Append turns to a thread's conversation, keeping only the last ``keep``.
+
+        Bounded here rather than at read time so the stored row cannot grow
+        without limit over a long-running topic.
+        """
+        thread.history = [*thread.history, *turns][-keep:]
+        thread.updated_at = _utcnow()
+        await self._session.flush()
+        return thread
 
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)

@@ -9,14 +9,12 @@ session. Two independent pieces, wired by one link:
    with the account skills and the project-pilot MCP tools.
 
 ```
-Match → one card in Telegram: the whole listing, facts, verdict, description
-        [🔗 Projekt öffnen]  [✅ Annehmen]  [🗑 Abnehmen]
-           │                    │              └─ card is deleted, done
-           │                    └─ application is drafted right away,
-           │                       card becomes [💬 In Claude öffnen]
-           └─ the listing on its own board
-        ↓ tap "In Claude öffnen"
-    the match project: /write-application 42 → review, revise, send
+Match → new forum topic  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
+        card inside that topic
+        ↓ you type in the topic
+    the agent answers there: checks, drafts, revises, sends
+        ↓ done
+    close the topic: out of the list, kept and reopenable
         ↓ skills + MCP tools: check, draft, revise, send
 ```
 
@@ -57,27 +55,31 @@ stored; the old channel waited for a whole Claude run to finish first.
    not shaped like a token (the usual mix-up is pasting the chat id or the
    bot's `@name`).
 
-### 1b. Where the cards land
+### 1b. The match supergroup
 
-`TELEGRAM_CHAT_ID` is any chat the bot can write to: your private chat with it,
-or a group holding only the two of you. A group keeps the match feed out of the
-personal chat list and is what this setup uses:
+Every match opens its own **forum topic**, so one project is one thread and a
+finished one can be closed rather than deleted. Topics only exist in a forum
+supergroup, so the bot sends there rather than into your private chat:
 
 1. In Telegram: **New Group** → name it (e.g. *project-pilot*) → add your bot as
    the only other member → create.
-2. Read the group's id: post any message in the group, then
+2. Open the group → **Edit** → turn on **Topics**. Telegram converts it to a
+   forum supergroup.
+3. **Edit → Administrators → add your bot**, and give it **Manage Topics**.
+   Without that one right it cannot open a topic, and every match would land in
+   the group's general area instead.
+4. Read the group's id: post any message in the group, then
 
    ```sh
-   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":-\?[0-9]*'
+   curl -s "https://api.telegram.org/bot<TOKEN>/getUpdates" | grep -o '"chat":{"id":-[0-9]*'
    ```
 
-   That is `TELEGRAM_CHAT_ID` in the `prod` environment. For a group it is
-   negative (usually starting `-100`); for a private chat it is your own user
-   id. The deploy rejects anything that is not an integer, so an @name or an
-   invite link fails at deploy rather than at the first match.
+   It is negative and starts with `-100`. That is `TELEGRAM_CHAT_ID` in the
+   `prod` environment — the deploy rejects a positive one, because a personal
+   chat can never hold a topic.
 
-The worker only ever sends. Button presses are read by a separate process
-(section 4) over long polling, so there is still no webhook and no inbound port.
+The bot only ever sends. There is no polling loop, no webhook and no inbound
+port, so nothing here can be reached from outside.
 
 Install the Telegram **desktop app** as well and let it start with the system:
 that is what makes a match notify you at the desk with nothing open — the
@@ -111,32 +113,31 @@ The session needs the project-pilot tools. Add the custom connector once at
 Rotating `MCP_TOKEN` means: new value in the `prod` environment, redeploy, then
 update the connector URL.
 
-### 4. The button handler
+### 4. The thread agent
 
-A second process (`project-pilot telegram-bot`) watches the cards' buttons. It
-holds no conversation and answers no messages — it only long-polls for button
-presses, so the worker still publishes no port.
+The bot answers inside the match topics. Two secrets in the `prod` environment:
 
 | Secret | Value |
 |---|---|
-| `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot). Anyone else's press is refused — those buttons write applications |
-| `CLAUDE_PROJECT_URL` | the Claude project the accepted card points at |
+| `ANTHROPIC_API_KEY` | from console.anthropic.com — billed per token, separate from any Claude subscription |
+| `MCP_PUBLIC_URL` | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` |
+| `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot); anyone else is ignored |
 
-What the buttons do:
+Two things worth knowing about how this is built:
 
-- **🔗 Projekt öffnen** — a plain link to the listing on its board. No code.
-- **✅ Annehmen** — drafts the application immediately, through the same
-  `ApplicationService` the MCP tools use, so there is one drafting path rather
-  than two. The card is then rewritten to name the application id and the
-  commands to type, with a single button into the Claude project. **It never
-  sends** — the bot process is wired without a mailer at all, so sending is
-  impossible from here even by accident.
-- **🗑 Abnehmen** — deletes the card. The database keeps the record either way,
-  so the feed stays clean without losing the history.
+- **The agent has exactly one tool source: project-pilot's own MCP server.** It
+  is wired through the Messages API's MCP connector, not the Claude Agent SDK,
+  so shell, filesystem and web tools do not exist for it — they are absent
+  rather than configured away. Sending stays gated behind an explicit yes in
+  the thread, on top of the pipeline's own guard against double sends.
+- **Anthropic's servers call the MCP endpoint directly**, which is why
+  `MCP_PUBLIC_URL` must be the public address including its token path.
 
-The listing id travels inside every button (`accept:42`), never resolved
-against some "current" listing, so two cards can never be confused for one
-another.
+Cost: the judging and drafting still run on your own server against OpenAI; the
+agent only orchestrates, so a thread costs cents rather than euros.
+
+Turn off the bot at any time by scaling its service to zero — matches keep
+arriving, only the answering stops.
 
 ### 5. The account skills
 
@@ -208,10 +209,10 @@ card, a no-match sends a warning — either way the channel is proven.
 | No message at all | Wrong chat id, or the bot was never messaged first | Message the bot, re-read the id from `getUpdates` |
 | `401 Unauthorized` in the log | Token revoked or mistyped | Regenerate with @BotFather, update the secret, redeploy |
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
-| Annehmen/Abnehmen do nothing | The `bot` container is down, or your id is not in `TELEGRAM_ALLOWED_USER_IDS` | `docker compose logs bot`; the refusal is logged with the id that pressed |
-| Annehmen answers, but the Claude button is missing | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
-| Claude button opens the browser, not the app | Claude app not installed | Log in there, or install the app |
-| Deploy rejects the chat id | An @name or an invite link instead of the id | Read the integer from `getUpdates` |
+| Button does nothing | Claude app not installed | The link opens in the browser; log in there, or install the app |
+| Tap opens the listing, not Claude | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
+| Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
+| Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
 | Chat has no `/check-project` | Account skills not uploaded or disabled | Upload the zips, then toggle each skill on |
 | Session has no `project_pilot_*` tools | Connector missing or token rotated | Re-add the connector URL with the current `MCP_TOKEN` |
 | `test-match` fails at `push` | Bad token or chat id | The log names the HTTP status; a 4xx is config, a 5xx is retried |

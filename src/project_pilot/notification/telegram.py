@@ -12,12 +12,11 @@ match chats (``CLAUDE_PROJECT_URL``), and every action — checking, drafting,
 sending — happens there through the skills and the MCP tools. Nothing to
 maintain here but one endpoint.
 
-A match arrives as one card carrying the whole listing — the facts, the verdict
-and the description — under three buttons: open it on its board, accept it, or
-decline it. Accepting drafts the application and points at the Claude project;
-declining deletes the card. Both are handled by
-:mod:`~project_pilot.telegram_bot`; the callback data carries the listing id, so
-a press is never resolved against some "current" listing.
+Each match gets its own **forum topic** in the target supergroup, so one project
+is one thread rather than one line in a growing chat. Telegram can close a topic,
+which archives the whole exchange without deleting it, and its
+``message_thread_id`` is the handle a later feature uses to route a reply back to
+its listing.
 
 Telegram was chosen over a push service for one reason the alternatives could
 not match: its desktop app delivers a real system notification with nothing
@@ -42,8 +41,11 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.telegram.org"
 # Telegram rejects anything past 4096 characters outright.
 MAX_TEXT_CHARS = 4_000
-# What is left for the listing text once the card and the labels are in.
-MAX_DESCRIPTION_CHARS = 2_000
+# createForumTopic rejects a longer name rather than truncating it itself.
+MAX_TOPIC_NAME_CHARS = 128
+# icon_color takes six fixed values and nothing else. Blue marks a fresh match;
+# the remaining colors become status in a later feature.
+ICON_COLOR_BLUE = 7322096
 _TIMEOUT = 15.0
 
 
@@ -56,74 +58,65 @@ def _is_retryable(err: BaseException) -> bool:
 
 
 def match_text(message: MatchMessage) -> str:
-    """The whole listing in one message: headline, card, facts, description.
+    """The message body: the headline, the command to type, then the card.
 
-    The card decides at a glance; the description is what the decision is
-    actually made on, so it travels with it rather than living one tap away.
+    The command leads because the chat the button opens starts empty — the id is
+    what gets typed there (``/check-project 42``), and the card below it is the
+    overview that decides whether it is worth typing at all.
     """
-    parts = [headline(message), render_match_card(message)]
-
-    details = [
-        ("Vertragsart", message.contract_type),
-        ("Branche", message.industry),
-        ("Sprache", message.language),
-        ("Anzeige läuft", message.expires_label),
-        ("Ansprechpartner", message.contact_name),
-    ]
-    extra = [f"{label}: {value}" for label, value in details if value]
-    if message.skills:
-        extra.append("Skills: " + ", ".join(message.skills))
-    if message.missing_requirements:
-        extra.append("Lücken: " + ", ".join(message.missing_requirements))
-    if extra:
-        parts.append("\n".join(extra))
-
-    if message.description:
-        text = message.description.strip()
-        if len(text) > MAX_DESCRIPTION_CHARS:
-            text = text[:MAX_DESCRIPTION_CHARS].rstrip() + " …"
-        parts.append(f"Beschreibung:\n{text}")
-    return "\n\n".join(parts)[:MAX_TEXT_CHARS]
-
-
-def match_keyboard(message: MatchMessage) -> dict[str, object] | None:
-    """The three buttons under a match card.
-
-    The listing id rides in every callback (``accept:42``) rather than being
-    resolved against a "current" listing, so two cards can never be confused.
-    Without a stored listing there is nothing to accept or decline — a manual
-    check has no id — and only the link remains.
-    """
-    rows: list[list[dict[str, str]]] = []
-    if message.url:
-        rows.append([{"text": "🔗 Projekt öffnen", "url": message.url}])
+    parts = [headline(message)]
     if message.listing_id is not None:
-        rows.append(
-            [
-                {"text": "✅ Annehmen", "callback_data": f"accept:{message.listing_id}"},
-                {"text": "🗑 Abnehmen", "callback_data": f"decline:{message.listing_id}"},
-            ]
-        )
-    return {"inline_keyboard": rows} if rows else None
+        parts.append(f"→ /check-project {message.listing_id}")
+    parts.append(render_match_card(message))
+    return "\n\n".join(parts)[:MAX_TEXT_CHARS]
 
 
 class TelegramNotifier:
     """Sends one match (or one warning) to a Telegram chat."""
 
-    def __init__(self, *, bot_token: str, chat_id: str) -> None:
+    def __init__(self, *, bot_token: str, chat_id: str, target_url: str = "") -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
         self._chat_id = chat_id
+        self._target_url = target_url.strip()
 
-    async def notify(self, message: MatchMessage) -> bool:
-        """Send one match card with its buttons; False when delivery failed.
+    async def create_topic(self, message: MatchMessage) -> int | None:
+        """Open a forum topic for one match; None when the chat cannot host one.
+
+        Returns None rather than raising for the same reason ``notify`` does: a
+        chat that is not a forum, or a bot that is not an admin, must degrade to
+        a plain message instead of failing the run.
+        """
+        name = headline(message)[:MAX_TOPIC_NAME_CHARS]
+        try:
+            payload = await self._post(
+                "createForumTopic", {"name": name, "icon_color": ICON_COLOR_BLUE}
+            )
+        except httpx.HTTPError as err:
+            logger.warning("telegram topic creation failed for %s: %s", message.url, err)
+            return None
+        result = payload.get("result")
+        thread_id = result.get("message_thread_id") if isinstance(result, dict) else None
+        if not isinstance(thread_id, int):
+            logger.warning("telegram returned no message_thread_id for %s", message.url)
+            return None
+        return thread_id
+
+    async def notify(self, message: MatchMessage, thread_id: int | None = None) -> bool:
+        """Send one match, into its topic when it has one; False on failure.
 
         A failed send must not fail the pipeline run: the listing stays
         unnotified and is retried on the next run.
         """
+        # Never a dead end: without a configured project the button opens the
+        # listing on its own board instead.
+        link = self._target_url or message.url
         payload: dict[str, object] = {"text": match_text(message)}
-        keyboard = match_keyboard(message)
-        if keyboard is not None:
-            payload["reply_markup"] = keyboard
+        if link:
+            payload["reply_markup"] = {
+                "inline_keyboard": [[{"text": "🚀 Im Claude-Projekt öffnen", "url": link}]]
+            }
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         try:
             await self._post("sendMessage", payload)
         except httpx.HTTPError as err:
@@ -138,6 +131,7 @@ class TelegramNotifier:
         this never raises either.
         """
         try:
+            # No topic: a warning belongs to the worker, not to any one listing.
             await self._post(
                 "sendMessage",
                 {"text": f"⚠️ project-pilot Betriebswarnung\n\n{text}"[:MAX_TEXT_CHARS]},

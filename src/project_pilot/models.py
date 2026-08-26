@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -238,6 +238,31 @@ class ContactLead(Base):
     links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
     linkedin_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class TelegramThread(Base):
+    """The forum topic a match got, and the listing it belongs to.
+
+    Telegram's ``message_thread_id`` is the handle for everything that happens in
+    that topic: sending into it now, and routing an incoming message back to its
+    listing later. The unique constraint on ``listing_id`` is what keeps a
+    repeated run from opening a second topic for the same project.
+    """
+
+    __tablename__ = "telegram_threads"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    listing_id: Mapped[int] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), unique=True
+    )
+    thread_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    # The conversation held in this topic, as plain text turns:
+    # [{"role": "user" | "assistant", "text": "..."}]. Deliberately no tool
+    # blocks — the tools are the source of truth and every turn re-reads the
+    # state from the database, which keeps this small and free of replay rules.
+    history: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
 
 
 class SourceState(Base):

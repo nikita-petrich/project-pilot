@@ -145,10 +145,9 @@ Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 1. **The Telegram message**, sent by the worker itself over one retried HTTP
    POST. Send-only: no polling, no webhook, no inbound port. Delivery never
    depends on a model judging a run worth
-   reporting, and there is no inbound port and no webhook to expose. The card
-   carries the whole listing under three buttons: open it on its board, accept
-   it — which drafts the application at once and points into the Claude project
-   (`CLAUDE_PROJECT_URL`) — or decline it, which deletes the card.
+   reporting, and there is no inbound port and no webhook to expose. The push
+   carries the match card and the command to type; its click target is the
+   Claude project that collects the match chats (`CLAUDE_PROJECT_URL`).
 2. **The MCP server** behind the reverse proxy, added to the Claude app as a
    custom connector. That is what turns the opened session into a working
    surface: the feed, the checks, the drafts, and the send are its tools. The
@@ -409,8 +408,7 @@ src/project_pilot/
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, check, prompts/
   enrichment/   fetch, render, search, extract, links, message, service, listing
-  notification/ telegram (the cards), messages
-  telegram_bot  the buttons behind them
+  notification/ telegram (the channel), messages
   mcp_prompts   the workflow prompts, one source for every surface
   application/  generator, service, mailer, documents, cv_drive (apply flow)
   mcp_server.py the tools any Claude surface calls
