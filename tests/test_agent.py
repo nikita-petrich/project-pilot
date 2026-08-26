@@ -15,7 +15,8 @@ from claude_agent_sdk import (
 
 from project_pilot.agent import MAX_TURNS, MCP_SERVER, ThreadAgent
 
-MCP_URL = "https://mcp-project-pilot.example.io/t/tok/mcp"
+MCP_URL = "http://mcp:8765/mcp"
+MCP_TOKEN = "tok"
 
 
 def _result(text: str | None = "Passt.", session: str = "sess-1") -> ResultMessage:
@@ -60,7 +61,13 @@ class _Runs:
 
 
 def _agent(runs: _Runs, workspace: Path) -> ThreadAgent:
-    return ThreadAgent(api_key="sk-ant-test", mcp_url=MCP_URL, workspace=workspace, runner=runs)
+    return ThreadAgent(
+        api_key="sk-ant-test",
+        mcp_url=MCP_URL,
+        mcp_token=MCP_TOKEN,
+        workspace=workspace,
+        runner=runs,
+    )
 
 
 @pytest.mark.asyncio
@@ -70,7 +77,14 @@ async def test_options_carry_the_mcp_server_and_no_filesystem_settings(tmp_path:
     await _agent(runs, tmp_path).reply(listing_id=42, session_id=None, message="Prüf das")
 
     options = runs.options[-1]
-    assert options.mcp_servers == {MCP_SERVER: {"type": "http", "url": MCP_URL}}
+    assert options.mcp_servers == {
+        MCP_SERVER: {
+            "type": "http",
+            "url": MCP_URL,
+            # The token rides in a header; the client runs here, not at Anthropic.
+            "headers": {"Authorization": f"Bearer {MCP_TOKEN}"},
+        }
+    }
     # The repo's own .claude/ holds the build workflow, not thread judgment.
     assert options.setting_sources == []
     assert options.cwd == tmp_path

@@ -121,7 +121,6 @@ environment:
 | Secret | Value |
 |---|---|
 | `ANTHROPIC_API_KEY` | from console.anthropic.com — billed per token, separate from any Claude subscription |
-| `MCP_PUBLIC_URL` | `https://mcp-project-pilot.sequenz.io/t/<MCP_TOKEN>/mcp` |
 | `TELEGRAM_ALLOWED_USER_IDS` | your Telegram user id (from @userinfobot); anyone else is ignored |
 
 Optional: `AGENT_MODEL` (default `claude-opus-5`).
@@ -132,7 +131,11 @@ What the agent is:
   container. Shell, filesystem, file search and the web are all available, and
   permissions are on `bypassPermissions` because nobody is at a terminal to
   approve a prompt. The whitelist is what decides who may drive it.
-- **With project-pilot's MCP server attached as its domain layer.** The profile,
+- **With project-pilot's MCP server attached as its domain layer**, reached at
+  `http://mcp:8765/mcp` inside the stack with `MCP_TOKEN` as a bearer header.
+  The agent runs the MCP client itself, so nothing about a match thread goes out
+  through the public hostname, and there is no second copy of the token in a
+  URL. The profile,
   the judging rules and the writing style live behind those tools, so the system
   prompt sends every question about Nik or a listing through them instead of the
   model's memory. The `.claude/` directory of the image is *not* loaded

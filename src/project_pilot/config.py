@@ -111,7 +111,10 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(default="", repr=False)
     agent_model: str = "claude-opus-5"
-    mcp_public_url: str = ""
+    # Where the thread agent reaches project-pilot's own tools. The agent runs
+    # the MCP client itself, so this is an address *it* must reach: inside the
+    # stack that is the mcp service, not the public hostname.
+    mcp_url: str = "http://mcp:8765/mcp"
     # Where the thread agent works. Empty means the process's own directory,
     # which is right for a local run; the container points it at a volume so
     # what the agent writes survives a deploy.
@@ -208,16 +211,14 @@ class Settings(BaseSettings):
     def require_agent(self) -> tuple[str, str]:
         """The key and the MCP URL the thread agent needs, or a clear abort.
 
-        The MCP URL is the agent's whole tool surface, so an unset one would
+        The MCP URL is the agent's whole domain surface, so an unset one would
         produce an agent that can talk but not act.
         """
         if not self.anthropic_api_key:
             raise ConfigError("ANTHROPIC_API_KEY must be set (the thread agent calls Claude)")
-        if not self.mcp_public_url:
-            raise ConfigError(
-                "MCP_PUBLIC_URL must be set (the public MCP endpoint, including its token path)"
-            )
-        return self.anthropic_api_key, self.mcp_public_url
+        if not self.mcp_url:
+            raise ConfigError("MCP_URL must be set (where the agent reaches the MCP server)")
+        return self.anthropic_api_key, self.mcp_url
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

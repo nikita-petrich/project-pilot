@@ -60,16 +60,21 @@ services:
 
   bot:
     # Answers in the match topics. Long polling, so it publishes no port and
-    # joins no network but the one that reaches postgres — it reaches the MCP
-    # server the same way Anthropic would, over the public URL.
+    # joins no network but the one that reaches postgres and the MCP service.
     image: ghcr.io/nikita-petrich/project-pilot:latest
     command: ["telegram-bot"]
     depends_on:
       postgres:
         condition: service_healthy
+      mcp:
+        condition: service_started
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://pilot:${POSTGRES_PASSWORD:-pilot}@postgres:5432/project_pilot
+      # The agent runs the MCP client itself, so it talks to the container next
+      # door rather than out to the public hostname and back. Nothing about a
+      # match thread crosses the internet to reach project-pilot's own tools.
+      MCP_URL: http://mcp:${MCP_PORT:-8765}/mcp
       # The agent's working directory and the Agent SDK's transcripts. Both live
       # on the volume below, so a deploy replaces the container without dropping
       # a topic's session or the files it wrote.

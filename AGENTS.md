@@ -128,8 +128,8 @@ App (typer CLI, entry point `project_pilot.cli:app`):
   `uv run project-pilot daemon`
 - Thread agent for those topics (long polling, no inbound port; a full Claude
   Code agent on the Claude Agent SDK with project-pilot's MCP server attached —
-  `ANTHROPIC_API_KEY`, `MCP_PUBLIC_URL` and `TELEGRAM_ALLOWED_USER_IDS` are
-  required): `uv run project-pilot telegram-bot`
+  `ANTHROPIC_API_KEY` and a reachable `MCP_URL` are required):
+  `uv run project-pilot telegram-bot`
 - MCP server (Streamable HTTP + `MCP_TOKEN` bearer auth, for Claude connectors/n8n): `uv run project-pilot mcp`
 - End-to-end smoke test (rules + LLM + a real push, stores nothing):
   `uv run project-pilot test-match`

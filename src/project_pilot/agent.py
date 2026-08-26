@@ -8,7 +8,10 @@ style, so project-pilot's own MCP server is attached and the system prompt sends
 every domain question through it.
 
 The Claude Agent SDK runs the loop in this process (it ships its own Claude Code
-binary, so there is nothing to install alongside it) and writes each topic's
+binary, so there is nothing to install alongside it), which also means the MCP
+client runs here: the agent talks to the MCP container directly inside the
+stack, so nothing about a match thread leaves through the public endpoint. It
+writes each topic's
 transcript to ``CLAUDE_CONFIG_DIR``. We keep only the session id per topic in
 Postgres and resume by it, so the conversation survives a restart without us
 replaying a history we would then have to keep in sync.
@@ -107,6 +110,7 @@ class ThreadAgent:
         *,
         api_key: str,
         mcp_url: str,
+        mcp_token: str,
         workspace: Path,
         model: str = "claude-opus-5",
         runner: Runner | None = None,
@@ -115,6 +119,7 @@ class ThreadAgent:
         # key is passed through `env` rather than to a client object.
         self._api_key = api_key
         self._mcp_url = mcp_url
+        self._mcp_token = mcp_token
         self._workspace = workspace
         self._model = model
         # `runner` exists so tests can drive the loop without spawning the CLI.
@@ -131,7 +136,15 @@ class ThreadAgent:
                 "preset": "claude_code",
                 "append": SYSTEM.format(listing_id=listing_id),
             },
-            mcp_servers={MCP_SERVER: {"type": "http", "url": self._mcp_url}},
+            mcp_servers={
+                MCP_SERVER: {
+                    "type": "http",
+                    "url": self._mcp_url,
+                    # A header, not the `/t/<token>` path form: the client runs
+                    # here, so the token never has to live in a URL.
+                    "headers": {"Authorization": f"Bearer {self._mcp_token}"},
+                }
+            },
             # Nobody is at a terminal to answer a permission prompt, and the
             # whitelist upstream already decided who may talk to this agent.
             permission_mode="bypassPermissions",

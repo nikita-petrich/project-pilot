@@ -375,6 +375,7 @@ def telegram_bot() -> None:
     settings = _load_settings()
     bot_token, chat_id = settings.require_telegram()
     api_key, mcp_url = settings.require_agent()
+    mcp_token = settings.require_mcp()
     # The agent writes here, so it has to exist and be ours before the first run;
     # in the container this is the volume that outlives a deploy.
     workspace = Path(settings.agent_workspace) if settings.agent_workspace else Path.cwd()
@@ -388,6 +389,7 @@ def telegram_bot() -> None:
         agent=ThreadAgent(
             api_key=api_key,
             mcp_url=mcp_url,
+            mcp_token=mcp_token,
             workspace=workspace,
             model=settings.agent_model,
         ),

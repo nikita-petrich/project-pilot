@@ -113,7 +113,7 @@ gitignored and `.env.example` is the template):
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and the chat it sends to — the notification channel |
 | `CLAUDE_PROJECT_URL` | the Claude project a tapped notification opens |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
-| `ANTHROPIC_API_KEY` / `MCP_PUBLIC_URL` | the thread agent: its own key, and the public MCP endpoint (token in the path) it works through |
+| `ANTHROPIC_API_KEY` | the thread agent's own key (`MCP_URL` defaults to the mcp service next to it) |
 | `TELEGRAM_ALLOWED_USER_IDS` | who may drive that agent — anyone else's message is dropped |
 | `AGENT_MODEL` / `AGENT_WORKSPACE` | model (default `claude-opus-5`) and the directory the agent works in |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
