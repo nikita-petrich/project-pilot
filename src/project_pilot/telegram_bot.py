@@ -46,6 +46,12 @@ _HTTP_TIMEOUT = POLL_TIMEOUT_S + 15
 GENERAL = 0
 # What a `/command` fills its slot with when the thread has no listing yet.
 OPEN_SLOT = "die Ausschreibung, die Nik hier schickt"
+# A topic opened for a message from the group's main area. Telegram caps the
+# name at 128; well short of it keeps the sidebar readable.
+TOPIC_NAME_CHARS = 60
+UNNAMED_TOPIC = "Neue Anfrage"
+# The green Telegram offers; a thread you started should not look like a match.
+ICON_COLOR_GREEN = 9367192
 ALLOW, DENY = "allow", "deny"
 ACCEPT, DECLINE, DESCRIBE = "accept", "decline", "describe"
 CARD_ACTIONS = (ACCEPT, DECLINE, DESCRIBE)
@@ -121,6 +127,17 @@ def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
             )
         )
     return presses
+
+
+def topic_name(text: str) -> str:
+    """A thread name from what was written, without the command that started it."""
+    words = text.split()
+    if words and words[0].startswith("/"):
+        words = words[1:]
+    flat = " ".join(words)
+    if not flat:
+        return UNNAMED_TOPIC
+    return flat if len(flat) <= TOPIC_NAME_CHARS else flat[:TOPIC_NAME_CHARS].rstrip() + " …"
 
 
 def _key(thread_id: int | None) -> int:
@@ -429,9 +446,17 @@ class TelegramBot:
         yourself is about whatever you bring into it, and gets its own session
         the first time you write there.
         """
+        thread_id = message.thread_id
+        if thread_id is None:
+            # Anything written in the group's main area gets a thread of its own,
+            # so the answer, its steps and every follow-up stay together instead
+            # of interleaving with the next thing you drop there.
+            thread_id = await self._open_topic(client, topic_name(message.text))
+            if thread_id is not None:
+                await self._send(client, message.text, thread_id=thread_id)
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            thread = await repo.ensure_thread(_key(message.thread_id))
+            thread = await repo.ensure_thread(_key(thread_id))
             listing_id = thread.listing_id
             await session.commit()
         # A `/command` is not handled here: it stands for one of the MCP
@@ -442,7 +467,7 @@ class TelegramBot:
         text = text.replace("{listing}", slot)
         return await self._run(
             client,
-            thread_id=message.thread_id,
+            thread_id=thread_id,
             listing_id=listing_id,
             message=text,
             react_to=message.message_id,
@@ -634,6 +659,26 @@ class TelegramBot:
             )
         except httpx.HTTPError as err:  # cosmetic; the decision already stands
             logger.debug("clearing the keyboard on %s failed: %s", message_id, err)
+
+    async def _open_topic(self, client: httpx.AsyncClient, name: str) -> int | None:
+        """Open a thread for a message from the main area; None if it cannot.
+
+        A chat that is not a forum, or a bot without Manage Topics, must fall
+        back to answering where the message was rather than dropping it.
+        """
+        try:
+            response = await client.post(
+                f"{self._api}/createForumTopic",
+                json={"chat_id": self._chat_id, "name": name, "icon_color": ICON_COLOR_GREEN},
+            )
+            response.raise_for_status()
+        except httpx.HTTPError as err:
+            logger.warning("could not open a topic for %r: %s", name, err)
+            return None
+        body = response.json()
+        result = body.get("result") if isinstance(body, dict) else None
+        thread_id = result.get("message_thread_id") if isinstance(result, dict) else None
+        return thread_id if isinstance(thread_id, int) else None
 
     async def _close_topic(self, client: httpx.AsyncClient, thread_id: int) -> None:
         try:

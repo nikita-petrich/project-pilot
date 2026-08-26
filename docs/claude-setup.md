@@ -130,12 +130,14 @@ environment:
 
 Optional: `AGENT_MODEL` (default `claude-opus-5`).
 
-Where it answers: **everywhere in the group**. A topic project-pilot opened is
-about its match. A topic you open yourself is about whatever you bring into it —
-paste a description, a link or a PDF and the agent stores it with
-`ingest_listing` first, then works with the listing id it gets back. The
-group's General area is a conversation of its own the same way. Each keeps its
-own session, so three threads are three separate conversations.
+Where it answers: **everywhere in the group, always in a thread**. A topic
+project-pilot opened is about its match. A topic you open yourself is about
+whatever you bring into it — paste a description, a link or a PDF and the agent
+stores it with `ingest_listing` first, then works with the listing id it gets
+back. And anything written in the group's main area gets a thread opened for
+it, named after what you wrote, with your message repeated inside so it reads
+on its own; only a chat that cannot hold topics is answered in place. Each
+thread keeps its own session, so several are several separate conversations.
 
 What the agent is:
 

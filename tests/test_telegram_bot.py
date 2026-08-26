@@ -24,6 +24,8 @@ from project_pilot.telegram_bot import (
     NO_DESCRIPTION,
     OPEN_SLOT,
     SEEN,
+    TOPIC_NAME_CHARS,
+    UNNAMED_TOPIC,
     Incoming,
     TelegramBot,
     chunk,
@@ -31,6 +33,7 @@ from project_pilot.telegram_bot import (
     parse_callbacks,
     parse_updates,
     question_text,
+    topic_name,
 )
 
 BOT_TOKEN = "123456:AAtest"
@@ -267,26 +270,63 @@ async def test_a_stranger_is_ignored_without_a_reply(
 
 
 @respx.mock
-async def test_the_general_area_holds_a_conversation_of_its_own(
+async def test_a_message_in_the_main_area_gets_a_thread_of_its_own(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Telegram sends no message_thread_id there, so General gets the id 0 and a
-    # session like any topic.
-    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=None)]})
+    # Otherwise the answer, its steps and the next thing you drop there all
+    # interleave in one growing chat.
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_update(1, thread_id=None, text="prüf mal https://x.test/p")]}
+    )
+    opened = respx.post(f"{API}/createForumTopic").respond(
+        200, json={"ok": True, "result": {"message_thread_id": 8080}}
+    )
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert agent.calls[0][0] is None  # no listing — whatever is brought in
+    assert json.loads(opened.calls.last.request.read())["name"] == "prüf mal https://x.test/p"
+    # What was written is repeated in the thread, so it reads on its own.
+    assert json.loads(send.calls[0].request.read())["text"] == "prüf mal https://x.test/p"
+    assert all(json.loads(call.request.read())["message_thread_id"] == 8080 for call in send.calls)
+    assert agent.calls[0][0] is None  # no listing yet — the agent ingests it
+
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(8080)
+        assert thread is not None
+        assert thread.session_id == "sess-1"
+
+
+@respx.mock
+async def test_a_chat_that_cannot_hold_topics_is_answered_where_it_is(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Not a forum, or no Manage Topics: answering in place beats dropping it.
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=None)]})
+    respx.post(f"{API}/createForumTopic").respond(400, json={"ok": False})
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
     assert json.loads(send.calls.last.request.read())["text"] == "Antwort."
     assert "message_thread_id" not in json.loads(send.calls.last.request.read())
 
     async with session_factory() as session:
-        thread = await Repository(session).get_thread_by_thread_id(GENERAL)
-        assert thread is not None
-        assert thread.session_id == "sess-1"
+        assert await Repository(session).get_thread_by_thread_id(GENERAL) is not None
+
+
+def test_a_topic_is_named_after_what_was_written() -> None:
+    assert topic_name("prüf mal das hier") == "prüf mal das hier"
+    # The command that started it is not what the thread is about.
+    assert topic_name("/check_project@a_bot Senior Python Dev") == "Senior Python Dev"
+    assert topic_name("/check_project") == UNNAMED_TOPIC
+    long = topic_name("x" * 200)
+    assert len(long) <= TOPIC_NAME_CHARS + 2
+    assert long.endswith("…")
 
 
 @respx.mock
