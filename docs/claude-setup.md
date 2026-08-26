@@ -128,9 +128,17 @@ Optional: `AGENT_MODEL` (default `claude-opus-5`).
 What the agent is:
 
 - **A full Claude Code agent**, running on the Claude Agent SDK inside the bot
-  container. Shell, filesystem, file search and the web are all available, and
-  permissions are on `bypassPermissions` because nobody is at a terminal to
-  approve a prompt. The whitelist is what decides who may drive it.
+  container. Shell, filesystem, file search and the web are all available.
+- **With the same permission gate a Claude session has.** Reading and searching
+  run without asking — `Read`, `Glob`, `Grep`, `WebSearch`, `WebFetch`, and the
+  MCP tools that only look at a listing or produce an unsent draft. Everything
+  else — `Bash`, `Write`, `Edit`, naming a recipient, sending — puts a question
+  in the thread with **✅ Erlauben / 🚫 Ablehnen** and waits for your press. No
+  answer within ten minutes is a refusal, and so is a question Telegram would
+  not deliver. The question is rewritten into its answer afterwards, so the
+  thread reads as a record instead of leaving live buttons on a settled
+  decision. The list of pre-approved tools is `ALLOWED_TOOLS` in
+  `src/project_pilot/agent.py` — one place, move a tool in or out.
 - **With project-pilot's MCP server attached as its domain layer**, reached at
   `http://mcp:8765/mcp` inside the stack with `MCP_TOKEN` as a bearer header.
   The agent runs the MCP client itself, so nothing about a match thread goes out
@@ -141,9 +149,10 @@ What the agent is:
   model's memory. The `.claude/` directory of the image is *not* loaded
   (`setting_sources=[]`): that holds the build workflow, which has no business
   in a match thread.
-- **Sending is still gated** behind an explicit yes in the thread, on top of the
-  pipeline's own guard against double sends, and the prompt forbids any other
-  delivery route.
+- **Sending is gated twice**: the button, and an explicit yes in the
+  conversation before the agent is allowed to reach for the tool at all — on top
+  of the pipeline's own guard against double sends. The prompt forbids any other
+  delivery route, which matters now that the agent has a shell.
 
 Two operational details:
 

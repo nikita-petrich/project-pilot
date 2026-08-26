@@ -17,19 +17,23 @@ Postgres and resume by it, so the conversation survives a restart without us
 replaying a history we would then have to keep in sync.
 """
 
+import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ClaudeSDKError,
     Message,
+    PermissionResultAllow,
+    PermissionResultDeny,
     ResultMessage,
     TextBlock,
+    ToolPermissionContext,
     query,
 )
 
@@ -40,6 +44,36 @@ MCP_SERVER = "project_pilot"
 # loop, not work. The cap is per message, and the user can simply say "weiter".
 MAX_TURNS = 60
 MAX_BUDGET_USD = 5.0
+
+# Pre-approved: reading, searching, and the domain tools that only look at a
+# listing or produce a draft nobody has seen yet. Everything else — writing to
+# disk, running a command, naming a recipient, sending — is not listed and
+# therefore falls through to the approval callback. This is the one knob: move a
+# tool out of here to be asked about it, in here to stop being asked.
+ALLOWED_TOOLS = (
+    "Read",
+    "Glob",
+    "Grep",
+    "WebSearch",
+    "WebFetch",
+    "TodoWrite",
+    f"mcp__{MCP_SERVER}__project_pilot_get_listing",
+    f"mcp__{MCP_SERVER}__project_pilot_list_matches",
+    f"mcp__{MCP_SERVER}__project_pilot_check_listing",
+    f"mcp__{MCP_SERVER}__project_pilot_check_text",
+    f"mcp__{MCP_SERVER}__project_pilot_draft_application",
+    f"mcp__{MCP_SERVER}__project_pilot_revise_application",
+    f"mcp__{MCP_SERVER}__project_pilot_enrich_company",
+)
+
+# What a permission question shows about the call. Long values are cut: the
+# question has to fit in a chat bubble and be readable on a phone.
+DETAIL_KEYS = ("command", "file_path", "path", "url", "email", "application_id", "listing_id")
+DETAIL_CHARS = 300
+
+# Answer within this or the call is refused. An unanswered question must not
+# hold a turn open forever.
+APPROVAL_TIMEOUT_S = 600
 
 SYSTEM = """\
 Du bist project-pilots Assistent im Telegram-Thread zu genau einem Projekt.
@@ -59,6 +93,9 @@ Gedächtnis, und du erfindest keine Fakten über Nik oder das Projekt:
 
 Shell, Dateisystem und Websuche stehen dir frei zur Verfügung; nutze sie für
 alles andere. Dein Arbeitsverzeichnis ist beschreibbar und bleibt bestehen.
+Lesen läuft ohne Rückfrage; alles, was schreibt, ausführt oder verschickt, legt
+Nik eine Freigabe in den Thread. Lehnt er ab, frag nach — versuch es nicht auf
+einem anderen Weg noch einmal.
 
 **Senden ist die einzige unumkehrbare Handlung.** Rufe
 `project_pilot_send_application` erst, wenn du Empfänger und Betreff gezeigt und
@@ -76,6 +113,36 @@ class Runner(Protocol):
     """The SDK's ``query`` narrowed to what this module calls."""
 
     def __call__(self, *, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]: ...
+
+
+# Asks the human and returns their answer. The agent does not know it is talking
+# to Telegram; the bot passes one of these in per message.
+Approve = Callable[[str, str], Awaitable[bool]]
+
+
+async def allow_everything(tool: str, detail: str) -> bool:
+    """The default when no human is reachable, e.g. in a smoke test."""
+    return True
+
+
+def describe(tool: str, tool_input: dict[str, Any]) -> str:
+    """One short line naming what the call would actually do.
+
+    A bare tool name is not enough to decide on: "Bash" tells you nothing,
+    ``rm -rf /data`` tells you everything.
+    """
+    for key in DETAIL_KEYS:
+        value = tool_input.get(key)
+        if isinstance(value, str | int) and str(value).strip():
+            return _clip(str(value))
+    if not tool_input:
+        return ""
+    return _clip(json.dumps(tool_input, ensure_ascii=False, sort_keys=True))
+
+
+def _clip(text: str) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= DETAIL_CHARS else flat[:DETAIL_CHARS].rstrip() + " …"
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +192,31 @@ class ThreadAgent:
         # `runner` exists so tests can drive the loop without spawning the CLI.
         self._run: Runner = runner or _default_runner
 
-    def _options(self, *, listing_id: int, session_id: str | None) -> ClaudeAgentOptions:
+    def _gate(
+        self, approve: Approve
+    ) -> Callable[
+        [str, dict[str, Any], ToolPermissionContext],
+        Awaitable[PermissionResultAllow | PermissionResultDeny],
+    ]:
+        """Turn the human's yes/no into the SDK's permission result."""
+
+        async def can_use_tool(
+            tool: str, tool_input: dict[str, Any], context: ToolPermissionContext
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            detail = describe(tool, tool_input)
+            if await approve(tool, detail):
+                return PermissionResultAllow()
+            # The message reaches the model, so it says what to do next rather
+            # than only that something failed.
+            return PermissionResultDeny(
+                message="Nik hat das abgelehnt. Frag nach, was er stattdessen will."
+            )
+
+        return can_use_tool
+
+    def _options(
+        self, *, listing_id: int, session_id: str | None, approve: Approve
+    ) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
             model=self._model,
             cwd=self._workspace,
@@ -145,9 +236,12 @@ class ThreadAgent:
                     "headers": {"Authorization": f"Bearer {self._mcp_token}"},
                 }
             },
-            # Nobody is at a terminal to answer a permission prompt, and the
-            # whitelist upstream already decided who may talk to this agent.
-            permission_mode="bypassPermissions",
+            # Same shape as a Claude session: reading runs, anything that writes,
+            # executes or sends asks first. The question goes to the thread the
+            # message came from, as two buttons.
+            permission_mode="default",
+            allowed_tools=list(ALLOWED_TOOLS),
+            can_use_tool=self._gate(approve),
             # No skills, commands or settings off the image's filesystem: the
             # repo's `.claude/` holds the build workflow, which has no business
             # in a match thread. Judgment comes from the MCP server.
@@ -158,14 +252,26 @@ class ThreadAgent:
             env={"ANTHROPIC_API_KEY": self._api_key},
         )
 
-    async def reply(self, *, listing_id: int, session_id: str | None, message: str) -> AgentReply:
+    async def reply(
+        self,
+        *,
+        listing_id: int,
+        session_id: str | None,
+        message: str,
+        approve: Approve = allow_everything,
+    ) -> AgentReply:
         """One turn in this topic's session; returns the session to continue in.
+
+        ``approve`` is asked before every tool that is not pre-approved, and may
+        take as long as the human does.
 
         Never raises: a failing run has to reach the user as a sentence in the
         thread, not as a silent gap.
         """
         try:
-            return await self._once(listing_id=listing_id, session_id=session_id, message=message)
+            return await self._once(
+                listing_id=listing_id, session_id=session_id, message=message, approve=approve
+            )
         except ClaudeSDKError as err:
             if session_id is None:
                 logger.warning("agent run failed for listing %s: %s", listing_id, err)
@@ -175,18 +281,22 @@ class ThreadAgent:
             # answering nothing; the tools still hold every fact.
             logger.warning("resume failed for listing %s, starting fresh: %s", listing_id, err)
             try:
-                return await self._once(listing_id=listing_id, session_id=None, message=message)
+                return await self._once(
+                    listing_id=listing_id, session_id=None, message=message, approve=approve
+                )
             except ClaudeSDKError as retry_err:
                 logger.warning("agent run failed for listing %s: %s", listing_id, retry_err)
                 return AgentReply(
                     text=f"⚠️ Der Assistent ist gerade gescheitert ({retry_err}).", ok=False
                 )
 
-    async def _once(self, *, listing_id: int, session_id: str | None, message: str) -> AgentReply:
+    async def _once(
+        self, *, listing_id: int, session_id: str | None, message: str, approve: Approve
+    ) -> AgentReply:
         messages: list[Message] = []
         async for item in self._run(
             prompt=message,
-            options=self._options(listing_id=listing_id, session_id=session_id),
+            options=self._options(listing_id=listing_id, session_id=session_id, approve=approve),
         ):
             messages.append(item)
         text = _text_of(messages)
