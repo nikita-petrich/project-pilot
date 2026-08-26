@@ -273,3 +273,17 @@ def test_step_label_falls_back_to_the_tool_name(tmp_path: Path) -> None:
     )
     # Unknown is still better named than blank.
     assert step_label("SomeNewTool") == "SomeNewTool"
+
+
+@pytest.mark.asyncio
+async def test_a_thread_without_a_listing_is_told_to_ingest_first(tmp_path: Path) -> None:
+    # A topic Nik opened himself: whatever he pastes has to become a listing
+    # before any of the tools can act on it.
+    runs = _Runs([_result()])
+
+    await _agent(runs, tmp_path).reply(listing_id=None, session_id=None, message="prüf das mal")
+
+    prompt: object = runs.options[-1].system_prompt
+    assert isinstance(prompt, dict)
+    assert "project_pilot_ingest_listing" in prompt["append"]
+    assert "Listing None" not in prompt["append"]

@@ -20,9 +20,9 @@ from project_pilot.telegram_bot import (
     COMMANDS,
     DENY,
     DONE,
+    GENERAL,
     NO_DESCRIPTION,
-    NO_THREAD,
-    NO_TOPIC,
+    OPEN_SLOT,
     SEEN,
     Incoming,
     TelegramBot,
@@ -58,12 +58,12 @@ class _FakeAgent:
         self.asks = asks or []
         self.steps = steps or []
         self.approvals: list[bool] = []
-        self.calls: list[tuple[int, str | None, str]] = []
+        self.calls: list[tuple[int | None, str | None, str]] = []
 
     async def reply(
         self,
         *,
-        listing_id: int,
+        listing_id: int | None,
         session_id: str | None,
         message: str,
         approve: Approve = allow_everything,
@@ -267,9 +267,11 @@ async def test_a_stranger_is_ignored_without_a_reply(
 
 
 @respx.mock
-async def test_a_message_outside_a_topic_gets_one_sentence(
+async def test_the_general_area_holds_a_conversation_of_its_own(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    # Telegram sends no message_thread_id there, so General gets the id 0 and a
+    # session like any topic.
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=None)]})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
@@ -277,25 +279,53 @@ async def test_a_message_outside_a_topic_gets_one_sentence(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert agent.calls == []
-    assert json.loads(send.calls.last.request.read())["text"] == NO_THREAD
+    assert agent.calls[0][0] is None  # no listing — whatever is brought in
+    assert json.loads(send.calls.last.request.read())["text"] == "Antwort."
+    assert "message_thread_id" not in json.loads(send.calls.last.request.read())
+
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(GENERAL)
+        assert thread is not None
+        assert thread.session_id == "sess-1"
 
 
 @respx.mock
-async def test_an_unknown_topic_is_not_guessed_at(
+async def test_a_topic_you_opened_yourself_is_answered_without_a_listing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # A topic a human opened has no listing; answering it would invent context.
+    # This is how you bring your own project description: open a topic, paste
+    # it, and the agent ingests it rather than refusing to talk.
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=4321)]})
-    respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert agent.calls == []
-    assert json.loads(send.calls.last.request.read())["text"] == NO_THREAD
+    assert agent.calls[0][0] is None
+    assert json.loads(send.calls.last.request.read())["message_thread_id"] == 4321
+
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(4321)
+        assert thread is not None
+        assert thread.listing_id is None
+
+
+@respx.mock
+async def test_a_command_in_a_listingless_topic_names_what_is_still_missing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_update(1, thread_id=4321, text="/check_project")]}
+    )
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert OPEN_SLOT in agent.calls[0][2]
+    assert "{listing}" not in agent.calls[0][2]
 
 
 @respx.mock
@@ -706,11 +736,10 @@ async def test_a_stranger_cannot_decide_a_card(
 
 
 @respx.mock
-async def test_accept_outside_a_topic_says_so_instead_of_doing_nothing(
+async def test_accept_works_on_a_card_in_the_general_area(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # test-match sends its card to the group root, where there is no session to
-    # continue; a button that silently does nothing is worse than a sentence.
+    # test-match puts its card there; General holds a conversation like any topic.
     listing_id = await _seed_thread(session_factory)
     press = _card_press(1, "accept", listing_id)
     press["callback_query"]["message"] = {"message_id": 900}  # type: ignore[index]
@@ -725,8 +754,9 @@ async def test_accept_outside_a_topic_says_so_instead_of_doing_nothing(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert agent.calls == []
-    assert json.loads(sent.calls.last.request.read())["text"] == NO_TOPIC
+    assert agent.calls[0][0] == listing_id
+    assert agent.calls[0][2].startswith("Draft an application for this listing:")
+    assert "message_thread_id" not in json.loads(sent.calls.last.request.read())
 
 
 @respx.mock

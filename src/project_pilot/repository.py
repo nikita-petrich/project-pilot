@@ -242,11 +242,26 @@ class Repository:
         await self._session.flush()
         return thread
 
+    async def ensure_thread(self, thread_id: int) -> TelegramThread:
+        """The mapping for a topic, creating a listing-less one if it is new.
+
+        This is how a topic a human opened becomes a conversation the agent can
+        continue: it gets a row for its session id and no listing, and picks up
+        whatever is brought into it.
+        """
+        existing = await self.get_thread_by_thread_id(thread_id)
+        if existing is not None:
+            return existing
+        thread = TelegramThread(thread_id=thread_id)
+        self._session.add(thread)
+        await self._session.flush()
+        return thread
+
     async def get_thread_by_thread_id(self, thread_id: int) -> TelegramThread | None:
         """The topic mapping for an incoming Telegram message, or None if unknown.
 
-        An unknown thread means the message arrived somewhere the bot did not
-        open — the group's general area, or a topic a human created.
+        An unknown thread is one nothing has been recorded for yet — the
+        group's general area, or a topic a human just created.
         """
         result = await self._session.scalars(
             select(TelegramThread).where(TelegramThread.thread_id == thread_id)

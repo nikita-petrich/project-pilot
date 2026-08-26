@@ -187,3 +187,30 @@ async def test_the_session_id_of_a_topic_is_written_and_replaced(
     assert stored is not None
     assert stored.session_id == "sess-2"
     assert stored.updated_at >= stored.created_at
+
+
+async def test_ensure_thread_opens_a_listingless_conversation(session: AsyncSession) -> None:
+    # A topic a human opened still needs a row: that is where its session lives.
+    repo = Repository(session)
+
+    opened = await repo.ensure_thread(4321)
+    again = await repo.ensure_thread(4321)
+
+    assert opened.id == again.id  # idempotent, one conversation per topic
+    assert opened.listing_id is None
+    await repo.set_session_id(opened, "sess-open")
+    stored = await repo.get_thread_by_thread_id(4321)
+    assert stored is not None
+    assert stored.session_id == "sess-open"
+
+
+async def test_several_listingless_topics_can_coexist(session: AsyncSession) -> None:
+    # Postgres allows any number of nulls under the unique constraint, so the
+    # guard against two topics for one match does not block these.
+    repo = Repository(session)
+
+    first = await repo.ensure_thread(11)
+    second = await repo.ensure_thread(22)
+
+    assert first.id != second.id
+    assert (first.listing_id, second.listing_id) == (None, None)

@@ -130,6 +130,13 @@ environment:
 
 Optional: `AGENT_MODEL` (default `claude-opus-5`).
 
+Where it answers: **everywhere in the group**. A topic project-pilot opened is
+about its match. A topic you open yourself is about whatever you bring into it —
+paste a description, a link or a PDF and the agent stores it with
+`ingest_listing` first, then works with the listing id it gets back. The
+group's General area is a conversation of its own the same way. Each keeps its
+own session, so three threads are three separate conversations.
+
 What the agent is:
 
 - **A full Claude Code agent**, running on the Claude Agent SDK inside the bot

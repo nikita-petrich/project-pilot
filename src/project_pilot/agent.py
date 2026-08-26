@@ -93,6 +93,25 @@ STEP_LABELS = {
 }
 
 
+# What the thread is about, as the first thing the agent is told.
+SCOPE_LISTING = """\
+Dieser Thread gehört zu **Listing {listing_id}**. Wenn keine andere Nummer
+genannt wird, ist das die gemeinte."""
+SCOPE_OPEN = """\
+Dieser Thread gehört noch zu keinem Listing — Nik hat ihn selbst geöffnet.
+Schickt er eine Ausschreibung (Text, Link, PDF, Screenshot), leg sie zuerst mit
+`project_pilot_ingest_listing` an und arbeite mit der zurückgegebenen
+`listing_id` weiter; nenne sie, damit spätere Schritte sie haben. Fragt er
+etwas anderes, antworte einfach."""
+
+
+def scope_of(listing_id: int | None) -> str:
+    """The opening line: this thread's project, or that it has none yet."""
+    if listing_id is None:
+        return SCOPE_OPEN
+    return SCOPE_LISTING.format(listing_id=listing_id)
+
+
 def step_label(tool: str) -> str:
     """What to show while ``tool`` runs, MCP prefix stripped."""
     name = tool.rsplit("__", 1)[-1]
@@ -118,10 +137,9 @@ DETAIL_CHARS = 300
 APPROVAL_TIMEOUT_S = 600
 
 SYSTEM = """\
-Du bist project-pilots Assistent im Telegram-Thread zu genau einem Projekt.
+Du bist project-pilots Assistent in einem Telegram-Thread.
 
-Dieser Thread gehört zu **Listing {listing_id}**. Wenn keine andere Nummer
-genannt wird, ist das die gemeinte.
+{scope}
 
 Nik's Profil, die Urteilsregeln und der Bewerbungs-Stil liegen hinter den
 `mcp__project_pilot__*`-Tools. Alles Fachliche geht durch sie, nicht aus dem
@@ -257,7 +275,7 @@ class ThreadAgent:
         return can_use_tool
 
     def _options(
-        self, *, listing_id: int, session_id: str | None, approve: Approve
+        self, *, listing_id: int | None, session_id: str | None, approve: Approve
     ) -> ClaudeAgentOptions:
         return ClaudeAgentOptions(
             model=self._model,
@@ -267,7 +285,7 @@ class ThreadAgent:
             system_prompt={
                 "type": "preset",
                 "preset": "claude_code",
-                "append": SYSTEM.format(listing_id=listing_id),
+                "append": SYSTEM.format(scope=scope_of(listing_id)),
             },
             mcp_servers={
                 MCP_SERVER: {
@@ -297,7 +315,7 @@ class ThreadAgent:
     async def reply(
         self,
         *,
-        listing_id: int,
+        listing_id: int | None,
         session_id: str | None,
         message: str,
         approve: Approve = allow_everything,
@@ -345,7 +363,7 @@ class ThreadAgent:
     async def _once(
         self,
         *,
-        listing_id: int,
+        listing_id: int | None,
         session_id: str | None,
         message: str,
         approve: Approve,

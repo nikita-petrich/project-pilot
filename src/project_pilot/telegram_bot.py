@@ -41,10 +41,11 @@ POLL_TIMEOUT_S = 50
 CHUNK_CHARS = 3_500
 _HTTP_TIMEOUT = POLL_TIMEOUT_S + 15
 
-NO_THREAD = (
-    "Ich antworte nur in den Projekt-Threads, die project-pilot selbst anlegt. "
-    "Öffne den Thread des Projekts und frag dort."
-)
+# Telegram omits message_thread_id in a group's General area; 0 gives that
+# conversation an identity of its own so it can hold a session like any topic.
+GENERAL = 0
+# What a `/command` fills its slot with when the thread has no listing yet.
+OPEN_SLOT = "die Ausschreibung, die Nik hier schickt"
 ALLOW, DENY = "allow", "deny"
 ACCEPT, DECLINE, DESCRIBE = "accept", "decline", "describe"
 CARD_ACTIONS = (ACCEPT, DECLINE, DESCRIBE)
@@ -57,10 +58,6 @@ COMMANDS: tuple[tuple[str, str], ...] = tuple(
     (name, description) for name, (description, _body) in PROMPTS.items()
 )
 NO_DESCRIPTION = "Zu diesem Projekt ist keine Beschreibung gespeichert."
-NO_TOPIC = (
-    "Annehmen braucht den Thread des Projekts. Diese Karte steht außerhalb "
-    "eines Topics — das passiert bei test-match, nicht bei einem echten Match."
-)
 DECLINED = "🚫 Abgelehnt."
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
@@ -124,6 +121,11 @@ def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
             )
         )
     return presses
+
+
+def _key(thread_id: int | None) -> int:
+    """The identity a conversation is stored under; General has none of its own."""
+    return GENERAL if thread_id is None else thread_id
 
 
 def expand_command(text: str) -> str | None:
@@ -406,13 +408,11 @@ class TelegramBot:
             await self._close_topic(client, press.thread_id)
 
     async def _accept(self, client: httpx.AsyncClient, listing_id: int, press: Press) -> None:
-        """Start the work: run the drafting workflow in this match's topic."""
-        if press.thread_id is None:
-            # A card outside a topic has no session to continue and no thread to
-            # answer in. Saying so beats a button that silently does nothing.
-            logger.warning("accept pressed outside a topic for listing %s", listing_id)
-            await self._send(client, NO_TOPIC, thread_id=None)
-            return
+        """Start the work: run the drafting workflow where the card is.
+
+        Usually a match's own topic; a card from ``test-match`` sits in the
+        group's General area, which holds a conversation just the same.
+        """
         if press.message_id is not None:
             await self._clear_keyboard(client, press.message_id)
         await self._run(
@@ -423,21 +423,23 @@ class TelegramBot:
         )
 
     async def _handle(self, client: httpx.AsyncClient, message: Incoming) -> bool:
-        if message.thread_id is None:
-            await self._send(client, NO_THREAD, thread_id=None)
-            return False
+        """Answer wherever the message came from, opening the topic's session.
 
+        A topic project-pilot created is about its match; one you opened
+        yourself is about whatever you bring into it, and gets its own session
+        the first time you write there.
+        """
         async with session_scope(self._session_factory) as session:
-            thread = await Repository(session).get_thread_by_thread_id(message.thread_id)
-            listing_id = thread.listing_id if thread else None
-        if listing_id is None:
-            await self._send(client, NO_THREAD, thread_id=message.thread_id)
-            return False
+            repo = Repository(session)
+            thread = await repo.ensure_thread(_key(message.thread_id))
+            listing_id = thread.listing_id
+            await session.commit()
         # A `/command` is not handled here: it stands for one of the MCP
         # workflow prompts, and what reaches the agent is that prompt's own
         # body, so the bot runs the same procedure every other surface runs.
         text = expand_command(message.text) or message.text
-        text = text.replace("{listing}", f"Listing {listing_id}")
+        slot = f"Listing {listing_id}" if listing_id is not None else OPEN_SLOT
+        text = text.replace("{listing}", slot)
         return await self._run(
             client,
             thread_id=message.thread_id,
@@ -450,8 +452,8 @@ class TelegramBot:
         self,
         client: httpx.AsyncClient,
         *,
-        thread_id: int,
-        listing_id: int,
+        thread_id: int | None,
+        listing_id: int | None,
         message: str,
         react_to: int | None = None,
     ) -> bool:
@@ -461,7 +463,7 @@ class TelegramBot:
         is marked seen, the typing indicator is renewed, and one status line
         names the step the agent is on.
         """
-        lock = self._locks.setdefault(thread_id, asyncio.Lock())
+        lock = self._locks.setdefault(_key(thread_id), asyncio.Lock())
         async with lock:
             if react_to is not None:
                 await self._react(client, react_to, SEEN)
@@ -491,16 +493,16 @@ class TelegramBot:
         self,
         client: httpx.AsyncClient,
         *,
-        thread_id: int,
-        listing_id: int,
+        thread_id: int | None,
+        listing_id: int | None,
         message: str,
         progress: Progress,
     ) -> AgentReply:
         """Ask the agent, and record the session the topic continues in."""
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            thread = await repo.get_thread_by_thread_id(thread_id)
-            session_id = thread.session_id if thread else None
+            thread = await repo.ensure_thread(_key(thread_id))
+            session_id = thread.session_id
 
             reply = await self._agent.reply(
                 listing_id=listing_id,
@@ -509,14 +511,14 @@ class TelegramBot:
                 approve=self._approver(client, thread_id),
                 progress=progress,
             )
-            if thread is not None and reply.session_id and reply.session_id != session_id:
+            if reply.session_id and reply.session_id != session_id:
                 # Stored even when the turn failed: the session exists either
                 # way, and losing its id would restart the topic from nothing.
                 await repo.set_session_id(thread, reply.session_id)
                 await session.commit()
             return reply
 
-    def _approver(self, client: httpx.AsyncClient, thread_id: int) -> Approve:
+    def _approver(self, client: httpx.AsyncClient, thread_id: int | None) -> Approve:
         """A permission question bound to one topic, as the agent expects it."""
 
         async def approve(tool: str, detail: str) -> bool:
@@ -524,7 +526,9 @@ class TelegramBot:
 
         return approve
 
-    async def _ask(self, client: httpx.AsyncClient, thread_id: int, tool: str, detail: str) -> bool:
+    async def _ask(
+        self, client: httpx.AsyncClient, thread_id: int | None, tool: str, detail: str
+    ) -> bool:
         """Put the question in the thread and wait for the button.
 
         Refuses on timeout and on a failed send: an unanswered question must not
@@ -580,13 +584,15 @@ class TelegramBot:
         except httpx.HTTPError as err:  # decoration, never the point
             logger.debug("reaction on %s failed: %s", message_id, err)
 
-    async def _keep_typing(self, client: httpx.AsyncClient, thread_id: int) -> None:
+    async def _keep_typing(self, client: httpx.AsyncClient, thread_id: int | None) -> None:
         """Hold the typing indicator up for as long as the turn runs."""
         while True:
             await self._typing(client, thread_id)
             await asyncio.sleep(TYPING_EVERY_S)
 
-    def _progress(self, client: httpx.AsyncClient, thread_id: int) -> tuple[Progress, list[int]]:
+    def _progress(
+        self, client: httpx.AsyncClient, thread_id: int | None
+    ) -> tuple[Progress, list[int]]:
         """A single line in the thread saying what the agent is doing right now.
 
         Sent on the first step and edited afterwards, so a long turn reports
@@ -658,16 +664,12 @@ class TelegramBot:
         except httpx.HTTPError as err:  # only the little toast in the client
             logger.debug("answering callback failed: %s", err)
 
-    async def _typing(self, client: httpx.AsyncClient, thread_id: int) -> None:
+    async def _typing(self, client: httpx.AsyncClient, thread_id: int | None) -> None:
+        payload: dict[str, object] = {"chat_id": self._chat_id, "action": "typing"}
+        if thread_id is not None:
+            payload["message_thread_id"] = thread_id
         try:
-            await client.post(
-                f"{self._api}/sendChatAction",
-                json={
-                    "chat_id": self._chat_id,
-                    "message_thread_id": thread_id,
-                    "action": "typing",
-                },
-            )
+            await client.post(f"{self._api}/sendChatAction", json=payload)
         except httpx.HTTPError as err:  # a missing typing indicator is cosmetic
             logger.debug("typing action failed: %s", err)
 

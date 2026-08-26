@@ -252,10 +252,14 @@ class TelegramThread(Base):
     __tablename__ = "telegram_threads"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    listing_id: Mapped[int] = mapped_column(
-        ForeignKey("listings.id", ondelete="CASCADE"), unique=True
+    # Null for a topic a human opened themselves: it is a conversation with the
+    # agent that has no listing yet, and may never get one. Postgres allows any
+    # number of nulls under a unique constraint, so the guard against a second
+    # topic for the same match still holds where it matters.
+    listing_id: Mapped[int | None] = mapped_column(
+        ForeignKey("listings.id", ondelete="CASCADE"), unique=True, default=None
     )
-    thread_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    thread_id: Mapped[int] = mapped_column(BigInteger, index=True, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     # The agent session this topic continues in. The transcript itself belongs
