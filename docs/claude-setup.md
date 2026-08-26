@@ -227,11 +227,23 @@ chats, cloud sessions, n8n) sees the change at once.
 ## Verify
 
 ```bash
+# On the VPS — the server holds no source tree and no uv, only containers:
+cd /opt/stacks/project-pilot
+docker compose exec app project-pilot test-match
+
+# Locally, in a checkout:
 uv run project-pilot test-match          # rules + LLM + a real push, stores nothing
 ```
 
-Three steps must pass; the last one is the notification. A match sends its
-card, a no-match sends a warning — either way the channel is proven.
+Three steps must pass; the last one is the notification. A match opens its
+topic, a no-match sends a warning — either way the channel is proven.
+
+Then write into that topic to prove the agent: the check and the draft run
+straight through, and asking it to send brings up the 🔐 approval buttons.
+
+```bash
+docker compose logs -f bot               # what the agent did, and who pressed what
+```
 
 ## Troubleshooting
 
@@ -244,7 +256,9 @@ card, a no-match sends a warning — either way the channel is proven.
 | Tap opens the listing, not Claude | `CLAUDE_PROJECT_URL` unset | Set it to the project URL and redeploy |
 | Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
 | Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
-| Chat has no `/check-project` | Account skills not uploaded or disabled | Upload the zips, then toggle each skill on |
+| The agent never answers in a topic | The `bot` container is down, or your id is not in `TELEGRAM_ALLOWED_USER_IDS` | `docker compose logs bot`; a refused message is logged with the id that sent it |
+| A 🔐 question never resolves | Pressed from outside the whitelist, or left for over ten minutes | Both count as a refusal by design; the agent asks again on the next attempt |
+| `uv: command not found` on the VPS | The server has no source tree and no uv, by design | `docker compose exec app project-pilot <command>` |
 | Session has no `project_pilot_*` tools | Connector missing or token rotated | Re-add the connector URL with the current `MCP_TOKEN` |
 | `test-match` fails at `push` | Bad token or chat id | The log names the HTTP status; a 4xx is config, a 5xx is retried |
 | Deploy refuses to render `.env` | `TELEGRAM_*` missing or malformed | The gate prints what it expected |
