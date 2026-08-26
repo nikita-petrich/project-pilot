@@ -106,7 +106,7 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
-    telegram_allowed_user_ids: list[int] = Field(default_factory=list)
+    telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
     claude_project_url: str = ""
 
     anthropic_api_key: str = Field(default="", repr=False)
@@ -130,11 +130,21 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", mode="before")
+    @field_validator("search_urls", "telegram_allowed_user_ids", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
+        """Read a list from ENV the way a human writes one: ``a,b,c``.
+
+        pydantic-settings would otherwise expect JSON for a list field, so a
+        single id (``TELEGRAM_ALLOWED_USER_IDS=4242``) parses as an int and the
+        process dies at boot with a type error.
+        """
+        if isinstance(value, int):
+            return [value]
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            # Tolerate the JSON form too, so a pasted ["a","b"] is not a boot error.
+            items = (item.strip().strip("\"'") for item in value.strip().strip("[]").split(","))
+            return [item for item in items if item]
         return value
 
     @field_validator("scan_interval_min")
