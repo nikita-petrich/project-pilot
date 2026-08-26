@@ -154,6 +154,11 @@ What the agent is:
   model's memory. The `.claude/` directory of the image is *not* loaded
   (`setting_sources=[]`): that holds the build workflow, which has no business
   in a match thread.
+- **The `/` menu is the MCP prompt list.** `check_project`, `write_application`,
+  `send_application`, `enrich_company` — the bot publishes them at startup from
+  `mcp_prompts.py`, and a press hands the agent that prompt's own body with the
+  topic's listing filled in. No second definition to maintain, and the same
+  procedure runs whether it was started here, in Claude Code, or from n8n.
 - **Sending is gated twice**: the button, and an explicit yes in the
   conversation before the agent is allowed to reach for the tool at all — on top
   of the pipeline's own guard against double sends. The prompt forbids any other
@@ -243,8 +248,18 @@ uv run project-pilot test-match          # rules + LLM + a real push, stores not
 Three steps must pass; the last one is the notification. A match opens its
 topic, a no-match sends a warning — either way the channel is proven.
 
-Then write into that topic to prove the agent: the check and the draft run
-straight through, and asking it to send brings up the 🔐 approval buttons.
+Then work the topic: the card carries every listing fact and the verdict under
+three buttons.
+
+| Button | What it does |
+|---|---|
+| ✅ Annehmen | starts the drafting workflow in the topic |
+| 🚫 Ablehnen | takes the buttons off and closes the topic (closed, not deleted) |
+| 📄 Projektbeschreibung | posts the listing's own text, which the card leaves out |
+
+Writing works the same way, in your own words or through the `/` menu. The
+check and the draft run straight through; asking it to send brings up the 🔐
+approval buttons.
 
 ```bash
 docker compose logs -f bot               # what the agent did, and who pressed what

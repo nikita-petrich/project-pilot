@@ -45,13 +45,14 @@ def _notifier() -> TelegramNotifier:
     return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID)
 
 
-def test_match_text_leads_with_the_headline_then_the_card() -> None:
-    lines = match_text(_message()).splitlines()
+def test_match_text_leads_with_the_headline_then_every_fact() -> None:
+    text = match_text(_message())
     # The headline is what a notification preview shows.
-    assert lines[0] == "⭐ 87 · Senior Python Developer · ACME GmbH"
-    assert lines[2] == "🎯 Senior Python Developer  ·  87/100"
-    assert "✅ Fits: Stack passt, Remote" in match_text(_message())
-    assert "⚠️ Risks: kein Budget genannt" in match_text(_message())
+    assert text.splitlines()[0] == "⭐ 87 · Senior Python Developer · ACME GmbH"
+    assert "🏢 Company: ACME GmbH" in text
+    assert "🎯 Score: 87/100" in text
+    assert "✅ Fits: Stack passt, Remote" in text
+    assert "🚩 Risks: kein Budget genannt" in text
 
 
 def test_match_text_names_no_command_to_type_elsewhere() -> None:
@@ -68,25 +69,35 @@ def test_match_text_is_capped_below_the_telegram_limit() -> None:
 
 
 @respx.mock
-async def test_notify_sends_the_card_and_a_button_to_the_listing() -> None:
+async def test_notify_sends_the_card_under_its_three_decisions() -> None:
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
     assert await _notifier().notify(_message()) is True
     payload = json.loads(route.calls.last.request.read())
     assert payload["chat_id"] == CHAT_ID
     assert payload["text"] == match_text(_message())
     assert payload["disable_web_page_preview"] is True
-    button = payload["reply_markup"]["inline_keyboard"][0][0]
-    assert button["url"] == "https://example.com/p/1"
-    assert button["text"] == "🔗 Projekt öffnen"
+    rows = payload["reply_markup"]["inline_keyboard"]
+    assert [button["text"] for row in rows for button in row] == [
+        "✅ Annehmen",
+        "🚫 Ablehnen",
+        "📄 Projektbeschreibung",
+    ]
+    # Every callback carries the listing, so two open topics cannot be confused.
+    assert [button["callback_data"] for row in rows for button in row] == [
+        "accept:42",
+        "decline:42",
+        "describe:42",
+    ]
     # No parse_mode: an underscore in a listing title would reject the message.
     assert "parse_mode" not in payload
 
 
 @respx.mock
-async def test_a_listing_without_a_url_gets_no_button() -> None:
-    # An ingested listing can have no public page; a dead button is worse than none.
+async def test_an_unstored_listing_gets_no_buttons() -> None:
+    # Without an id there is nothing for a press to act on; a dead button is
+    # worse than none.
     route = respx.post(SEND_URL).respond(200, json={"ok": True})
-    await _notifier().notify(replace(_message(), url=""))
+    await _notifier().notify(replace(_message(), listing_id=None))
     payload = json.loads(route.calls.last.request.read())
     assert "reply_markup" not in payload
 

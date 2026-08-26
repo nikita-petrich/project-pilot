@@ -28,7 +28,7 @@ from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import ApplicationStateError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
-from project_pilot.mcp_prompts import PROMPTS
+from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.models import Listing, ListingOrigin
 from project_pilot.repository import Repository
 
@@ -357,20 +357,15 @@ def _register_prompts(mcp: FastMCP) -> None:
     than one decorated function each: the bodies are data, and a surface that
     renders its own command menu reads the same list over ``prompts/list``.
     """
-    for name, (description, body) in PROMPTS.items():
-        mcp.prompt(name=name, description=description)(_prompt_fn(body))
+    for name, (description, _body) in PROMPTS.items():
+        mcp.prompt(name=name, description=description)(_prompt_fn(name))
 
 
-# Every prompt body names exactly one slot; filling them all with the single
-# argument keeps one signature across prompts whose slot happens to differ.
-_PROMPT_SLOTS = ("listing", "application", "target")
-
-
-def _prompt_fn(body: str) -> Callable[[str], Awaitable[str]]:
-    """One prompt callable, closing over its own body rather than the loop var."""
+def _prompt_fn(name: str) -> Callable[[str], Awaitable[str]]:
+    """One prompt callable, closing over its own name rather than the loop var."""
 
     async def prompt(argument: str = "") -> str:
-        return body.format(**dict.fromkeys(_PROMPT_SLOTS, argument or "(not given)"))
+        return render(name, argument)
 
     return prompt
 

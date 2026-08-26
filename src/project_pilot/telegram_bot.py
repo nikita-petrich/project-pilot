@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.agent import AgentReply, Approve, ThreadAgent
 from project_pilot.db import session_scope
+from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -45,36 +46,37 @@ NO_THREAD = (
     "Öffne den Thread des Projekts und frag dort."
 )
 ALLOW, DENY = "allow", "deny"
+ACCEPT, DECLINE, DESCRIBE = "accept", "decline", "describe"
+CARD_ACTIONS = (ACCEPT, DECLINE, DESCRIBE)
 
-# The `/` menu Telegram shows in the chat. These are not handled here — they
-# reach the agent as the text they are, and the system prompt says what each
-# one means. Registering them buys two things: the menu itself, and a way in
-# that works even with the bot's privacy mode still on, since a command is
-# always delivered to a bot.
-COMMANDS: tuple[tuple[str, str], ...] = (
-    ("pruefen", "Projekt gegen das Profil prüfen"),
-    ("bewerbung", "Bewerbung für dieses Projekt entwerfen"),
-    ("kontakt", "Kontaktdaten der Firma suchen"),
-    ("senden", "Bewerbung abschicken (fragt vorher)"),
-    ("stand", "Wo steht dieses Projekt gerade?"),
+# The `/` menu Telegram shows in the chat: the MCP workflow prompts, by their
+# own names and descriptions. Nothing is defined here — a command is expanded
+# into the very prompt body the MCP server serves, so the bot and every other
+# surface run the same procedure.
+COMMANDS: tuple[tuple[str, str], ...] = tuple(
+    (name, description) for name, (description, _body) in PROMPTS.items()
 )
+NO_DESCRIPTION = "Zu diesem Projekt ist keine Beschreibung gespeichert."
+DECLINED = "🚫 Abgelehnt."
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
 
 
 @dataclass(frozen=True, slots=True)
 class Press:
-    """One button press on a permission question."""
+    """One button press: a permission answer, or a decision on a match card."""
 
     update_id: int
     callback_id: str
     user_id: int
-    decision: str
-    request_id: str
+    action: str
+    argument: str
+    thread_id: int | None = None
+    message_id: int | None = None
 
 
 def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
-    """Pick the permission answers out of a getUpdates response."""
+    """Pick the button presses out of a getUpdates response."""
     result = payload.get("result")
     if not isinstance(result, list):
         return []
@@ -92,19 +94,41 @@ def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
             continue
         if not isinstance(sender, dict) or not isinstance(sender.get("id"), int):
             continue
-        decision, _, request_id = data.partition(":")
-        if decision not in (ALLOW, DENY) or not request_id:
+        action, _, argument = data.partition(":")
+        if action not in (ALLOW, DENY, *CARD_ACTIONS) or not argument:
             continue
+        origin = callback.get("message")
+        origin = origin if isinstance(origin, dict) else {}
+        thread_id = origin.get("message_thread_id")
+        message_id = origin.get("message_id")
         presses.append(
             Press(
                 update_id=update_id,
                 callback_id=callback_id,
                 user_id=int(sender["id"]),
-                decision=decision,
-                request_id=request_id,
+                action=action,
+                argument=argument,
+                thread_id=thread_id if isinstance(thread_id, int) else None,
+                message_id=message_id if isinstance(message_id, int) else None,
             )
         )
     return presses
+
+
+def expand_command(text: str) -> str | None:
+    """Turn `/write_application` into the workflow it stands for, else None.
+
+    Telegram sends `/name` and, in a group, `/name@thebot`; anything after that
+    is the user's own addition and is kept.
+    """
+    if not text.startswith("/"):
+        return None
+    head, _, rest = text[1:].partition(" ")
+    name = head.split("@", 1)[0]
+    if name not in PROMPTS:
+        return None
+    body = render(name, "{listing}")
+    return f"{body}\n\n{rest.strip()}" if rest.strip() else body
 
 
 def question_text(tool: str, detail: str) -> str:
@@ -240,7 +264,7 @@ class TelegramBot:
             # Advance past every update, including the ones that are dropped:
             # an update left unacknowledged is redelivered forever.
             self._offset = max(self._offset, press.update_id + 1)
-            if await self._decide(client, press):
+            if await self._press(client, press):
                 taken += 1
         for message in parse_updates(payload):
             self._offset = max(self._offset, message.update_id + 1)
@@ -296,15 +320,21 @@ class TelegramBot:
         except Exception:  # a crashed answer must not take the poll loop with it
             logger.exception("answering failed in thread %s", message.thread_id)
 
-    async def _decide(self, client: httpx.AsyncClient, press: Press) -> bool:
-        """Hand a button press to the question that is waiting for it."""
+    async def _press(self, client: httpx.AsyncClient, press: Press) -> bool:
+        """Route one button press: a permission answer, or a card decision."""
         if self._allowed and press.user_id not in self._allowed:
-            # Checked before the question is taken off the pile: a stranger's
-            # press must not consume the answer the owner is still going to give.
-            logger.warning("ignoring permission press from user %s", press.user_id)
+            # Checked before anything is taken off a pile: a stranger's press
+            # must not consume the answer the owner is still going to give.
+            logger.warning("ignoring press from user %s", press.user_id)
             return False
-        waiting = self._pending.pop(press.request_id, None)
-        allowed = press.decision == ALLOW
+        if press.action in CARD_ACTIONS:
+            return await self._card(client, press)
+        return await self._decide(client, press)
+
+    async def _decide(self, client: httpx.AsyncClient, press: Press) -> bool:
+        """Hand a permission answer to the question that is waiting for it."""
+        waiting = self._pending.pop(press.argument, None)
+        allowed = press.action == ALLOW
         await self._answer_callback(
             client, press.callback_id, "Erlaubt" if allowed else "Abgelehnt"
         )
@@ -313,41 +343,118 @@ class TelegramBot:
         waiting.set_result(allowed)
         return True
 
+    async def _card(self, client: httpx.AsyncClient, press: Press) -> bool:
+        """Act on one of the three decisions a match card offers."""
+        try:
+            listing_id = int(press.argument)
+        except ValueError:
+            logger.warning("card press with a bad listing id: %r", press.argument)
+            return False
+        if press.action == DESCRIBE:
+            await self._answer_callback(client, press.callback_id, "Beschreibung")
+            await self._describe(client, listing_id, thread_id=press.thread_id)
+            return True
+        if press.action == DECLINE:
+            await self._answer_callback(client, press.callback_id, "Abgelehnt")
+            await self._decline(client, press)
+            return True
+        await self._answer_callback(client, press.callback_id, "Angenommen")
+        # Accepting is real work, so it goes the same way a message does: its
+        # own task, because the run may stop to ask for a permission whose
+        # press can only arrive through a later poll.
+        task = asyncio.create_task(self._accept(client, listing_id, press))
+        self._answering.add(task)
+        task.add_done_callback(self._answering.discard)
+        return True
+
+    async def _describe(
+        self, client: httpx.AsyncClient, listing_id: int, *, thread_id: int | None
+    ) -> None:
+        """Post the listing's own text, which the card deliberately leaves out."""
+        async with session_scope(self._session_factory) as session:
+            listing = await Repository(session).get_listing(listing_id)
+        text = (listing.description or "").strip() if listing else ""
+        for part in chunk(text or NO_DESCRIPTION):
+            await self._send(client, part, thread_id=thread_id)
+
+    async def _decline(self, client: httpx.AsyncClient, press: Press) -> None:
+        """Close the topic and take the buttons off the card.
+
+        Closed, not deleted: the record of what was offered and turned down is
+        worth more than a tidy list, and Telegram can reopen a closed topic.
+        """
+        if press.message_id is not None:
+            await self._clear_keyboard(client, press.message_id)
+            await self._send(client, DECLINED, thread_id=press.thread_id)
+        if press.thread_id is not None:
+            await self._close_topic(client, press.thread_id)
+
+    async def _accept(self, client: httpx.AsyncClient, listing_id: int, press: Press) -> None:
+        """Start the work: run the drafting workflow in this match's topic."""
+        if press.thread_id is None:
+            logger.warning("accept pressed outside a topic for listing %s", listing_id)
+            return
+        if press.message_id is not None:
+            await self._clear_keyboard(client, press.message_id)
+        await self._run(
+            client,
+            thread_id=press.thread_id,
+            listing_id=listing_id,
+            message=render("write_application", f"Listing {listing_id}"),
+        )
+
     async def _handle(self, client: httpx.AsyncClient, message: Incoming) -> bool:
         if message.thread_id is None:
             await self._send(client, NO_THREAD, thread_id=None)
             return False
 
-        lock = self._locks.setdefault(message.thread_id, asyncio.Lock())
-        async with lock:
-            reply = await self._answer(client, message)
-        if reply is None:
+        async with session_scope(self._session_factory) as session:
+            thread = await Repository(session).get_thread_by_thread_id(message.thread_id)
+            listing_id = thread.listing_id if thread else None
+        if listing_id is None:
+            await self._send(client, NO_THREAD, thread_id=message.thread_id)
             return False
+        # A `/command` is not handled here: it stands for one of the MCP
+        # workflow prompts, and what reaches the agent is that prompt's own
+        # body, so the bot runs the same procedure every other surface runs.
+        text = expand_command(message.text) or message.text
+        text = text.replace("{listing}", f"Listing {listing_id}")
+        return await self._run(
+            client, thread_id=message.thread_id, listing_id=listing_id, message=text
+        )
+
+    async def _run(
+        self, client: httpx.AsyncClient, *, thread_id: int, listing_id: int, message: str
+    ) -> bool:
+        """One agent turn in one topic, serialized per topic, answered there."""
+        lock = self._locks.setdefault(thread_id, asyncio.Lock())
+        async with lock:
+            reply = await self._answer(
+                client, thread_id=thread_id, listing_id=listing_id, message=message
+            )
         for part in chunk(reply.text):
-            await self._send(client, part, thread_id=message.thread_id)
+            await self._send(client, part, thread_id=thread_id)
         return True
 
-    async def _answer(self, client: httpx.AsyncClient, message: Incoming) -> AgentReply | None:
-        """Route the message to its listing, ask the agent, record the turn."""
-        assert message.thread_id is not None
+    async def _answer(
+        self, client: httpx.AsyncClient, *, thread_id: int, listing_id: int, message: str
+    ) -> AgentReply:
+        """Ask the agent, and record the session the topic continues in."""
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
-            thread = await repo.get_thread_by_thread_id(message.thread_id)
-            if thread is None:
-                await self._send(client, NO_THREAD, thread_id=message.thread_id)
-                return None
-            listing_id, session_id = thread.listing_id, thread.session_id
+            thread = await repo.get_thread_by_thread_id(thread_id)
+            session_id = thread.session_id if thread else None
 
             # Sent before the model call, which can take a while: silence would
             # read as "the bot ignored me".
-            await self._typing(client, message.thread_id)
+            await self._typing(client, thread_id)
             reply = await self._agent.reply(
                 listing_id=listing_id,
                 session_id=session_id,
-                message=message.text,
-                approve=self._approver(client, message.thread_id),
+                message=message,
+                approve=self._approver(client, thread_id),
             )
-            if reply.session_id and reply.session_id != session_id:
+            if thread is not None and reply.session_id and reply.session_id != session_id:
                 # Stored even when the turn failed: the session exists either
                 # way, and losing its id would restart the topic from nothing.
                 await repo.set_session_id(thread, reply.session_id)
@@ -402,6 +509,25 @@ class TelegramBot:
             f"{question_text(tool, detail)}\n\n{'✅ erlaubt' if allowed else '🚫 abgelehnt'}",
         )
         return allowed
+
+    async def _clear_keyboard(self, client: httpx.AsyncClient, message_id: int) -> None:
+        """Take the buttons off a card that has been decided."""
+        try:
+            await client.post(
+                f"{self._api}/editMessageReplyMarkup",
+                json={"chat_id": self._chat_id, "message_id": message_id},
+            )
+        except httpx.HTTPError as err:  # cosmetic; the decision already stands
+            logger.debug("clearing the keyboard on %s failed: %s", message_id, err)
+
+    async def _close_topic(self, client: httpx.AsyncClient, thread_id: int) -> None:
+        try:
+            await client.post(
+                f"{self._api}/closeForumTopic",
+                json={"chat_id": self._chat_id, "message_thread_id": thread_id},
+            )
+        except httpx.HTTPError as err:  # a topic left open is not a failure
+            logger.warning("closing topic %s failed: %s", thread_id, err)
 
     async def _edit(self, client: httpx.AsyncClient, message_id: int, text: str) -> None:
         try:

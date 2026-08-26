@@ -33,7 +33,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from project_pilot.notification.messages import MatchMessage, headline, render_match_card
+from project_pilot.notification.messages import MatchMessage, headline, render_match_details
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +57,33 @@ def _is_retryable(err: BaseException) -> bool:
 
 
 def match_text(message: MatchMessage) -> str:
-    """The message body: the headline, then the card.
+    """The message body: the headline, then every fact and the verdict.
 
-    Nothing to type is named here any more: the work happens in this topic, by
-    writing to the agent, so a pointer at a command in another app would only
-    send you somewhere you no longer need to go.
+    The description is deliberately absent — it rides behind its own button, so
+    a listing of several thousand characters cannot push the facts off the
+    first screen.
     """
-    return "\n\n".join([headline(message), render_match_card(message)])[:MAX_TEXT_CHARS]
+    return "\n\n".join([headline(message), render_match_details(message)])[:MAX_TEXT_CHARS]
+
+
+def match_keyboard(message: MatchMessage) -> dict[str, object] | None:
+    """The three decisions a match offers, or nothing for an unstored listing.
+
+    The callbacks carry the listing id, so a press is unambiguous even when
+    several topics are open at once.
+    """
+    if message.listing_id is None:
+        return None
+    listing_id = message.listing_id
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Annehmen", "callback_data": f"accept:{listing_id}"},
+                {"text": "🚫 Ablehnen", "callback_data": f"decline:{listing_id}"},
+            ],
+            [{"text": "📄 Projektbeschreibung", "callback_data": f"describe:{listing_id}"}],
+        ]
+    }
 
 
 class TelegramNotifier:
@@ -102,12 +122,9 @@ class TelegramNotifier:
         unnotified and is retried on the next run.
         """
         payload: dict[str, object] = {"text": match_text(message)}
-        if message.url:
-            # The one link worth a button here: the listing on its own board.
-            # Everything else about this match happens in the topic itself.
-            payload["reply_markup"] = {
-                "inline_keyboard": [[{"text": "🔗 Projekt öffnen", "url": message.url}]]
-            }
+        keyboard = match_keyboard(message)
+        if keyboard is not None:
+            payload["reply_markup"] = keyboard
         if thread_id is not None:
             payload["message_thread_id"] = thread_id
         try:

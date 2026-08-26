@@ -106,3 +106,17 @@ PROMPTS: dict[str, tuple[str, str]] = {
         ENRICH_COMPANY,
     ),
 }
+
+# Every prompt body names exactly one slot; filling them all with the single
+# argument keeps one signature across prompts whose slot happens to differ.
+PROMPT_SLOTS = ("listing", "application", "target")
+
+
+def render(name: str, argument: str = "") -> str:
+    """One prompt, with its slot filled — the text a surface hands to the model.
+
+    Shared so the MCP server and the Telegram command menu run the same
+    procedure rather than two copies that drift.
+    """
+    _, body = PROMPTS[name]
+    return body.format(**dict.fromkeys(PROMPT_SLOTS, argument or "(not given)"))

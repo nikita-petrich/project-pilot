@@ -191,24 +191,27 @@ def to_match_message(
     )
 
 
-# The compact match card, ported verbatim from the Slack notifier it replaced:
-# who is hiring, where, the terms, and the top reasons — four scannable lines.
-# It lives here rather than in a transport, because the routine fire, a future
-# channel and any test all want the same layout.
-_CARD_REASONS = 2
-_CARD_RISKS = 2
-
-
-def _inline(parts: Sequence[str | None]) -> str | None:
-    """Join the given values into one middot-separated line, dropping the empty ones."""
-    picked = [part for part in parts if part]
-    return "  ·  ".join(picked) if picked else None
+# The match message body, ported from the Slack notifier it replaced: every
+# listing fact on its own labelled line, then the verdict. The description is
+# not here — it goes behind its own button, because a listing text can be
+# thousands of characters and would push the facts out of the first screen.
+# This lives here rather than in a transport, because any channel and any test
+# wants the same layout.
+_FACT_SKILLS = 12
+_VERDICT_REASONS = 3
+_VERDICT_MATCHING_SKILLS = 8
+_VERDICT_GAPS = 4
+_VERDICT_RISKS = 3
 
 
 def _client_type(message: MatchMessage) -> str | None:
     if message.is_endcustomer is None:
         return None
     return "Direct client" if message.is_endcustomer else "Agency"
+
+
+def _labeled(label: str, value: str | None) -> str | None:
+    return f"{label}: {value}" if value else None
 
 
 def _labeled_list(label: str, values: Sequence[str], *, limit: int) -> str | None:
@@ -219,7 +222,7 @@ def _labeled_list(label: str, values: Sequence[str], *, limit: int) -> str | Non
 def headline(message: MatchMessage) -> str:
     """One line naming the match: score, role, company.
 
-    Doubles as the session's name in the feed, so it stays short and puts the
+    Doubles as the topic's name in the group, so it stays short and puts the
     score first — that is what decides whether a listing is worth opening.
     """
     parts = [f"⭐ {message.score}", message.title]
@@ -228,29 +231,40 @@ def headline(message: MatchMessage) -> str:
     return " · ".join(parts)
 
 
-def render_match_card(message: MatchMessage) -> str:
-    """The at-a-glance overview of one match: headline, facts, fit, link.
+def render_match_details(message: MatchMessage) -> str:
+    """Every listing fact and the full verdict, one labelled line each.
 
-    Company and location are always rendered, even when the listing names
-    neither — an agency post that hides its client is itself a signal, so the
-    card says so rather than silently dropping the line.
+    Company, location and industry are rendered even when the listing names
+    none of them — an agency post that hides its client is itself a signal, so
+    the message says so rather than silently dropping the line.
     """
-    company = f"🏢 {message.company}" if message.company else "🏢 Company not stated"
-    location = f"📍 {message.location}" if message.location else "📍 Location not stated"
-    lines = [
-        f"🎯 {message.title}  ·  {message.score}/100",
-        _inline([company, _client_type(message)]),
-        _inline([location, f"🏠 {message.remote_label}" if message.remote_label else None]),
-        _inline(
-            [
-                f"📅 {message.start}" if message.start else None,
-                f"⏳ {message.duration_label}" if message.duration_label else None,
-                f"📊 {message.workload_label}" if message.workload_label else None,
-                f"🕒 {message.posted_ago}" if message.posted_ago else None,
-            ]
-        ),
-        _labeled_list("✅ Fits", message.reasons, limit=_CARD_REASONS),
-        _labeled_list("⚠️ Risks", message.risk_flags, limit=_CARD_RISKS),
-        f"🔗 {message.url}" if message.url else None,
+    facts = [
+        _labeled("🏢 Company", message.company or "not stated"),
+        _labeled("👤 Contact", message.contact_name),
+        _labeled("🤝 Client type", _client_type(message)),
+        _labeled("📍 Location", message.location or "not stated"),
+        _labeled("🏠 Remote", message.remote_label),
+        _labeled("💼 Contract", message.contract_type),
+        _labeled("📊 Workload", message.workload_label),
+        _labeled("⏳ Duration", message.duration_label),
+        _labeled("📅 Start", message.start),
+        _labeled("🕒 Posted", message.posted_ago),
+        _labeled("✍️ Apply by", message.expires_label),
+        _labeled("🏭 Industry", message.industry or "unknown"),
+        _labeled("🗣 Language", message.language),
+        _labeled_list("🛠 Skills", message.skills, limit=_FACT_SKILLS),
     ]
-    return "\n".join(line for line in lines if line)
+    verdict = [
+        f"🎯 Score: {message.score}/100",
+        _labeled_list("✅ Fits", message.reasons, limit=_VERDICT_REASONS),
+        _labeled_list("🎯 Your skills", message.matching_skills, limit=_VERDICT_MATCHING_SKILLS),
+        _labeled_list("⚠️ Gaps", message.missing_requirements, limit=_VERDICT_GAPS),
+        _labeled_list("🚩 Risks", message.risk_flags, limit=_VERDICT_RISKS),
+    ]
+    blocks = [
+        "\n".join(line for line in facts if line),
+        "\n".join(line for line in verdict if line),
+    ]
+    if message.url:
+        blocks.append(f"🔗 {message.url}")
+    return "\n\n".join(block for block in blocks if block)

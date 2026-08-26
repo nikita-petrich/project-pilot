@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot import telegram_bot
 from project_pilot.agent import AgentReply, Approve, allow_everything
+from project_pilot.mcp_prompts import PROMPTS
 from project_pilot.models import Listing
 from project_pilot.repository import Repository
 from project_pilot.telegram_bot import (
@@ -18,10 +19,12 @@ from project_pilot.telegram_bot import (
     CHUNK_CHARS,
     COMMANDS,
     DENY,
+    NO_DESCRIPTION,
     NO_THREAD,
     Incoming,
     TelegramBot,
     chunk,
+    expand_command,
     parse_callbacks,
     parse_updates,
     question_text,
@@ -112,7 +115,10 @@ async def _poll(bot: TelegramBot, client: httpx.AsyncClient) -> int:
 
 
 async def _seed_thread(
-    session_factory: async_sessionmaker[AsyncSession], *, thread_id: int = THREAD
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    thread_id: int = THREAD,
+    description: str = "",
 ) -> int:
     async with session_factory() as session:
         repo = Repository(session)
@@ -122,6 +128,7 @@ async def _seed_thread(
                 external_url=f"https://example.test/{thread_id}",
                 url_hash=f"h{thread_id}",
                 title="T",
+                description=description,
             )
         )
         await repo.record_thread(listing.id, thread_id)
@@ -333,7 +340,7 @@ def test_parse_callbacks_keeps_only_well_formed_answers() -> None:
         ]
     }
     parsed = parse_callbacks(payload)
-    assert [(p.update_id, p.decision, p.request_id) for p in parsed] == [(1, ALLOW, "abc")]
+    assert [(p.update_id, p.action, p.argument) for p in parsed] == [(1, ALLOW, "abc")]
 
 
 def test_question_text_names_the_call() -> None:
@@ -490,8 +497,12 @@ async def test_the_command_menu_is_published_on_start(
         assert await _bot(session_factory, _FakeAgent()).register_commands(client) is True
 
     published = json.loads(route.calls.last.request.read())["commands"]
-    assert [entry["command"] for entry in published] == [name for name, _ in COMMANDS]
-    assert all(entry["description"] for entry in published)
+    # The menu is the MCP prompt list, not a second list maintained here.
+    assert [entry["command"] for entry in published] == list(PROMPTS)
+    assert [entry["description"] for entry in published] == [
+        description for description, _body in PROMPTS.values()
+    ]
+    assert [name for name, _ in COMMANDS] == list(PROMPTS)
 
 
 @respx.mock
@@ -502,3 +513,164 @@ async def test_a_refused_command_menu_does_not_stop_the_bot(
 
     async with httpx.AsyncClient() as client:
         assert await _bot(session_factory, _FakeAgent()).register_commands(client) is False
+
+
+def test_a_command_expands_into_its_mcp_workflow() -> None:
+    # What reaches the agent is the prompt body the MCP server serves, so the
+    # bot runs the same procedure as every other surface.
+    expanded = expand_command("/write_application")
+    assert expanded is not None
+    assert expanded.startswith("Draft an application for this listing:")
+    assert "project_pilot_draft_application" in expanded
+
+
+def test_a_command_keeps_what_was_typed_after_it() -> None:
+    expanded = expand_command("/write_application@project_pilot_bot kürzer bitte")
+    assert expanded is not None
+    assert expanded.endswith("kürzer bitte")
+
+
+def test_plain_text_and_unknown_commands_are_left_alone() -> None:
+    assert expand_command("prüf das mal") is None
+    assert expand_command("/nonsense") is None
+
+
+@respx.mock
+async def test_a_command_reaches_the_agent_as_the_workflow_body(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_update(1, text="/check_project")]}
+    )
+    respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 1}})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    sent = agent.calls[0][2]
+    assert sent.startswith("Judge whether this project listing is a genuine match")
+    # The slot is filled with the topic's own listing, not left as a placeholder.
+    assert f"Listing {listing_id}" in sent
+    assert "{listing}" not in sent
+
+
+def _card_press(
+    update_id: int, action: str, listing_id: int, *, user_id: int = ME
+) -> dict[str, object]:
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"cb{update_id}",
+            "from": {"id": user_id},
+            "data": f"{action}:{listing_id}",
+            "message": {"message_id": 900, "message_thread_id": THREAD},
+        },
+    }
+
+
+@respx.mock
+async def test_describe_posts_the_listing_text_into_the_topic(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The card leaves the description out; this button is where it lives.
+    listing_id = await _seed_thread(session_factory, description="Volltext der Ausschreibung.")
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "describe", listing_id)]}
+    )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    sent = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 5}}
+    )
+
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, _FakeAgent()), client) == 1
+
+    payload = json.loads(sent.calls.last.request.read())
+    assert payload["text"] == "Volltext der Ausschreibung."
+    assert payload["message_thread_id"] == THREAD
+
+
+@respx.mock
+async def test_describe_says_so_when_there_is_no_description(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "describe", listing_id)]}
+    )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    sent = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 5}}
+    )
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    assert json.loads(sent.calls.last.request.read())["text"] == NO_DESCRIPTION
+
+
+@respx.mock
+async def test_decline_closes_the_topic_and_takes_the_buttons_away(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Closed, not deleted: what was offered and turned down stays readable.
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "decline", listing_id)]}
+    )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+    cleared = respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
+    closed = respx.post(f"{API}/closeForumTopic").respond(200, json={"ok": True})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert cleared.call_count == 1
+    assert json.loads(closed.calls.last.request.read())["message_thread_id"] == THREAD
+    assert agent.calls == []  # declining costs no tokens
+
+
+@respx.mock
+async def test_accept_starts_the_drafting_workflow_in_the_topic(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "accept", listing_id)]}
+    )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert agent.calls[0][0] == listing_id
+    assert agent.calls[0][2].startswith("Draft an application for this listing:")
+    assert f"Listing {listing_id}" in agent.calls[0][2]
+
+
+@respx.mock
+async def test_a_stranger_cannot_decide_a_card(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "accept", listing_id, user_id=999)]}
+    )
+    answered = respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, agent), client) == 0
+
+    assert agent.calls == []
+    assert answered.call_count == 0
