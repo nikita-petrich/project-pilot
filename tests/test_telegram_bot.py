@@ -21,6 +21,7 @@ from project_pilot.telegram_bot import (
     DENY,
     NO_DESCRIPTION,
     NO_THREAD,
+    NO_TOPIC,
     Incoming,
     TelegramBot,
     chunk,
@@ -674,3 +675,27 @@ async def test_a_stranger_cannot_decide_a_card(
 
     assert agent.calls == []
     assert answered.call_count == 0
+
+
+@respx.mock
+async def test_accept_outside_a_topic_says_so_instead_of_doing_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # test-match sends its card to the group root, where there is no session to
+    # continue; a button that silently does nothing is worse than a sentence.
+    listing_id = await _seed_thread(session_factory)
+    press = _card_press(1, "accept", listing_id)
+    press["callback_query"]["message"] = {"message_id": 900}  # type: ignore[index]
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [press]})
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
+    sent = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 5}}
+    )
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert agent.calls == []
+    assert json.loads(sent.calls.last.request.read())["text"] == NO_TOPIC

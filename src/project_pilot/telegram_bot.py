@@ -57,6 +57,10 @@ COMMANDS: tuple[tuple[str, str], ...] = tuple(
     (name, description) for name, (description, _body) in PROMPTS.items()
 )
 NO_DESCRIPTION = "Zu diesem Projekt ist keine Beschreibung gespeichert."
+NO_TOPIC = (
+    "Annehmen braucht den Thread des Projekts. Diese Karte steht außerhalb "
+    "eines Topics — das passiert bei test-match, nicht bei einem echten Match."
+)
 DECLINED = "🚫 Abgelehnt."
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
@@ -392,7 +396,10 @@ class TelegramBot:
     async def _accept(self, client: httpx.AsyncClient, listing_id: int, press: Press) -> None:
         """Start the work: run the drafting workflow in this match's topic."""
         if press.thread_id is None:
+            # A card outside a topic has no session to continue and no thread to
+            # answer in. Saying so beats a button that silently does nothing.
             logger.warning("accept pressed outside a topic for listing %s", listing_id)
+            await self._send(client, NO_TOPIC, thread_id=None)
             return
         if press.message_id is not None:
             await self._clear_keyboard(client, press.message_id)
