@@ -34,6 +34,7 @@ from claude_agent_sdk import (
     ResultMessage,
     TextBlock,
     ToolPermissionContext,
+    ToolUseBlock,
     query,
 )
 
@@ -65,6 +66,47 @@ ALLOWED_TOOLS = (
     f"mcp__{MCP_SERVER}__project_pilot_revise_application",
     f"mcp__{MCP_SERVER}__project_pilot_enrich_company",
 )
+
+# What each tool is called while it runs, so a long turn reports progress
+# instead of going silent. Anything unlisted falls back to its own name, which
+# is still better than nothing.
+STEP_LABELS = {
+    "Bash": "führe einen Befehl aus",
+    "Read": "lese eine Datei",
+    "Write": "schreibe eine Datei",
+    "Edit": "ändere eine Datei",
+    "Glob": "suche Dateien",
+    "Grep": "durchsuche Dateien",
+    "WebSearch": "suche im Netz",
+    "WebFetch": "lese eine Webseite",
+    "TodoWrite": "sortiere die Schritte",
+    "project_pilot_get_listing": "hole das Listing",
+    "project_pilot_list_matches": "sehe die letzten Matches durch",
+    "project_pilot_check_listing": "prüfe das Listing gegen dein Profil",
+    "project_pilot_check_text": "prüfe den Text gegen dein Profil",
+    "project_pilot_ingest_listing": "lege das Listing an",
+    "project_pilot_draft_application": "schreibe die Bewerbung",
+    "project_pilot_revise_application": "überarbeite die Bewerbung",
+    "project_pilot_set_recipient": "setze den Empfänger",
+    "project_pilot_send_application": "verschicke die Bewerbung",
+    "project_pilot_enrich_company": "suche die Kontaktdaten",
+}
+
+
+def step_label(tool: str) -> str:
+    """What to show while ``tool`` runs, MCP prefix stripped."""
+    name = tool.rsplit("__", 1)[-1]
+    return STEP_LABELS.get(name, name)
+
+
+# Reports what the agent is doing right now. The bot renders it; the agent
+# neither knows nor cares how.
+Progress = Callable[[str], Awaitable[None]]
+
+
+async def report_nothing(label: str) -> None:
+    """The default when nobody is watching, e.g. in a smoke test."""
+
 
 # What a permission question shows about the call. Long values are cut: the
 # question has to fit in a chat bubble and be readable on a phone.
@@ -259,18 +301,24 @@ class ThreadAgent:
         session_id: str | None,
         message: str,
         approve: Approve = allow_everything,
+        progress: Progress = report_nothing,
     ) -> AgentReply:
         """One turn in this topic's session; returns the session to continue in.
 
         ``approve`` is asked before every tool that is not pre-approved, and may
-        take as long as the human does.
+        take as long as the human does. ``progress`` is told what the agent
+        reaches for, so a turn that runs for minutes still says something.
 
         Never raises: a failing run has to reach the user as a sentence in the
         thread, not as a silent gap.
         """
         try:
             return await self._once(
-                listing_id=listing_id, session_id=session_id, message=message, approve=approve
+                listing_id=listing_id,
+                session_id=session_id,
+                message=message,
+                approve=approve,
+                progress=progress,
             )
         except ClaudeSDKError as err:
             if session_id is None:
@@ -282,7 +330,11 @@ class ThreadAgent:
             logger.warning("resume failed for listing %s, starting fresh: %s", listing_id, err)
             try:
                 return await self._once(
-                    listing_id=listing_id, session_id=None, message=message, approve=approve
+                    listing_id=listing_id,
+                    session_id=None,
+                    message=message,
+                    approve=approve,
+                    progress=progress,
                 )
             except ClaudeSDKError as retry_err:
                 logger.warning("agent run failed for listing %s: %s", listing_id, retry_err)
@@ -291,7 +343,13 @@ class ThreadAgent:
                 )
 
     async def _once(
-        self, *, listing_id: int, session_id: str | None, message: str, approve: Approve
+        self,
+        *,
+        listing_id: int,
+        session_id: str | None,
+        message: str,
+        approve: Approve,
+        progress: Progress = report_nothing,
     ) -> AgentReply:
         messages: list[Message] = []
         async for item in self._run(
@@ -299,6 +357,10 @@ class ThreadAgent:
             options=self._options(listing_id=listing_id, session_id=session_id, approve=approve),
         ):
             messages.append(item)
+            if isinstance(item, AssistantMessage):
+                for block in item.content:
+                    if isinstance(block, ToolUseBlock):
+                        await progress(step_label(block.name))
         text = _text_of(messages)
         started = next(
             (m.session_id for m in reversed(messages) if isinstance(m, ResultMessage)),

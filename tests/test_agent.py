@@ -12,9 +12,17 @@ from claude_agent_sdk import (
     ResultMessage,
     TextBlock,
     ToolPermissionContext,
+    ToolUseBlock,
 )
 
-from project_pilot.agent import ALLOWED_TOOLS, MAX_TURNS, MCP_SERVER, ThreadAgent, describe
+from project_pilot.agent import (
+    ALLOWED_TOOLS,
+    MAX_TURNS,
+    MCP_SERVER,
+    ThreadAgent,
+    describe,
+    step_label,
+)
 
 MCP_URL = "http://mcp:8765/mcp"
 MCP_TOKEN = "tok"
@@ -41,6 +49,13 @@ def _result(text: str | None = "Passt.", session: str = "sess-1") -> ResultMessa
 
 def _assistant(text: str) -> AssistantMessage:
     return AssistantMessage(content=[TextBlock(text=text)], model="claude-opus-5")
+
+
+def _assistant_tools(*names: str) -> AssistantMessage:
+    return AssistantMessage(
+        content=[ToolUseBlock(id=f"t{i}", name=name, input={}) for i, name in enumerate(names)],
+        model="claude-opus-5",
+    )
 
 
 class _Runs:
@@ -227,3 +242,34 @@ async def test_a_silent_run_is_reported_but_keeps_its_session(tmp_path: Path) ->
 
     assert reply.ok is False
     assert reply.session_id == "sess-2"
+
+
+@pytest.mark.asyncio
+async def test_every_tool_the_agent_reaches_for_is_reported(tmp_path: Path) -> None:
+    # A turn can run for minutes; without this it looks stalled.
+    runs = _Runs(
+        [
+            _assistant_tools("mcp__project_pilot__project_pilot_check_listing"),
+            _assistant_tools("Bash"),
+            _result(),
+        ]
+    )
+    seen: list[str] = []
+
+    async def progress(label: str) -> None:
+        seen.append(label)
+
+    await _agent(runs, tmp_path).reply(
+        listing_id=1, session_id=None, message="hi", progress=progress
+    )
+
+    assert seen == ["prüfe das Listing gegen dein Profil", "führe einen Befehl aus"]
+
+
+def test_step_label_falls_back_to_the_tool_name(tmp_path: Path) -> None:
+    assert step_label("Bash") == "führe einen Befehl aus"
+    assert step_label("mcp__project_pilot__project_pilot_draft_application") == (
+        "schreibe die Bewerbung"
+    )
+    # Unknown is still better named than blank.
+    assert step_label("SomeNewTool") == "SomeNewTool"

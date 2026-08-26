@@ -10,7 +10,7 @@ import respx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot import telegram_bot
-from project_pilot.agent import AgentReply, Approve, allow_everything
+from project_pilot.agent import AgentReply, Approve, Progress, allow_everything, report_nothing
 from project_pilot.mcp_prompts import PROMPTS
 from project_pilot.models import Listing
 from project_pilot.repository import Repository
@@ -19,9 +19,11 @@ from project_pilot.telegram_bot import (
     CHUNK_CHARS,
     COMMANDS,
     DENY,
+    DONE,
     NO_DESCRIPTION,
     NO_THREAD,
     NO_TOPIC,
+    SEEN,
     Incoming,
     TelegramBot,
     chunk,
@@ -48,11 +50,13 @@ class _FakeAgent:
         ok: bool = True,
         session: str | None = "sess-1",
         asks: list[tuple[str, str]] | None = None,
+        steps: list[str] | None = None,
     ) -> None:
         self.text = text
         self.ok = ok
         self.session = session
         self.asks = asks or []
+        self.steps = steps or []
         self.approvals: list[bool] = []
         self.calls: list[tuple[int, str | None, str]] = []
 
@@ -63,10 +67,13 @@ class _FakeAgent:
         session_id: str | None,
         message: str,
         approve: Approve = allow_everything,
+        progress: Progress = report_nothing,
     ) -> AgentReply:
         self.calls.append((listing_id, session_id, message))
         for tool, detail in self.asks:
             self.approvals.append(await approve(tool, detail))
+        for label in self.steps:
+            await progress(label)
         return AgentReply(text=self.text, ok=self.ok, session_id=self.session)
 
 
@@ -99,6 +106,17 @@ def _bot(session_factory: async_sessionmaker[AsyncSession], agent: _FakeAgent) -
     )
 
 
+def _cosmetic() -> None:
+    """Stub the endpoints that only decorate a turn.
+
+    Only the ones no test sets itself: respx keys routes by pattern, so
+    re-registering one a test already configured would silently overwrite its
+    expectation.
+    """
+    for method in ("setMessageReaction", "deleteMessage", "sendChatAction"):
+        respx.post(f"{API}/{method}").respond(200, json={"ok": True})
+
+
 async def _wait_for(check: Callable[[], bool], *, tries: int = 200) -> None:
     """Give the dispatched answer a turn to reach the point being tested."""
     for _ in range(tries):
@@ -110,6 +128,7 @@ async def _wait_for(check: Callable[[], bool], *, tries: int = 200) -> None:
 
 async def _poll(bot: TelegramBot, client: httpx.AsyncClient) -> int:
     """Poll once and wait for the answers it dispatched (tests want them done)."""
+    _cosmetic()
     taken = await bot.poll_once(client)
     await bot.drain()
     return taken
@@ -314,7 +333,13 @@ def test_incoming_is_narrowed_to_what_routing_needs() -> None:
     # The dataclass is the contract between parsing and routing.
     message = parse_updates({"result": [_update(9)]})[0]
     assert message == Incoming(
-        update_id=9, chat_id=int(CHAT_ID), thread_id=THREAD, user_id=ME, text="passt das?"
+        update_id=9,
+        chat_id=int(CHAT_ID),
+        thread_id=THREAD,
+        user_id=ME,
+        text="passt das?",
+        # Carried so the answer can react on the very message it answers.
+        message_id=9,
     )
 
 
@@ -367,6 +392,7 @@ async def test_a_tool_that_is_not_pre_approved_asks_in_the_thread(
 
     async with httpx.AsyncClient() as client:
         respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+        _cosmetic()
         await bot.poll_once(client)  # dispatches; the run stops on the question
         await _wait_for(lambda: sent.call_count > 0)
         question = json.loads(sent.calls.last.request.read())
@@ -401,6 +427,7 @@ async def test_a_refused_tool_comes_back_as_a_no(
 
     async with httpx.AsyncClient() as client:
         respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+        _cosmetic()
         await bot.poll_once(client)
         await _wait_for(lambda: sent.call_count > 0)
         data = json.loads(sent.calls.last.request.read())
@@ -430,6 +457,7 @@ async def test_a_stranger_cannot_answer_a_permission_question(
 
     async with httpx.AsyncClient() as client:
         respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+        _cosmetic()
         await bot.poll_once(client)
         await _wait_for(lambda: sent.call_count > 0)
         data = json.loads(sent.calls.last.request.read())
@@ -699,3 +727,77 @@ async def test_accept_outside_a_topic_says_so_instead_of_doing_nothing(
 
     assert agent.calls == []
     assert json.loads(sent.calls.last.request.read())["text"] == NO_TOPIC
+
+
+@respx.mock
+async def test_a_message_is_marked_seen_and_then_done(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The turn can run for minutes; the reaction is the instant "I have it".
+    await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 2}})
+    reacted = respx.post(f"{API}/setMessageReaction").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    emojis = [json.loads(call.request.read())["reaction"] for call in reacted.calls]
+    assert emojis == [[{"type": "emoji", "emoji": SEEN}], [{"type": "emoji", "emoji": DONE}]]
+    assert json.loads(reacted.calls.last.request.read())["message_id"] == 1
+
+
+@respx.mock
+async def test_a_failed_turn_clears_the_reaction_rather_than_marking_it_done(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A thumb up over an error message would be a lie.
+    await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 2}})
+    reacted = respx.post(f"{API}/setMessageReaction").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent(text="⚠️ kaputt", ok=False)), client)
+
+    assert json.loads(reacted.calls.last.request.read())["reaction"] == []
+
+
+@respx.mock
+async def test_each_step_moves_one_status_line(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # One line that changes, not a wall of status messages.
+    await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    sent = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 55}}
+    )
+    edited = respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
+    deleted = respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
+
+    steps = ["prüfe das Listing gegen dein Profil", "schreibe die Bewerbung"]
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent(steps=steps)), client)
+
+    # The first step opens the line, the second edits it.
+    assert json.loads(sent.calls[0].request.read())["text"] == f"⏳ {steps[0]} …"
+    assert json.loads(edited.calls.last.request.read())["text"] == f"⏳ {steps[1]} …"
+    # And it is taken away once the answer is there.
+    assert json.loads(deleted.calls.last.request.read())["message_id"] == 55
+
+
+@respx.mock
+async def test_the_same_step_twice_in_a_row_is_not_reported_again(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_thread(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 55}})
+    edited = respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
+    respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent(steps=["lese eine Datei"] * 3)), client)
+
+    assert edited.call_count == 0

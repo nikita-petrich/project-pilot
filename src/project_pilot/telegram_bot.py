@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from project_pilot.agent import AgentReply, Approve, ThreadAgent
+from project_pilot.agent import AgentReply, Approve, Progress, ThreadAgent
 from project_pilot.db import session_scope
 from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.repository import Repository
@@ -64,6 +64,13 @@ NO_TOPIC = (
 DECLINED = "🚫 Abgelehnt."
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
+
+# Telegram drops a chat action after about five seconds, so a turn that runs for
+# minutes needs it renewed to stay visible.
+TYPING_EVERY_S = 4.0
+# A reaction on the message being worked on: seen, and done. Best effort — the
+# allowed set is Telegram's, and a refused reaction is cosmetic.
+SEEN, DONE = "👀", "👍"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +157,9 @@ class Incoming:
     thread_id: int | None
     user_id: int
     text: str
+    # The message itself, so the answer can react on it rather than only
+    # eventually appearing somewhere below it.
+    message_id: int | None = None
 
 
 def parse_updates(payload: Mapping[str, object]) -> list[Incoming]:
@@ -181,6 +191,7 @@ def parse_updates(payload: Mapping[str, object]) -> list[Incoming]:
         thread_id = message.get("message_thread_id")
         if not isinstance(chat_id, int) or not isinstance(user_id, int):
             continue
+        message_id = message.get("message_id")
         messages.append(
             Incoming(
                 update_id=update_id,
@@ -188,6 +199,7 @@ def parse_updates(payload: Mapping[str, object]) -> list[Incoming]:
                 thread_id=thread_id if isinstance(thread_id, int) else None,
                 user_id=user_id,
                 text=text.strip(),
+                message_id=message_id if isinstance(message_id, int) else None,
             )
         )
     return messages
@@ -427,24 +439,62 @@ class TelegramBot:
         text = expand_command(message.text) or message.text
         text = text.replace("{listing}", f"Listing {listing_id}")
         return await self._run(
-            client, thread_id=message.thread_id, listing_id=listing_id, message=text
+            client,
+            thread_id=message.thread_id,
+            listing_id=listing_id,
+            message=text,
+            react_to=message.message_id,
         )
 
     async def _run(
-        self, client: httpx.AsyncClient, *, thread_id: int, listing_id: int, message: str
+        self,
+        client: httpx.AsyncClient,
+        *,
+        thread_id: int,
+        listing_id: int,
+        message: str,
+        react_to: int | None = None,
     ) -> bool:
-        """One agent turn in one topic, serialized per topic, answered there."""
+        """One agent turn in one topic, serialized per topic, answered there.
+
+        Everything around the turn exists so it never looks stalled: the message
+        is marked seen, the typing indicator is renewed, and one status line
+        names the step the agent is on.
+        """
         lock = self._locks.setdefault(thread_id, asyncio.Lock())
         async with lock:
-            reply = await self._answer(
-                client, thread_id=thread_id, listing_id=listing_id, message=message
-            )
+            if react_to is not None:
+                await self._react(client, react_to, SEEN)
+            typing = asyncio.create_task(self._keep_typing(client, thread_id))
+            report, status = self._progress(client, thread_id)
+            try:
+                reply = await self._answer(
+                    client,
+                    thread_id=thread_id,
+                    listing_id=listing_id,
+                    message=message,
+                    progress=report,
+                )
+            finally:
+                typing.cancel()
+                for message_id in status:
+                    await self._delete(client, message_id)
+        if react_to is not None:
+            # Cleared rather than marked done when the turn failed: a thumb up
+            # over an error message would be a lie.
+            await self._react(client, react_to, DONE if reply.ok else None)
         for part in chunk(reply.text):
             await self._send(client, part, thread_id=thread_id)
         return True
 
     async def _answer(
-        self, client: httpx.AsyncClient, *, thread_id: int, listing_id: int, message: str
+        self,
+        client: httpx.AsyncClient,
+        *,
+        thread_id: int,
+        listing_id: int,
+        message: str,
+        progress: Progress,
     ) -> AgentReply:
         """Ask the agent, and record the session the topic continues in."""
         async with session_scope(self._session_factory) as session:
@@ -452,14 +502,12 @@ class TelegramBot:
             thread = await repo.get_thread_by_thread_id(thread_id)
             session_id = thread.session_id if thread else None
 
-            # Sent before the model call, which can take a while: silence would
-            # read as "the bot ignored me".
-            await self._typing(client, thread_id)
             reply = await self._agent.reply(
                 listing_id=listing_id,
                 session_id=session_id,
                 message=message,
                 approve=self._approver(client, thread_id),
+                progress=progress,
             )
             if thread is not None and reply.session_id and reply.session_id != session_id:
                 # Stored even when the turn failed: the session exists either
@@ -516,6 +564,60 @@ class TelegramBot:
             f"{question_text(tool, detail)}\n\n{'✅ erlaubt' if allowed else '🚫 abgelehnt'}",
         )
         return allowed
+
+    async def _react(self, client: httpx.AsyncClient, message_id: int, emoji: str | None) -> None:
+        """Put one reaction on a message, or clear it with an empty list."""
+        reaction = [] if emoji is None else [{"type": "emoji", "emoji": emoji}]
+        try:
+            await client.post(
+                f"{self._api}/setMessageReaction",
+                json={
+                    "chat_id": self._chat_id,
+                    "message_id": message_id,
+                    "reaction": reaction,
+                },
+            )
+        except httpx.HTTPError as err:  # decoration, never the point
+            logger.debug("reaction on %s failed: %s", message_id, err)
+
+    async def _keep_typing(self, client: httpx.AsyncClient, thread_id: int) -> None:
+        """Hold the typing indicator up for as long as the turn runs."""
+        while True:
+            await self._typing(client, thread_id)
+            await asyncio.sleep(TYPING_EVERY_S)
+
+    def _progress(self, client: httpx.AsyncClient, thread_id: int) -> tuple[Progress, list[int]]:
+        """A single line in the thread saying what the agent is doing right now.
+
+        Sent on the first step and edited afterwards, so a long turn reports
+        one moving line rather than a wall of status messages. The returned
+        list holds its message id, for the caller to clean up.
+        """
+        holder: list[int] = []
+        seen: list[str] = []
+
+        async def report(label: str) -> None:
+            if seen and seen[-1] == label:
+                return  # the same tool twice in a row is not news
+            seen.append(label)
+            text = f"⏳ {label} …"
+            if holder:
+                await self._edit(client, holder[0], text)
+                return
+            message_id = await self._send(client, text, thread_id=thread_id)
+            if message_id is not None:
+                holder.append(message_id)
+
+        return report, holder
+
+    async def _delete(self, client: httpx.AsyncClient, message_id: int) -> None:
+        try:
+            await client.post(
+                f"{self._api}/deleteMessage",
+                json={"chat_id": self._chat_id, "message_id": message_id},
+            )
+        except httpx.HTTPError as err:  # a leftover status line is not a failure
+            logger.debug("deleting %s failed: %s", message_id, err)
 
     async def _clear_keyboard(self, client: httpx.AsyncClient, message_id: int) -> None:
         """Take the buttons off a card that has been decided."""

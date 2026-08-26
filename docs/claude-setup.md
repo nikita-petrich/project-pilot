@@ -164,6 +164,13 @@ What the agent is:
   of the pipeline's own guard against double sends. The prompt forbids any other
   delivery route, which matters now that the agent has a shell.
 
+While a turn runs, the thread says so rather than going quiet: your message
+gets a 👀 reaction the moment it is picked up, the typing indicator is renewed
+every four seconds (Telegram drops it after five), and one status line names the
+step the agent is on — `⏳ prüfe das Listing gegen dein Profil …` — edited in
+place and removed when the answer arrives. The reaction turns 👍 when the turn
+finished, and is cleared when it failed.
+
 Two operational details:
 
 - The agent works in `/data/workspace` and the SDK writes each topic's
