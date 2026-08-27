@@ -34,6 +34,7 @@ from project_pilot.telegram_bot import (
     parse_updates,
     question_text,
     topic_name,
+    update_ids,
 )
 
 BOT_TOKEN = "123456:AAtest"
@@ -953,3 +954,45 @@ async def test_the_card_is_not_repeated_for_a_thread_that_already_has_its_listin
         await _poll(_bot(session_factory, agent), client)
 
     assert [json.loads(call.request.read())["text"] for call in send.calls] == ["Antwort."]
+
+
+def test_update_ids_covers_what_neither_parser_takes() -> None:
+    payload = {
+        "result": [
+            _update(1),
+            {"update_id": 2, "message": {"forum_topic_created": {"name": "f"}}},
+            {"update_id": 3, "edited_message": {"text": "x"}},
+            {"nonsense": True},
+        ]
+    }
+    assert update_ids(payload) == [1, 2, 3]
+
+
+@respx.mock
+async def test_an_update_nobody_acts_on_still_moves_the_offset(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Telegram redelivers anything unconfirmed at once, so an update left
+    # behind spins the poll loop forever and nothing newer is ever reached.
+    service = {"update_id": 41, "message": {"forum_topic_created": {"name": "f"}}}
+    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": [service]})
+
+    bot = _bot(session_factory, _FakeAgent())
+    async with httpx.AsyncClient() as client:
+        assert await _poll(bot, client) == 0
+        await bot.poll_once(client)
+
+    assert json.loads(updates.calls.last.request.read())["offset"] == 42
+
+
+@respx.mock
+async def test_only_the_two_kinds_of_update_are_requested(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": []})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    asked = json.loads(updates.calls.last.request.read())
+    assert asked["allowed_updates"] == ["message", "callback_query"]

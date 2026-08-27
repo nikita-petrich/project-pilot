@@ -93,6 +93,25 @@ class Press:
     message_id: int | None = None
 
 
+def update_ids(payload: Mapping[str, object]) -> list[int]:
+    """Every update id in a getUpdates response, parsed or not.
+
+    The offset must move past an update the bot does not act on just as much as
+    past one it does: Telegram redelivers anything unconfirmed *immediately*, so
+    a single unparsed update — a service message, an edit, a photo without a
+    caption — turns the poll loop into a hot loop that never reaches anything
+    newer. That is a bot which has silently stopped answering.
+    """
+    result = payload.get("result")
+    if not isinstance(result, list):
+        return []
+    return [
+        update["update_id"]
+        for update in result
+        if isinstance(update, dict) and isinstance(update.get("update_id"), int)
+    ]
+
+
 def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
     """Pick the button presses out of a getUpdates response."""
     result = payload.get("result")
@@ -298,25 +317,31 @@ class TelegramBot:
         """
         response = await client.post(
             f"{self._api}/getUpdates",
-            json={"offset": self._offset, "timeout": POLL_TIMEOUT_S},
+            json={
+                "offset": self._offset,
+                "timeout": POLL_TIMEOUT_S,
+                # Only what this bot acts on; everything else would arrive just
+                # to be skipped, and service messages are a large "everything".
+                "allowed_updates": ["message", "callback_query"],
+            },
         )
         response.raise_for_status()
         body = response.json()
         payload = body if isinstance(body, dict) else {}
         results = payload.get("result")
         logger.info("received %d update(s)", len(results) if isinstance(results, list) else 0)
+        # Before anything is acted on, and for every update rather than only the
+        # ones that parse — see update_ids for why this order matters.
+        for update_id in update_ids(payload):
+            self._offset = max(self._offset, update_id + 1)
         taken = 0
         for press in parse_callbacks(payload):
-            # Advance past every update, including the ones that are dropped:
-            # an update left unacknowledged is redelivered forever.
-            self._offset = max(self._offset, press.update_id + 1)
             try:
                 if await self._press(client, press):
                     taken += 1
             except Exception:  # one bad press must not stop the round
                 logger.exception("handling press %s failed", press.action)
         for message in parse_updates(payload):
-            self._offset = max(self._offset, message.update_id + 1)
             if not self._accepts(message):
                 continue
             logger.info("answering message %s in thread %s", message.update_id, message.thread_id)
