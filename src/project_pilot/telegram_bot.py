@@ -282,8 +282,12 @@ class TelegramBot:
             while True:
                 try:
                     await self.poll_once(client)
-                except httpx.HTTPError as err:
-                    logger.warning("polling failed, retrying: %s", err)
+                except Exception as err:
+                    # Any exception, not only HTTP: a poller that dies on one
+                    # malformed update or one unforeseen bug goes silent, and a
+                    # silent bot is indistinguishable from a bot that ignores
+                    # you. Log it and keep polling.
+                    logger.exception("polling failed, retrying: %s", err)
                     await asyncio.sleep(5)
 
     async def poll_once(self, client: httpx.AsyncClient) -> int:
@@ -297,18 +301,25 @@ class TelegramBot:
             json={"offset": self._offset, "timeout": POLL_TIMEOUT_S},
         )
         response.raise_for_status()
-        payload = response.json() if isinstance(response.json(), dict) else {}
+        body = response.json()
+        payload = body if isinstance(body, dict) else {}
+        results = payload.get("result")
+        logger.info("received %d update(s)", len(results) if isinstance(results, list) else 0)
         taken = 0
         for press in parse_callbacks(payload):
             # Advance past every update, including the ones that are dropped:
             # an update left unacknowledged is redelivered forever.
             self._offset = max(self._offset, press.update_id + 1)
-            if await self._press(client, press):
-                taken += 1
+            try:
+                if await self._press(client, press):
+                    taken += 1
+            except Exception:  # one bad press must not stop the round
+                logger.exception("handling press %s failed", press.action)
         for message in parse_updates(payload):
             self._offset = max(self._offset, message.update_id + 1)
             if not self._accepts(message):
                 continue
+            logger.info("answering message %s in thread %s", message.update_id, message.thread_id)
             task = asyncio.create_task(self._answer_task(client, message))
             self._answering.add(task)
             task.add_done_callback(self._answering.discard)
