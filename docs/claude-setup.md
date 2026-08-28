@@ -57,17 +57,18 @@ stored; the old channel waited for a whole Claude run to finish first.
 
 ### 1b. The match supergroup
 
-Every match opens its own **forum topic**, so one project is one thread and a
-finished one can be closed rather than deleted. Topics only exist in a forum
+Every match opens its own **forum topic**, so one project is one thread and
+declining it takes the whole thread off the list. Topics only exist in a forum
 supergroup, so the bot sends there rather than into your private chat:
 
 1. In Telegram: **New Group** → name it (e.g. *project-pilot*) → add your bot as
    the only other member → create.
 2. Open the group → **Edit** → turn on **Topics**. Telegram converts it to a
    forum supergroup.
-3. **Edit → Administrators → add your bot**, and give it **Manage Topics**.
-   Without that one right it cannot open a topic, and every match would land in
-   the group's general area instead.
+3. **Edit → Administrators → add your bot**, and give it **Manage Topics** and
+   **Delete Messages**. Without the first it cannot open a topic and every match
+   lands in the group's general area; without the second **Ablehnen** cannot
+   clear the thread away.
 4. Read the group's id: post any message in the group, then
 
    ```sh
@@ -99,8 +100,8 @@ afterwards does not reliably count, so make it explicit:
 1. [@BotFather](https://t.me/BotFather) → `/setprivacy` → your bot → **Disable**
 2. Remove the bot from the group and add it back — the setting only takes
    effect on a fresh join.
-3. Give it **Manage Topics** again; that right is what lets it open a topic per
-   match.
+3. Give it **Manage Topics** and **Delete Messages** again; a fresh join drops
+   the rights along with the privacy setting.
 
 The `/` menu the bot publishes at startup is the fallback either way: a command
 reaches a bot even with privacy mode on.
@@ -296,6 +297,7 @@ docker compose logs -f bot               # what the agent did, and who pressed w
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
 | Nothing you write gets an answer, `/pruefen` does | Privacy mode still on | @BotFather → `/setprivacy` → Disable, then re-add the bot to the group |
 | Matches land in the group root, no topic | Bot lacks **Manage Topics**, or the group is not a forum | Turn on Topics, make the bot an admin with that right |
+| **Ablehnen** leaves the thread standing | Bot lacks **Delete Messages** | Add that right in **Edit → Administrators** |
 | Deploy rejects the chat id | A personal chat id (positive) | Use the supergroup id, negative, starting with `-100` |
 | The agent never answers in a topic | The `bot` container is down, or your id is not in `TELEGRAM_ALLOWED_USER_IDS` | `docker compose logs bot`; a refused message is logged with the id that sent it |
 | A 🔐 question never resolves | Pressed from outside the whitelist, or left for over ten minutes | Both count as a refusal by design; the agent asks again on the next attempt |

@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 from sqlalchemy.orm import selectinload
 
@@ -267,6 +267,21 @@ class Repository:
             select(TelegramThread).where(TelegramThread.thread_id == thread_id)
         )
         return result.first()
+
+    async def forget_thread(self, thread_id: int) -> bool:
+        """Drop the mapping for a topic that no longer exists.
+
+        Telegram hands topic ids out afresh, so a row left behind for a deleted
+        topic would one day point a brand-new conversation at an old listing and
+        an agent session that has nothing to do with it.
+        """
+        result = await self._session.execute(
+            delete(TelegramThread)
+            .where(TelegramThread.thread_id == thread_id)
+            .returning(TelegramThread.id)
+        )
+        await self._session.flush()
+        return result.first() is not None
 
     async def set_listing_id(self, thread: TelegramThread, listing_id: int) -> bool:
         """Bind a listing-less topic to the listing it turned out to be about.

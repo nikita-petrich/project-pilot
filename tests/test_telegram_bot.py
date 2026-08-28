@@ -695,15 +695,23 @@ async def test_a_command_reaches_the_agent_as_the_workflow_body(
 
 
 def _card_press(
-    update_id: int, action: str, listing_id: int, *, user_id: int = ME
+    update_id: int,
+    action: str,
+    listing_id: int,
+    *,
+    user_id: int = ME,
+    thread_id: int | None = THREAD,
 ) -> dict[str, object]:
+    message: dict[str, object] = {"message_id": 900}
+    if thread_id is not None:
+        message["message_thread_id"] = thread_id
     return {
         "update_id": update_id,
         "callback_query": {
             "id": f"cb{update_id}",
             "from": {"id": user_id},
             "data": f"{action}:{listing_id}",
-            "message": {"message_id": 900, "message_thread_id": THREAD},
+            "message": message,
         },
     }
 
@@ -750,26 +758,45 @@ async def test_describe_says_so_when_there_is_no_description(
 
 
 @respx.mock
-async def test_decline_closes_the_topic_and_takes_the_buttons_away(
+async def test_decline_deletes_the_topic_and_forgets_it(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Closed, not deleted: what was offered and turned down stays readable.
+    # A turned-down project leaves nothing on screen; the verdict stays in the DB.
     listing_id = await _seed_thread(session_factory)
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_card_press(1, "decline", listing_id)]}
     )
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
-    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
-    cleared = respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
-    closed = respx.post(f"{API}/closeForumTopic").respond(200, json={"ok": True})
+    deleted = respx.post(f"{API}/deleteForumTopic").respond(200, json={"ok": True})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert cleared.call_count == 1
-    assert json.loads(closed.calls.last.request.read())["message_thread_id"] == THREAD
+    assert json.loads(deleted.calls.last.request.read())["message_thread_id"] == THREAD
     assert agent.calls == []  # declining costs no tokens
+    # The mapping goes too: Telegram reuses topic ids, and a stale row would
+    # point the next conversation at this listing.
+    async with session_factory() as session:
+        assert await Repository(session).get_thread_by_thread_id(THREAD) is None
+
+
+@respx.mock
+async def test_decline_in_the_main_area_deletes_the_card_itself(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A test-match card has no topic to delete, so the message goes on its own.
+    listing_id = await _seed_listing(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "decline", listing_id, thread_id=None)]}
+    )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    deleted = respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    assert deleted.call_count == 1
 
 
 @respx.mock

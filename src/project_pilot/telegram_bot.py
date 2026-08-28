@@ -68,7 +68,6 @@ COMMANDS: tuple[tuple[str, str], ...] = tuple(
     (name, description) for name, (description, _body) in PROMPTS.items()
 )
 NO_DESCRIPTION = "Zu diesem Projekt ist keine Beschreibung gespeichert."
-DECLINED = "🚫 Abgelehnt."
 # Unanswered questions must not pile up open turns forever.
 APPROVAL_TIMEOUT_S = 600
 
@@ -453,16 +452,20 @@ class TelegramBot:
             await self._send(client, part, thread_id=thread_id)
 
     async def _decline(self, client: httpx.AsyncClient, press: Press) -> None:
-        """Close the topic and take the buttons off the card.
+        """Take the whole match off the screen.
 
-        Closed, not deleted: the record of what was offered and turned down is
-        worth more than a tidy list, and Telegram can reopen a closed topic.
+        A turned-down project is not a record anyone reads; it is clutter in the
+        one list that has to stay scannable. So the topic goes with everything
+        in it, and a card sitting in the main area goes on its own. The verdict
+        stays in the database, which is where the history actually lives.
         """
-        if press.message_id is not None:
-            await self._clear_keyboard(client, press.message_id)
-            await self._send(client, DECLINED, thread_id=press.thread_id)
         if press.thread_id is not None:
-            await self._close_topic(client, press.thread_id)
+            await self._delete_topic(client, press.thread_id)
+            async with session_scope(self._session_factory) as session:
+                await Repository(session).forget_thread(press.thread_id)
+            return
+        if press.message_id is not None:
+            await self._delete(client, press.message_id)
 
     async def _accept(self, client: httpx.AsyncClient, listing_id: int, press: Press) -> None:
         """Start the work: run the drafting workflow where the card is.
@@ -770,14 +773,19 @@ class TelegramBot:
         thread_id = result.get("message_thread_id") if isinstance(result, dict) else None
         return thread_id if isinstance(thread_id, int) else None
 
-    async def _close_topic(self, client: httpx.AsyncClient, thread_id: int) -> None:
+    async def _delete_topic(self, client: httpx.AsyncClient, thread_id: int) -> None:
+        """Remove a topic and every message in it in one call.
+
+        Telegram deletes the messages for us here, which matters: deleting them
+        one by one would leave anything older than 48 hours behind.
+        """
         try:
             await client.post(
-                f"{self._api}/closeForumTopic",
+                f"{self._api}/deleteForumTopic",
                 json={"chat_id": self._chat_id, "message_thread_id": thread_id},
             )
-        except httpx.HTTPError as err:  # a topic left open is not a failure
-            logger.warning("closing topic %s failed: %s", thread_id, err)
+        except httpx.HTTPError as err:  # missing Delete Messages, most likely
+            logger.warning("deleting topic %s failed: %s", thread_id, err)
 
     async def _edit(self, client: httpx.AsyncClient, message_id: int, text: str) -> None:
         try:
