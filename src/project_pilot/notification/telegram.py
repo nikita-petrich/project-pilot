@@ -7,15 +7,19 @@ previous channel (a Claude routine whose completion push was a per-run model
 decision) lost notifications.
 
 Send-only, deliberately. There is no polling loop, no webhook and no inbound
-port here: the message carries one inline button to the listing on its own
-board, and every action — checking, drafting, sending — happens in the topic
-itself, where the thread agent answers (``telegram_bot.py``, its own process).
+port here: every action — checking, drafting, sending — happens in the post's
+comment thread, where the thread agent answers (``telegram_bot.py``, its own
+process).
 
-Each match gets its own **forum topic** in the target supergroup, so one project
-is one thread rather than one line in a growing chat. Telegram can close a topic,
-which archives the whole exchange without deleting it, and its
-``message_thread_id`` is the handle a later feature uses to route a reply back to
-its listing.
+The target is a **channel**. Telegram forwards each post into the channel's
+linked discussion group by itself and roots a comment thread on the forwarded
+copy, so one project is one post you can open into its own conversation — and
+declining it is a plain ``deleteMessage`` on the post, which is what makes a
+turned-down match vanish from the feed entirely.
+
+The id of the sent post is what ``notify`` returns: it is the only handle that
+ties the card to the comment thread the automatic forward is about to create,
+and the bot needs it to route a reply back to its listing.
 
 Telegram was chosen over a push service for one reason the alternatives could
 not match: its desktop app delivers a real system notification with nothing
@@ -40,11 +44,6 @@ logger = logging.getLogger(__name__)
 API_BASE = "https://api.telegram.org"
 # Telegram rejects anything past 4096 characters outright.
 MAX_TEXT_CHARS = 4_000
-# createForumTopic rejects a longer name rather than truncating it itself.
-MAX_TOPIC_NAME_CHARS = 128
-# icon_color takes six fixed values and nothing else. Blue marks a fresh match;
-# the remaining colors become status in a later feature.
-ICON_COLOR_BLUE = 7322096
 _TIMEOUT = 15.0
 
 
@@ -70,7 +69,7 @@ def match_keyboard(message: MatchMessage) -> dict[str, object] | None:
     """The three decisions a match offers, or nothing for an unstored listing.
 
     The callbacks carry the listing id, so a press is unambiguous even when
-    several topics are open at once.
+    several matches are open at once.
     """
     if message.listing_id is None:
         return None
@@ -87,52 +86,35 @@ def match_keyboard(message: MatchMessage) -> dict[str, object] | None:
 
 
 class TelegramNotifier:
-    """Sends one match (or one warning) to a Telegram chat."""
+    """Sends one match (or one warning) to the Telegram channel."""
 
     def __init__(self, *, bot_token: str, chat_id: str) -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
         self._chat_id = chat_id
 
-    async def create_topic(self, message: MatchMessage) -> int | None:
-        """Open a forum topic for one match; None when the chat cannot host one.
-
-        Returns None rather than raising for the same reason ``notify`` does: a
-        chat that is not a forum, or a bot that is not an admin, must degrade to
-        a plain message instead of failing the run.
-        """
-        name = headline(message)[:MAX_TOPIC_NAME_CHARS]
-        try:
-            payload = await self._post(
-                "createForumTopic", {"name": name, "icon_color": ICON_COLOR_BLUE}
-            )
-        except httpx.HTTPError as err:
-            logger.warning("telegram topic creation failed for %s: %s", message.url, err)
-            return None
-        result = payload.get("result")
-        thread_id = result.get("message_thread_id") if isinstance(result, dict) else None
-        if not isinstance(thread_id, int):
-            logger.warning("telegram returned no message_thread_id for %s", message.url)
-            return None
-        return thread_id
-
-    async def notify(self, message: MatchMessage, thread_id: int | None = None) -> bool:
-        """Send one match, into its topic when it has one; False on failure.
+    async def notify(self, message: MatchMessage) -> int | None:
+        """Post one match to the channel; its message id, or None on failure.
 
         A failed send must not fail the pipeline run: the listing stays
-        unnotified and is retried on the next run.
+        unnotified and is retried on the next run. The returned id is stored,
+        because it is how the comment thread Telegram is about to open gets
+        matched back to this listing.
         """
         payload: dict[str, object] = {"text": match_text(message)}
         keyboard = match_keyboard(message)
         if keyboard is not None:
             payload["reply_markup"] = keyboard
-        if thread_id is not None:
-            payload["message_thread_id"] = thread_id
         try:
-            await self._post("sendMessage", payload)
+            body = await self._post("sendMessage", payload)
         except httpx.HTTPError as err:
             logger.warning("telegram send failed for %s: %s", message.url, err)
-            return False
-        return True
+            return None
+        result = body.get("result")
+        message_id = result.get("message_id") if isinstance(result, dict) else None
+        if not isinstance(message_id, int):
+            logger.warning("telegram returned no message_id for %s", message.url)
+            return None
+        return message_id
 
     async def notify_warning(self, text: str) -> bool:
         """Deliver an operator warning; False on failure.
@@ -141,7 +123,7 @@ class TelegramNotifier:
         this never raises either.
         """
         try:
-            # No topic: a warning belongs to the worker, not to any one listing.
+            # A warning belongs to the worker, not to any one listing.
             await self._post(
                 "sendMessage",
                 {"text": f"⚠️ project-pilot Betriebswarnung\n\n{text}"[:MAX_TEXT_CHARS]},

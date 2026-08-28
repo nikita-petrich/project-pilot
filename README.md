@@ -144,12 +144,14 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The Telegram topic**, opened by the worker itself: one forum topic per
-   match, carrying the card and a button to the listing on its board. Send-only
-   from the worker — no polling, no webhook, no inbound port — and delivery
-   never depends on a model judging a run worth reporting.
+1. **The Telegram channel post**, sent by the worker itself: one post per match
+   carrying the card and its three decisions. Telegram forwards each post into
+   the channel's linked discussion group and roots a comment thread on it, so a
+   project is one post you open into its own conversation. Send-only from the
+   worker — no polling, no webhook, no inbound port — and delivery never depends
+   on a model judging a run worth reporting.
 2. **The thread agent** (`project-pilot telegram-bot`), a full Claude Code agent
-   on the Claude Agent SDK that answers inside those topics. Reading runs
+   on the Claude Agent SDK that answers inside those threads. Reading runs
    freely; writing, running a command and sending ask for a button press first.
    Its domain layer is the MCP server next door, so profile, judging rules and
    writing style have one home. The proxy's site config, for the public

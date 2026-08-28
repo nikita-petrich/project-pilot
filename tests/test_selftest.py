@@ -23,9 +23,10 @@ class _FakeNotifier:
         self.matches: list[MatchMessage] = []
         self.warnings: list[str] = []
 
-    async def notify(self, message: MatchMessage) -> bool:
+    async def notify(self, message: MatchMessage) -> int | None:
         self.matches.append(message)
-        return self.ok
+        # The channel post's id, or nothing at all when the send failed.
+        return 5150 if self.ok else None
 
     async def notify_warning(self, text: str) -> bool:
         self.warnings.append(text)

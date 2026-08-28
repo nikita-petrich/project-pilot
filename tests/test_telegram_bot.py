@@ -1,4 +1,10 @@
-"""The bot process: parsing, the whitelist, routing by thread, chunking, approvals."""
+"""The bot process: parsing, the two chats, routing by comment thread, approvals.
+
+The architecture under test: a match is a post in the *channel*, Telegram
+forwards it into the linked *discussion group* by itself, and the forwarded copy
+roots the comment thread people write in. So almost every test here has two chat
+ids in play, and the interesting failures are the ones that mix them up.
+"""
 
 import asyncio
 import json
@@ -24,23 +30,27 @@ from project_pilot.telegram_bot import (
     NO_DESCRIPTION,
     OPEN_SLOT,
     SEEN,
-    TOPIC_NAME_CHARS,
-    UNNAMED_TOPIC,
+    Forward,
     Incoming,
     TelegramBot,
     chunk,
     expand_command,
     parse_callbacks,
+    parse_forwards,
     parse_updates,
+    post_link,
     question_text,
-    topic_name,
     update_ids,
 )
 
 BOT_TOKEN = "123456:AAtest"
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-CHAT_ID = "-1001234567890"
+CHANNEL = "-1001234567890"
+GROUP = "-1009876543210"
 ME = 4242
+# The card's id in the channel, and the id of Telegram's forwarded copy in the
+# discussion group — which is what every comment carries as its thread id.
+POST = 900
 THREAD = 77
 
 
@@ -91,8 +101,9 @@ def _update(
     text: str = "passt das?",
     user_id: int = ME,
     thread_id: int | None = THREAD,
-    chat_id: str = CHAT_ID,
+    chat_id: str = GROUP,
 ) -> dict[str, object]:
+    """A message someone typed in the discussion group."""
     message: dict[str, object] = {
         "message_id": update_id,
         "from": {"id": user_id},
@@ -104,14 +115,95 @@ def _update(
     return {"update_id": update_id, "message": message}
 
 
-def _bot(session_factory: async_sessionmaker[AsyncSession], agent: _FakeAgent) -> TelegramBot:
+def _forward(
+    update_id: int = 1,
+    *,
+    channel_message_id: int = POST,
+    root_id: int = THREAD,
+    chat_id: str = GROUP,
+) -> dict[str, object]:
+    """Telegram's own copy of a channel post, landing in the discussion group."""
+    return {
+        "update_id": update_id,
+        "message": {
+            "message_id": root_id,
+            "chat": {"id": int(chat_id)},
+            "sender_chat": {"id": int(CHANNEL), "type": "channel"},
+            "is_automatic_forward": True,
+            "forward_origin": {
+                "type": "channel",
+                "chat": {"id": int(CHANNEL), "type": "channel"},
+                "message_id": channel_message_id,
+            },
+            "text": "⭐ 87 · Senior Python Developer · ACME GmbH",
+        },
+    }
+
+
+def _press(
+    update_id: int, decision: str, request_id: str, *, user_id: int = ME
+) -> dict[str, object]:
+    """A permission answer — those buttons live in the discussion group."""
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"cb{update_id}",
+            "from": {"id": user_id},
+            "data": f"{decision}:{request_id}",
+            "message": {"message_id": 500, "chat": {"id": int(GROUP)}},
+        },
+    }
+
+
+def _card_press(
+    update_id: int,
+    action: str,
+    listing_id: int,
+    *,
+    user_id: int = ME,
+    message_id: int = POST,
+) -> dict[str, object]:
+    """A decision on a match card — those buttons live on the channel post."""
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"cb{update_id}",
+            "from": {"id": user_id},
+            "data": f"{action}:{listing_id}",
+            "message": {"message_id": message_id, "chat": {"id": int(CHANNEL)}},
+        },
+    }
+
+
+def _bot(
+    session_factory: async_sessionmaker[AsyncSession],
+    agent: _FakeAgent,
+    *,
+    group: str | None = GROUP,
+) -> TelegramBot:
     return TelegramBot(
         bot_token=BOT_TOKEN,
-        chat_id=CHAT_ID,
+        chat_id=CHANNEL,
         allowed_user_ids=[ME],
         agent=agent,  # type: ignore[arg-type]
         session_factory=session_factory,
+        group_chat_id=group,
     )
+
+
+def _sent(route: respx.Route, index: int = -1) -> dict[str, object]:
+    payload = json.loads(route.calls[index].request.read())
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _replied_to(payload: dict[str, object]) -> int | None:
+    """The message a send hangs under — how a comment thread is addressed."""
+    params = payload.get("reply_parameters")
+    if not isinstance(params, dict):
+        return None
+    target = params.get("message_id")
+    return target if isinstance(target, int) else None
 
 
 def _cosmetic() -> None:
@@ -170,26 +262,35 @@ async def _seed_listing(
         return listing.id
 
 
-async def _seed_thread(
+async def _seed_card(
     session_factory: async_sessionmaker[AsyncSession],
     *,
-    thread_id: int = THREAD,
+    channel_message_id: int = POST,
+    thread_id: int | None = THREAD,
     description: str = "",
 ) -> int:
+    """A match that has been posted, and whose comment thread is already known."""
     async with session_factory() as session:
         repo = Repository(session)
         listing, _ = await repo.upsert_listing(
             Listing(
                 source="freelancermap",
-                external_url=f"https://example.test/{thread_id}",
-                url_hash=f"h{thread_id}",
+                external_url=f"https://example.test/{channel_message_id}",
+                url_hash=f"h{channel_message_id}",
                 title="T",
                 description=description,
             )
         )
-        await repo.record_thread(listing.id, thread_id)
+        thread = await repo.record_channel_message(listing.id, channel_message_id)
+        if thread_id is not None:
+            await repo.bind_thread_id(thread, thread_id)
         await session.commit()
         return listing.id
+
+
+# --------------------------------------------------------------------------
+# Parsing
+# --------------------------------------------------------------------------
 
 
 def test_parse_updates_keeps_only_typed_messages() -> None:
@@ -206,9 +307,96 @@ def test_parse_updates_keeps_only_typed_messages() -> None:
     assert parsed[0].thread_id == THREAD
 
 
+def test_the_automatic_forward_is_never_read_as_a_human_message() -> None:
+    """Its text is the card itself — answering it would have the bot talk to itself."""
+    assert parse_updates({"result": [_forward(1)]}) == []
+
+
 def test_parse_updates_survives_junk() -> None:
     assert parse_updates({}) == []
     assert parse_updates({"result": "nonsense"}) == []
+
+
+def test_parse_forwards_ties_a_channel_post_to_its_comment_thread() -> None:
+    parsed = parse_forwards({"result": [_forward(3, channel_message_id=12, root_id=34)]})
+    assert parsed == [Forward(update_id=3, chat_id=int(GROUP), channel_message_id=12, root_id=34)]
+
+
+def test_parse_forwards_ignores_everything_that_is_not_one() -> None:
+    payload = {
+        "result": [
+            _update(1),  # a human's message
+            # A forward from a person, not the automatic one from a channel.
+            {
+                "update_id": 2,
+                "message": {
+                    "message_id": 9,
+                    "chat": {"id": int(GROUP)},
+                    "is_automatic_forward": True,
+                    "forward_origin": {"type": "user", "sender_user": {"id": 1}},
+                },
+            },
+            # Automatic, from a channel, but with no origin message to key on.
+            {
+                "update_id": 3,
+                "message": {
+                    "message_id": 9,
+                    "chat": {"id": int(GROUP)},
+                    "is_automatic_forward": True,
+                    "forward_origin": {"type": "channel"},
+                },
+            },
+        ]
+    }
+    assert parse_forwards(payload) == []
+    assert parse_forwards({}) == []
+
+
+def test_parse_callbacks_keeps_only_well_formed_answers() -> None:
+    payload = {
+        "result": [
+            _press(1, ALLOW, "abc"),
+            _press(2, "nonsense", "abc"),
+            {"update_id": 3, "callback_query": {"id": "x", "from": {"id": ME}, "data": "allow:"}},
+            {"update_id": 4, "message": {"text": "not a press"}},
+        ]
+    }
+    parsed = parse_callbacks(payload)
+    assert [(p.update_id, p.action, p.argument) for p in parsed] == [(1, ALLOW, "abc")]
+
+
+def test_a_press_carries_the_chat_it_happened_in() -> None:
+    """Card decisions arrive from the channel, permission answers from the group."""
+    card = parse_callbacks({"result": [_card_press(1, "accept", 5)]})[0]
+    assert (card.chat_id, card.message_id) == (int(CHANNEL), POST)
+    permission = parse_callbacks({"result": [_press(2, ALLOW, "abc")]})[0]
+    assert permission.chat_id == int(GROUP)
+
+
+def test_incoming_is_narrowed_to_what_routing_needs() -> None:
+    # The dataclass is the contract between parsing and routing.
+    message = parse_updates({"result": [_update(9)]})[0]
+    assert message == Incoming(
+        update_id=9,
+        chat_id=int(GROUP),
+        thread_id=THREAD,
+        user_id=ME,
+        text="passt das?",
+        # Carried so the answer can react on the very message it answers.
+        message_id=9,
+    )
+
+
+def test_update_ids_covers_what_neither_parser_takes() -> None:
+    payload = {
+        "result": [
+            _update(1),
+            {"update_id": 2, "message": {"new_chat_members": []}},
+            {"update_id": 3, "edited_message": {"text": "x"}},
+            {"nonsense": True},
+        ]
+    }
+    assert update_ids(payload) == [1, 2, 3]
 
 
 def test_chunk_splits_on_line_breaks() -> None:
@@ -225,11 +413,185 @@ def test_chunk_hard_splits_when_there_is_no_break() -> None:
     assert "".join(parts) == "x" * (CHUNK_CHARS * 2 + 10)
 
 
+def test_post_link_addresses_a_private_channel_and_nothing_else() -> None:
+    assert post_link(CHANNEL, 12) == "https://t.me/c/1234567890/12"
+    # A public @name or a personal chat has no /c/ form; no button beats a
+    # button that goes nowhere.
+    assert post_link("@somechannel", 12) is None
+
+
+def test_question_text_names_the_call() -> None:
+    assert question_text("Bash", "rm -rf /") == "🔐 Freigabe: Bash\nrm -rf /"
+    assert question_text("Read", "") == "🔐 Freigabe: Read"
+
+
+# --------------------------------------------------------------------------
+# Finding the discussion group
+# --------------------------------------------------------------------------
+
+
 @respx.mock
-async def test_a_message_in_a_known_thread_is_answered_there(
+async def test_the_discussion_group_is_read_off_the_channel(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    listing_id = await _seed_thread(session_factory)
+    # Telegram already knows which group is linked; a second setting could only
+    # disagree with it.
+    route = respx.post(f"{API}/getChat").respond(
+        200, json={"ok": True, "result": {"id": int(CHANNEL), "linked_chat_id": int(GROUP)}}
+    )
+    bot = _bot(session_factory, _FakeAgent(), group=None)
+
+    async with httpx.AsyncClient() as client:
+        assert await bot.resolve_group(client) == GROUP
+        assert await bot.resolve_group(client) == GROUP  # cached, not asked twice
+
+    assert route.call_count == 1
+    assert json.loads(route.calls.last.request.read())["chat_id"] == CHANNEL
+
+
+@respx.mock
+async def test_a_channel_without_a_discussion_group_is_reported_not_guessed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    respx.post(f"{API}/getChat").respond(200, json={"ok": True, "result": {"id": int(CHANNEL)}})
+    bot = _bot(session_factory, _FakeAgent(), group=None)
+
+    async with httpx.AsyncClient() as client:
+        assert await bot.resolve_group(client) is None
+
+
+@respx.mock
+async def test_the_group_is_asked_for_again_after_a_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A bot that came up before the group was linked must not stay deaf until
+    # someone restarts it.
+    route = respx.post(f"{API}/getChat")
+    route.side_effect = [
+        httpx.Response(500),
+        httpx.Response(
+            200, json={"ok": True, "result": {"id": int(CHANNEL), "linked_chat_id": int(GROUP)}}
+        ),
+    ]
+    bot = _bot(session_factory, _FakeAgent(), group=None)
+
+    async with httpx.AsyncClient() as client:
+        assert await bot.resolve_group(client) is None
+        assert await bot.resolve_group(client) == GROUP
+
+
+@respx.mock
+async def test_without_a_group_no_message_is_answered(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Answering a chat that may not be the linked group would be guessing.
+    respx.post(f"{API}/getChat").respond(500)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, agent, group=None), client) == 0
+
+    assert agent.calls == []
+    assert send.call_count == 0
+
+
+# --------------------------------------------------------------------------
+# The automatic forward, which is what makes a card routable
+# --------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_the_forward_binds_the_comment_thread_to_the_listing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_card(session_factory, thread_id=None)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_forward(1)]})
+
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, _FakeAgent()), client) == 1
+
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(THREAD)
+        assert thread is not None
+        assert thread.listing_id == listing_id
+        assert thread.channel_message_id == POST
+
+
+@respx.mock
+async def test_a_redelivered_forward_changes_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_card(session_factory, thread_id=None)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_forward(1), _forward(2)]})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(THREAD)
+        assert thread is not None
+
+
+@respx.mock
+async def test_a_forward_for_a_post_we_did_not_send_is_skipped(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Someone else's channel post, or one whose row was declined away.
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_forward(1, channel_message_id=4711)]}
+    )
+
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, _FakeAgent()), client) == 0
+
+    async with session_factory() as session:
+        assert await Repository(session).get_thread_by_thread_id(THREAD) is None
+
+
+@respx.mock
+async def test_a_forward_into_another_chat_is_ignored(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_card(session_factory, thread_id=None)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_forward(1, chat_id="-1005555555555")]}
+    )
+
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, _FakeAgent()), client) == 0
+
+
+@respx.mock
+async def test_a_forward_is_bound_before_a_comment_in_the_same_round_is_routed(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Both can arrive in one getUpdates response; order decides whether the
+    # first thing you type in a brand-new thread reaches its listing.
+    listing_id = await _seed_card(session_factory, thread_id=None)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_forward(1), _update(2, text="passt das?")]}
+    )
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert agent.calls[0][0] == listing_id
+
+
+# --------------------------------------------------------------------------
+# Answering in the comment thread
+# --------------------------------------------------------------------------
+
+
+@respx.mock
+async def test_a_comment_is_answered_in_its_own_thread(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"ok": True, "result": [_update(5)]})
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
@@ -239,16 +601,37 @@ async def test_a_message_in_a_known_thread_is_answered_there(
         assert await _poll(_bot(session_factory, agent), client) == 1
 
     assert agent.calls[0][0] == listing_id  # routed to the thread's listing
-    payload = json.loads(send.calls.last.request.read())
-    assert payload["message_thread_id"] == THREAD
+    payload = _sent(send)
+    assert payload["chat_id"] == GROUP  # the group, never the channel
     assert payload["text"] == "Guter Match."
+    # A discussion group has no forum topics: the thread is addressed by
+    # replying to its root, not by a message_thread_id.
+    assert _replied_to(payload) == THREAD
+    assert "message_thread_id" not in payload
+
+
+@respx.mock
+async def test_a_reply_survives_a_root_that_was_deleted_mid_turn(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_card(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(5)]})
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    params = _sent(send)["reply_parameters"]
+    assert isinstance(params, dict)
+    # Losing the thread is acceptable; losing the answer is not.
+    assert params["allow_sending_without_reply"] is True
 
 
 @respx.mock
 async def test_the_session_carries_over_to_the_next_message(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
     agent = _FakeAgent()
@@ -261,7 +644,7 @@ async def test_the_session_carries_over_to_the_next_message(
         await _poll(bot, client)
 
     # The first call opens a session; the second continues it rather than
-    # starting the topic over.
+    # starting the thread over.
     assert [call[1] for call in agent.calls] == [None, "sess-1"]
 
 
@@ -269,8 +652,8 @@ async def test_the_session_carries_over_to_the_next_message(
 async def test_a_failed_turn_still_keeps_its_session(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # The session exists either way; losing its id would restart the topic.
-    await _seed_thread(session_factory)
+    # The session exists either way; losing its id would restart the thread.
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
@@ -290,7 +673,7 @@ async def test_a_stranger_is_ignored_without_a_reply(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # Answering would confirm the bot is here and spend tokens on a stranger.
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, user_id=999)]})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
@@ -303,16 +686,28 @@ async def test_a_stranger_is_ignored_without_a_reply(
 
 
 @respx.mock
-async def test_a_message_in_the_main_area_gets_a_thread_of_its_own(
+async def test_a_message_from_another_chat_is_ignored(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Otherwise the answer, its steps and the next thing you drop there all
-    # interleave in one growing chat.
     respx.post(f"{API}/getUpdates").respond(
-        200, json={"result": [_update(1, thread_id=None, text="prüf mal https://x.test/p")]}
+        200, json={"result": [_update(1, chat_id="-1007777777777")]}
     )
-    opened = respx.post(f"{API}/createForumTopic").respond(
-        200, json={"ok": True, "result": {"message_thread_id": 8080}}
+    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+
+    async with httpx.AsyncClient() as client:
+        assert await _poll(_bot(session_factory, _FakeAgent()), client) == 0
+
+    assert send.call_count == 0
+
+
+@respx.mock
+async def test_a_message_in_the_group_itself_is_answered_where_it_stands(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # This is how you bring your own project: write in the group, and the answer
+    # hangs under what you wrote rather than floating free below it.
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_update(11, thread_id=None, text="prüf mal https://x.test/p")]}
     )
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
@@ -320,59 +715,22 @@ async def test_a_message_in_the_main_area_gets_a_thread_of_its_own(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    assert json.loads(opened.calls.last.request.read())["name"] == "prüf mal https://x.test/p"
-    posted = [json.loads(call.request.read()) for call in send.calls]
-    # A pointer stays in the main area, so the new thread is one tap away.
-    assert posted[0]["text"] == "→ prüf mal https://x.test/p"
-    assert "message_thread_id" not in posted[0]
-    assert posted[0]["reply_markup"]["inline_keyboard"][0][0]["url"].endswith("/8080")
-    # What was written is repeated in the thread, so it reads on its own.
-    assert posted[1]["text"] == "prüf mal https://x.test/p"
-    assert all(entry["message_thread_id"] == 8080 for entry in posted[1:])
+    payload = _sent(send)
+    assert payload["chat_id"] == GROUP
+    assert _replied_to(payload) == 11  # the human's own message
     assert agent.calls[0][0] is None  # no listing yet — the agent ingests it
 
     async with session_factory() as session:
-        thread = await Repository(session).get_thread_by_thread_id(8080)
+        thread = await Repository(session).get_thread_by_thread_id(GENERAL)
         assert thread is not None
         assert thread.session_id == "sess-1"
 
 
 @respx.mock
-async def test_a_chat_that_cannot_hold_topics_is_answered_where_it_is(
+async def test_a_thread_with_no_listing_yet_is_answered_all_the_same(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Not a forum, or no Manage Topics: answering in place beats dropping it.
-    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=None)]})
-    respx.post(f"{API}/createForumTopic").respond(400, json={"ok": False})
-    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
-
-    agent = _FakeAgent()
-    async with httpx.AsyncClient() as client:
-        await _poll(_bot(session_factory, agent), client)
-
-    assert json.loads(send.calls.last.request.read())["text"] == "Antwort."
-    assert "message_thread_id" not in json.loads(send.calls.last.request.read())
-
-    async with session_factory() as session:
-        assert await Repository(session).get_thread_by_thread_id(GENERAL) is not None
-
-
-def test_a_topic_is_named_after_what_was_written() -> None:
-    assert topic_name("prüf mal das hier") == "prüf mal das hier"
-    # The command that started it is not what the thread is about.
-    assert topic_name("/check_project@a_bot Senior Python Dev") == "Senior Python Dev"
-    assert topic_name("/check_project") == UNNAMED_TOPIC
-    long = topic_name("x" * 200)
-    assert len(long) <= TOPIC_NAME_CHARS + 2
-    assert long.endswith("…")
-
-
-@respx.mock
-async def test_a_topic_you_opened_yourself_is_answered_without_a_listing(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    # This is how you bring your own project description: open a topic, paste
-    # it, and the agent ingests it rather than refusing to talk.
+    # A comment thread whose forward has not been seen: talk, do not refuse.
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=4321)]})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
@@ -381,7 +739,7 @@ async def test_a_topic_you_opened_yourself_is_answered_without_a_listing(
         await _poll(_bot(session_factory, agent), client)
 
     assert agent.calls[0][0] is None
-    assert json.loads(send.calls.last.request.read())["message_thread_id"] == 4321
+    assert _replied_to(_sent(send)) == 4321
 
     async with session_factory() as session:
         thread = await Repository(session).get_thread_by_thread_id(4321)
@@ -390,7 +748,7 @@ async def test_a_topic_you_opened_yourself_is_answered_without_a_listing(
 
 
 @respx.mock
-async def test_a_command_in_a_listingless_topic_names_what_is_still_missing(
+async def test_a_command_without_a_listing_names_what_is_still_missing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     respx.post(f"{API}/getUpdates").respond(
@@ -421,10 +779,40 @@ async def test_the_offset_advances_past_dropped_updates(
 
 
 @respx.mock
+async def test_an_update_nobody_acts_on_still_moves_the_offset(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Telegram redelivers anything unconfirmed at once, so an update left
+    # behind spins the poll loop forever and nothing newer is ever reached.
+    service = {"update_id": 41, "message": {"new_chat_members": []}}
+    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": [service]})
+
+    bot = _bot(session_factory, _FakeAgent())
+    async with httpx.AsyncClient() as client:
+        assert await _poll(bot, client) == 0
+        await bot.poll_once(client)
+
+    assert json.loads(updates.calls.last.request.read())["offset"] == 42
+
+
+@respx.mock
+async def test_only_the_two_kinds_of_update_are_requested(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": []})
+
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, _FakeAgent()), client)
+
+    asked = json.loads(updates.calls.last.request.read())
+    assert asked["allowed_updates"] == ["message", "callback_query"]
+
+
+@respx.mock
 async def test_a_long_answer_is_chunked(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
@@ -437,49 +825,9 @@ async def test_a_long_answer_is_chunked(
     assert all(len(json.loads(call.request.read())["text"]) <= CHUNK_CHARS for call in send.calls)
 
 
-def test_incoming_is_narrowed_to_what_routing_needs() -> None:
-    # The dataclass is the contract between parsing and routing.
-    message = parse_updates({"result": [_update(9)]})[0]
-    assert message == Incoming(
-        update_id=9,
-        chat_id=int(CHAT_ID),
-        thread_id=THREAD,
-        user_id=ME,
-        text="passt das?",
-        # Carried so the answer can react on the very message it answers.
-        message_id=9,
-    )
-
-
-def _press(
-    update_id: int, decision: str, request_id: str, *, user_id: int = ME
-) -> dict[str, object]:
-    return {
-        "update_id": update_id,
-        "callback_query": {
-            "id": f"cb{update_id}",
-            "from": {"id": user_id},
-            "data": f"{decision}:{request_id}",
-        },
-    }
-
-
-def test_parse_callbacks_keeps_only_well_formed_answers() -> None:
-    payload = {
-        "result": [
-            _press(1, ALLOW, "abc"),
-            _press(2, "nonsense", "abc"),
-            {"update_id": 3, "callback_query": {"id": "x", "from": {"id": ME}, "data": "allow:"}},
-            {"update_id": 4, "message": {"text": "not a press"}},
-        ]
-    }
-    parsed = parse_callbacks(payload)
-    assert [(p.update_id, p.action, p.argument) for p in parsed] == [(1, ALLOW, "abc")]
-
-
-def test_question_text_names_the_call() -> None:
-    assert question_text("Bash", "rm -rf /") == "🔐 Freigabe: Bash\nrm -rf /"
-    assert question_text("Read", "") == "🔐 Freigabe: Read"
+# --------------------------------------------------------------------------
+# Permission questions
+# --------------------------------------------------------------------------
 
 
 @respx.mock
@@ -488,7 +836,7 @@ async def test_a_tool_that_is_not_pre_approved_asks_in_the_thread(
 ) -> None:
     # The press that answers the question arrives through the same getUpdates
     # loop, so the answer must not be awaited inside it.
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
     answered = respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
@@ -503,10 +851,12 @@ async def test_a_tool_that_is_not_pre_approved_asks_in_the_thread(
         _cosmetic()
         await bot.poll_once(client)  # dispatches; the run stops on the question
         await _wait_for(lambda: sent.call_count > 0)
-        question = json.loads(sent.calls.last.request.read())
-        request_id = question["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[
-            1
-        ]
+        question = _sent(sent)
+        markup = question["reply_markup"]
+        assert isinstance(markup, dict)
+        rows = markup["inline_keyboard"]
+        assert isinstance(rows, list)
+        request_id = rows[0][0]["callback_data"].split(":")[1]
         respx.post(f"{API}/getUpdates").respond(
             200, json={"result": [_press(2, ALLOW, request_id)]}
         )
@@ -514,7 +864,8 @@ async def test_a_tool_that_is_not_pre_approved_asks_in_the_thread(
         await bot.drain()
 
     assert question["text"] == "🔐 Freigabe: Bash\nls -la"
-    assert question["message_thread_id"] == THREAD
+    assert question["chat_id"] == GROUP  # asked where you are, not in the channel
+    assert _replied_to(question) == THREAD
     assert agent.approvals == [True]
     assert answered.call_count == 1
 
@@ -523,7 +874,7 @@ async def test_a_tool_that_is_not_pre_approved_asks_in_the_thread(
 async def test_a_refused_tool_comes_back_as_a_no(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
     edited = respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
@@ -538,22 +889,29 @@ async def test_a_refused_tool_comes_back_as_a_no(
         _cosmetic()
         await bot.poll_once(client)
         await _wait_for(lambda: sent.call_count > 0)
-        data = json.loads(sent.calls.last.request.read())
-        request_id = data["reply_markup"]["inline_keyboard"][0][1]["callback_data"].split(":")[1]
+        data = _sent(sent)
+        markup = data["reply_markup"]
+        assert isinstance(markup, dict)
+        rows = markup["inline_keyboard"]
+        assert isinstance(rows, list)
+        request_id = rows[0][1]["callback_data"].split(":")[1]
         respx.post(f"{API}/getUpdates").respond(200, json={"result": [_press(2, DENY, request_id)]})
         await bot.poll_once(client)
         await bot.drain()
 
     assert agent.approvals == [False]
     # The question is rewritten into its answer, so no live buttons are left.
-    assert "abgelehnt" in json.loads(edited.calls.last.request.read())["text"]
+    answer = _sent(edited)
+    assert isinstance(answer["text"], str)
+    assert "abgelehnt" in answer["text"]
+    assert answer["chat_id"] == GROUP
 
 
 @respx.mock
 async def test_a_stranger_cannot_answer_a_permission_question(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
@@ -568,8 +926,12 @@ async def test_a_stranger_cannot_answer_a_permission_question(
         _cosmetic()
         await bot.poll_once(client)
         await _wait_for(lambda: sent.call_count > 0)
-        data = json.loads(sent.calls.last.request.read())
-        request_id = data["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[1]
+        data = _sent(sent)
+        markup = data["reply_markup"]
+        assert isinstance(markup, dict)
+        rows = markup["inline_keyboard"]
+        assert isinstance(rows, list)
+        request_id = rows[0][0]["callback_data"].split(":")[1]
         respx.post(f"{API}/getUpdates").respond(
             200, json={"result": [_press(2, ALLOW, request_id, user_id=999)]}
         )
@@ -591,7 +953,7 @@ async def test_an_unanswered_question_refuses_instead_of_waiting(
     # A question nobody answers must not hold the turn open forever, and it must
     # not fall open either.
     monkeypatch.setattr(telegram_bot, "APPROVAL_TIMEOUT_S", 0.05)
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     edited = respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
@@ -602,7 +964,9 @@ async def test_an_unanswered_question_refuses_instead_of_waiting(
         await _poll(_bot(session_factory, agent), client)
 
     assert agent.approvals == [False]
-    assert "abgelehnt" in json.loads(edited.calls.last.request.read())["text"]
+    text = _sent(edited)["text"]
+    assert isinstance(text, str)
+    assert "abgelehnt" in text
 
 
 @respx.mock
@@ -610,7 +974,7 @@ async def test_a_question_telegram_refuses_counts_as_a_no(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # No question means no consent; allowing anyway would defeat the point.
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendMessage").respond(400, json={"ok": False})
@@ -620,6 +984,11 @@ async def test_a_question_telegram_refuses_counts_as_a_no(
         await _poll(_bot(session_factory, agent), client)
 
     assert agent.approvals == [False]
+
+
+# --------------------------------------------------------------------------
+# The `/` menu
+# --------------------------------------------------------------------------
 
 
 @respx.mock
@@ -676,7 +1045,7 @@ def test_plain_text_and_unknown_commands_are_left_alone() -> None:
 async def test_a_command_reaches_the_agent_as_the_workflow_body(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    listing_id = await _seed_thread(session_factory)
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_update(1, text="/check_project")]}
     )
@@ -689,39 +1058,22 @@ async def test_a_command_reaches_the_agent_as_the_workflow_body(
 
     sent = agent.calls[0][2]
     assert sent.startswith("Judge whether this project listing is a genuine match")
-    # The slot is filled with the topic's own listing, not left as a placeholder.
+    # The slot is filled with the thread's own listing, not left as a placeholder.
     assert f"Listing {listing_id}" in sent
     assert "{listing}" not in sent
 
 
-def _card_press(
-    update_id: int,
-    action: str,
-    listing_id: int,
-    *,
-    user_id: int = ME,
-    thread_id: int | None = THREAD,
-) -> dict[str, object]:
-    message: dict[str, object] = {"message_id": 900}
-    if thread_id is not None:
-        message["message_thread_id"] = thread_id
-    return {
-        "update_id": update_id,
-        "callback_query": {
-            "id": f"cb{update_id}",
-            "from": {"id": user_id},
-            "data": f"{action}:{listing_id}",
-            "message": message,
-        },
-    }
+# --------------------------------------------------------------------------
+# The three decisions on a card
+# --------------------------------------------------------------------------
 
 
 @respx.mock
-async def test_describe_posts_the_listing_text_into_the_topic(
+async def test_describe_posts_the_listing_text_into_the_thread(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # The card leaves the description out; this button is where it lives.
-    listing_id = await _seed_thread(session_factory, description="Volltext der Ausschreibung.")
+    listing_id = await _seed_card(session_factory, description="Volltext der Ausschreibung.")
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_card_press(1, "describe", listing_id)]}
     )
@@ -733,16 +1085,18 @@ async def test_describe_posts_the_listing_text_into_the_topic(
     async with httpx.AsyncClient() as client:
         assert await _poll(_bot(session_factory, _FakeAgent()), client) == 1
 
-    payload = json.loads(sent.calls.last.request.read())
+    payload = _sent(sent)
     assert payload["text"] == "Volltext der Ausschreibung."
-    assert payload["message_thread_id"] == THREAD
+    # The press happened on the channel post; the answer belongs in its thread.
+    assert payload["chat_id"] == GROUP
+    assert _replied_to(payload) == THREAD
 
 
 @respx.mock
 async def test_describe_says_so_when_there_is_no_description(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    listing_id = await _seed_thread(session_factory)
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_card_press(1, "describe", listing_id)]}
     )
@@ -754,63 +1108,77 @@ async def test_describe_says_so_when_there_is_no_description(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, _FakeAgent()), client)
 
-    assert json.loads(sent.calls.last.request.read())["text"] == NO_DESCRIPTION
+    assert _sent(sent)["text"] == NO_DESCRIPTION
 
 
 @respx.mock
-async def test_decline_deletes_the_topic_and_forgets_it(
+async def test_decline_deletes_the_post_and_the_thread_and_forgets_both(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # A turned-down project leaves nothing on screen; the verdict stays in the DB.
-    listing_id = await _seed_thread(session_factory)
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_card_press(1, "decline", listing_id)]}
     )
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
-    deleted = respx.post(f"{API}/deleteForumTopic").respond(200, json={"ok": True})
+    deleted = respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
-        await _poll(_bot(session_factory, agent), client)
+        _cosmetic()
+        assert await _bot(session_factory, agent).poll_once(client) == 1
 
-    assert json.loads(deleted.calls.last.request.read())["message_thread_id"] == THREAD
+    gone = [json.loads(call.request.read()) for call in deleted.calls]
+    # The card in the channel, and the forwarded copy that roots the thread —
+    # deleting that root is what makes the thread itself disappear.
+    assert gone == [
+        {"chat_id": CHANNEL, "message_id": POST},
+        {"chat_id": GROUP, "message_id": THREAD},
+    ]
     assert agent.calls == []  # declining costs no tokens
-    # The mapping goes too: Telegram reuses topic ids, and a stale row would
-    # point the next conversation at this listing.
+
     async with session_factory() as session:
-        assert await Repository(session).get_thread_by_thread_id(THREAD) is None
+        repo = Repository(session)
+        assert await repo.get_thread_by_thread_id(THREAD) is None
+        assert await repo.get_thread_by_channel_message(POST) is None
+        # The listing itself, and its verdict, are untouched.
+        assert await repo.get_listing(listing_id) is not None
 
 
 @respx.mock
-async def test_decline_in_the_main_area_deletes_the_card_itself(
+async def test_decline_before_the_forward_lands_still_deletes_the_post(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # A test-match card has no topic to delete, so the message goes on its own.
-    listing_id = await _seed_listing(session_factory)
+    listing_id = await _seed_card(session_factory, thread_id=None)
     respx.post(f"{API}/getUpdates").respond(
-        200, json={"result": [_card_press(1, "decline", listing_id, thread_id=None)]}
+        200, json={"result": [_card_press(1, "decline", listing_id)]}
     )
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
     deleted = respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
 
     async with httpx.AsyncClient() as client:
-        await _poll(_bot(session_factory, _FakeAgent()), client)
+        _cosmetic()
+        await _bot(session_factory, _FakeAgent()).poll_once(client)
 
-    assert deleted.call_count == 1
+    assert [json.loads(call.request.read()) for call in deleted.calls] == [
+        {"chat_id": CHANNEL, "message_id": POST}
+    ]
 
 
 @respx.mock
-async def test_accept_starts_the_drafting_workflow_in_the_topic(
+async def test_accept_starts_the_drafting_workflow_in_the_thread(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    listing_id = await _seed_thread(session_factory)
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(
         200, json={"result": [_card_press(1, "accept", listing_id)]}
     )
     respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
-    respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
+    cleared = respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
     respx.post(f"{API}/sendChatAction").respond(200, json={"ok": True})
-    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+    send = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 5}}
+    )
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
@@ -819,18 +1187,46 @@ async def test_accept_starts_the_drafting_workflow_in_the_topic(
     assert agent.calls[0][0] == listing_id
     assert agent.calls[0][2].startswith("Draft an application for this listing:")
     assert f"Listing {listing_id}" in agent.calls[0][2]
+    # The buttons come off the channel post, and the work happens in the thread.
+    assert _sent(cleared) == {"chat_id": CHANNEL, "message_id": POST}
+    assert _sent(send)["chat_id"] == GROUP
+    assert _replied_to(_sent(send)) == THREAD
 
 
 @respx.mock
-async def test_a_stranger_cannot_decide_a_card(
+async def test_accept_before_the_forward_lands_answers_in_the_group(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    listing_id = await _seed_thread(session_factory)
+    # A few seconds at most, and an answer in the group beats no answer at all.
+    listing_id = await _seed_card(session_factory, thread_id=None)
     respx.post(f"{API}/getUpdates").respond(
-        200, json={"result": [_card_press(1, "accept", listing_id, user_id=999)]}
+        200, json={"result": [_card_press(1, "accept", listing_id)]}
     )
+    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
+    send = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 5}}
+    )
+
+    agent = _FakeAgent()
+    async with httpx.AsyncClient() as client:
+        await _poll(_bot(session_factory, agent), client)
+
+    assert agent.calls[0][0] == listing_id
+    assert _sent(send)["chat_id"] == GROUP
+    assert _replied_to(_sent(send)) is None
+
+
+@respx.mock
+async def test_a_card_press_with_a_bad_listing_id_is_dropped(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    press = _card_press(1, "accept", 0)
+    callback = press["callback_query"]
+    assert isinstance(callback, dict)
+    callback["data"] = "accept:nonsense"
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [press]})
     answered = respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
-    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
@@ -841,27 +1237,29 @@ async def test_a_stranger_cannot_decide_a_card(
 
 
 @respx.mock
-async def test_accept_works_on_a_card_in_the_general_area(
+async def test_a_stranger_cannot_decide_a_card(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # test-match puts its card there; General holds a conversation like any topic.
-    listing_id = await _seed_thread(session_factory)
-    press = _card_press(1, "accept", listing_id)
-    press["callback_query"]["message"] = {"message_id": 900}  # type: ignore[index]
-    respx.post(f"{API}/getUpdates").respond(200, json={"result": [press]})
-    respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
-    respx.post(f"{API}/editMessageReplyMarkup").respond(200, json={"ok": True})
-    sent = respx.post(f"{API}/sendMessage").respond(
-        200, json={"ok": True, "result": {"message_id": 5}}
+    listing_id = await _seed_card(session_factory)
+    respx.post(f"{API}/getUpdates").respond(
+        200, json={"result": [_card_press(1, "accept", listing_id, user_id=999)]}
     )
+    answered = respx.post(f"{API}/answerCallbackQuery").respond(200, json={"ok": True})
+    respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 5}})
+    deleted = respx.post(f"{API}/deleteMessage").respond(200, json={"ok": True})
 
     agent = _FakeAgent()
     async with httpx.AsyncClient() as client:
-        await _poll(_bot(session_factory, agent), client)
+        assert await _poll(_bot(session_factory, agent), client) == 0
 
-    assert agent.calls[0][0] == listing_id
-    assert agent.calls[0][2].startswith("Draft an application for this listing:")
-    assert "message_thread_id" not in json.loads(sent.calls.last.request.read())
+    assert agent.calls == []
+    assert answered.call_count == 0
+    assert deleted.call_count == 0  # and nothing of his was deleted either
+
+
+# --------------------------------------------------------------------------
+# Progress: reactions and the status line
+# --------------------------------------------------------------------------
 
 
 @respx.mock
@@ -869,7 +1267,7 @@ async def test_a_message_is_marked_seen_and_then_done(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # The turn can run for minutes; the reaction is the instant "I have it".
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 2}})
     reacted = respx.post(f"{API}/setMessageReaction").respond(200, json={"ok": True})
@@ -877,9 +1275,14 @@ async def test_a_message_is_marked_seen_and_then_done(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, _FakeAgent()), client)
 
-    emojis = [json.loads(call.request.read())["reaction"] for call in reacted.calls]
-    assert emojis == [[{"type": "emoji", "emoji": SEEN}], [{"type": "emoji", "emoji": DONE}]]
-    assert json.loads(reacted.calls.last.request.read())["message_id"] == 1
+    marks = [json.loads(call.request.read()) for call in reacted.calls]
+    assert [mark["reaction"] for mark in marks] == [
+        [{"type": "emoji", "emoji": SEEN}],
+        [{"type": "emoji", "emoji": DONE}],
+    ]
+    # On the message in the group, not on the card in the channel.
+    assert {mark["chat_id"] for mark in marks} == {GROUP}
+    assert marks[-1]["message_id"] == 1
 
 
 @respx.mock
@@ -887,7 +1290,7 @@ async def test_a_failed_turn_clears_the_reaction_rather_than_marking_it_done(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # A thumb up over an error message would be a lie.
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 2}})
     reacted = respx.post(f"{API}/setMessageReaction").respond(200, json={"ok": True})
@@ -895,7 +1298,7 @@ async def test_a_failed_turn_clears_the_reaction_rather_than_marking_it_done(
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, _FakeAgent(text="⚠️ kaputt", ok=False)), client)
 
-    assert json.loads(reacted.calls.last.request.read())["reaction"] == []
+    assert _sent(reacted)["reaction"] == []
 
 
 @respx.mock
@@ -903,7 +1306,7 @@ async def test_each_step_moves_one_status_line(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     # One line that changes, not a wall of status messages.
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     sent = respx.post(f"{API}/sendMessage").respond(
         200, json={"ok": True, "result": {"message_id": 55}}
@@ -916,17 +1319,17 @@ async def test_each_step_moves_one_status_line(
         await _poll(_bot(session_factory, _FakeAgent(steps=steps)), client)
 
     # The first step opens the line, the second edits it.
-    assert json.loads(sent.calls[0].request.read())["text"] == f"⏳ {steps[0]} …"
-    assert json.loads(edited.calls.last.request.read())["text"] == f"⏳ {steps[1]} …"
-    # And it is taken away once the answer is there.
-    assert json.loads(deleted.calls.last.request.read())["message_id"] == 55
+    assert _sent(sent, 0)["text"] == f"⏳ {steps[0]} …"
+    assert _sent(edited)["text"] == f"⏳ {steps[1]} …"
+    # And it is taken away once the answer is there — in the group.
+    assert _sent(deleted) == {"chat_id": GROUP, "message_id": 55}
 
 
 @respx.mock
 async def test_the_same_step_twice_in_a_row_is_not_reported_again(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    await _seed_thread(session_factory)
+    await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     respx.post(f"{API}/sendMessage").respond(200, json={"ok": True, "result": {"message_id": 55}})
     edited = respx.post(f"{API}/editMessageText").respond(200, json={"ok": True})
@@ -938,41 +1341,70 @@ async def test_the_same_step_twice_in_a_row_is_not_reported_again(
     assert edited.call_count == 0
 
 
+# --------------------------------------------------------------------------
+# A project you brought yourself gets a post of its own
+# --------------------------------------------------------------------------
+
+
 @respx.mock
-async def test_the_card_appears_once_the_agent_takes_a_listing_on(
+async def test_a_listing_the_agent_takes_on_gets_its_own_channel_post(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Paste a link in a thread of your own and you get the same card a scan
-    # match gets, built from the stored verdict rather than written by the model.
+    # Paste a link in the group and the project ends up exactly where a scanned
+    # one does: one post in the channel, its own thread, the same three buttons.
     listing_id = await _seed_listing(session_factory, score=87)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=4321)]})
-    send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
+    send = respx.post(f"{API}/sendMessage").respond(
+        200, json={"ok": True, "result": {"message_id": 4242}}
+    )
 
     agent = _FakeAgent(acted_on=listing_id)
     async with httpx.AsyncClient() as client:
         await _poll(_bot(session_factory, agent), client)
 
-    card = json.loads(send.calls[0].request.read())
+    card = _sent(send, 0)
+    assert card["chat_id"] == CHANNEL
+    assert isinstance(card["text"], str)
     assert "🏢 Company: ACME GmbH" in card["text"]
     assert "🎯 Score: 87/100" in card["text"]
-    assert [b["callback_data"] for row in card["reply_markup"]["inline_keyboard"] for b in row] == [
+    markup = card["reply_markup"]
+    assert isinstance(markup, dict)
+    rows = markup["inline_keyboard"]
+    assert isinstance(rows, list)
+    assert [button["callback_data"] for row in rows for button in row] == [
         f"accept:{listing_id}",
         f"decline:{listing_id}",
         f"describe:{listing_id}",
     ]
-    # And the thread is now about that listing, so the next message knows it.
+
+    # A link back, so the conversation you are in is not a dead end.
+    pointer = _sent(send, 1)
+    assert pointer["chat_id"] == GROUP
+    pointer_markup = pointer["reply_markup"]
+    assert isinstance(pointer_markup, dict)
+    pointer_rows = pointer_markup["inline_keyboard"]
+    assert isinstance(pointer_rows, list)
+    assert pointer_rows[0][0]["url"] == "https://t.me/c/1234567890/4242"
+
     async with session_factory() as session:
-        thread = await Repository(session).get_thread_by_thread_id(4321)
+        repo = Repository(session)
+        thread = await repo.get_thread_by_thread_id(4321)
         assert thread is not None
         assert thread.listing_id == listing_id
+        # One row, carrying both: the conversation it started in and the post
+        # that now represents it. A second row would split the match in two.
+        assert thread.channel_message_id == 4242
+        stored = await repo.get_thread_by_channel_message(4242)
+        assert stored is not None
+        assert stored.id == thread.id
 
 
 @respx.mock
 async def test_the_card_is_not_repeated_for_a_thread_that_already_has_its_listing(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # A match's own topic was opened with its card; showing it again is noise.
-    listing_id = await _seed_thread(session_factory)
+    # A match's own thread was opened by its card; showing it again is noise.
+    listing_id = await _seed_card(session_factory)
     respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1)]})
     send = respx.post(f"{API}/sendMessage").respond(200, json={"ok": True})
 
@@ -983,43 +1415,20 @@ async def test_the_card_is_not_repeated_for_a_thread_that_already_has_its_listin
     assert [json.loads(call.request.read())["text"] for call in send.calls] == ["Antwort."]
 
 
-def test_update_ids_covers_what_neither_parser_takes() -> None:
-    payload = {
-        "result": [
-            _update(1),
-            {"update_id": 2, "message": {"forum_topic_created": {"name": "f"}}},
-            {"update_id": 3, "edited_message": {"text": "x"}},
-            {"nonsense": True},
-        ]
-    }
-    assert update_ids(payload) == [1, 2, 3]
-
-
 @respx.mock
-async def test_an_update_nobody_acts_on_still_moves_the_offset(
+async def test_a_card_telegram_refuses_leaves_no_half_written_row(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # Telegram redelivers anything unconfirmed at once, so an update left
-    # behind spins the poll loop forever and nothing newer is ever reached.
-    service = {"update_id": 41, "message": {"forum_topic_created": {"name": "f"}}}
-    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": [service]})
+    listing_id = await _seed_listing(session_factory)
+    respx.post(f"{API}/getUpdates").respond(200, json={"result": [_update(1, thread_id=4321)]})
+    respx.post(f"{API}/sendMessage").respond(400, json={"ok": False})
 
-    bot = _bot(session_factory, _FakeAgent())
+    agent = _FakeAgent(acted_on=listing_id)
     async with httpx.AsyncClient() as client:
-        assert await _poll(bot, client) == 0
-        await bot.poll_once(client)
+        await _poll(_bot(session_factory, agent), client)
 
-    assert json.loads(updates.calls.last.request.read())["offset"] == 42
-
-
-@respx.mock
-async def test_only_the_two_kinds_of_update_are_requested(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    updates = respx.post(f"{API}/getUpdates").respond(200, json={"result": []})
-
-    async with httpx.AsyncClient() as client:
-        await _poll(_bot(session_factory, _FakeAgent()), client)
-
-    asked = json.loads(updates.calls.last.request.read())
-    assert asked["allowed_updates"] == ["message", "callback_query"]
+    async with session_factory() as session:
+        thread = await Repository(session).get_thread_by_thread_id(4321)
+        assert thread is not None
+        assert thread.listing_id == listing_id
+        assert thread.channel_message_id is None  # nothing was posted
