@@ -241,25 +241,35 @@ class ContactLead(Base):
 
 
 class TelegramThread(Base):
-    """The forum topic a match got, and the listing it belongs to.
+    """One match's channel post, its comment thread, and the listing behind them.
 
-    Telegram's ``message_thread_id`` is the handle for everything that happens in
-    that topic: sending into it now, and routing an incoming message back to its
-    listing later. The unique constraint on ``listing_id`` is what keeps a
-    repeated run from opening a second topic for the same project.
+    A match is posted to the channel; Telegram forwards that post into the
+    linked discussion group by itself, and the forwarded copy is the root of the
+    comment thread people write in. Those are two different ids in two different
+    chats, and this row is what ties them to each other and to the listing.
+
+    ``channel_message_id`` is known the moment the card is sent.
+    ``thread_id`` — the root's id in the discussion group — is only known when
+    Telegram's automatic forward comes back through ``getUpdates`` a moment
+    later, so it starts null and is filled in then. The unique constraint on
+    ``listing_id`` is what keeps a repeated run from posting a second card for
+    the same project.
     """
 
     __tablename__ = "telegram_threads"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    # Null for a topic a human opened themselves: it is a conversation with the
-    # agent that has no listing yet, and may never get one. Postgres allows any
-    # number of nulls under a unique constraint, so the guard against a second
-    # topic for the same match still holds where it matters.
+    # Null for a thread a human started themselves: it is a conversation with
+    # the agent that has no listing yet, and may never get one. Postgres allows
+    # any number of nulls under a unique constraint, so the guard against a
+    # second card for the same match still holds where it matters.
     listing_id: Mapped[int | None] = mapped_column(
         ForeignKey("listings.id", ondelete="CASCADE"), unique=True, default=None
     )
-    thread_id: Mapped[int] = mapped_column(BigInteger, index=True, unique=True)
+    channel_message_id: Mapped[int | None] = mapped_column(
+        BigInteger, index=True, unique=True, default=None
+    )
+    thread_id: Mapped[int | None] = mapped_column(BigInteger, index=True, unique=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     # The agent session this topic continues in. The transcript itself belongs

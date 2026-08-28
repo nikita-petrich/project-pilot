@@ -3,7 +3,7 @@
 from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 from sqlalchemy.orm import selectinload
 
@@ -221,26 +221,61 @@ class Repository:
         return result.first() is not None
 
     async def get_thread(self, listing_id: int) -> TelegramThread | None:
-        """The forum topic recorded for this listing, or None if it has none yet."""
+        """The channel post recorded for this listing, or None if it has none yet."""
         result = await self._session.scalars(
             select(TelegramThread).where(TelegramThread.listing_id == listing_id)
         )
         return result.first()
 
-    async def record_thread(self, listing_id: int, thread_id: int) -> TelegramThread:
-        """Record the topic a listing got, or return the one it already had.
+    async def record_channel_message(
+        self, listing_id: int, channel_message_id: int
+    ) -> TelegramThread:
+        """Record the channel post a listing got, or return the one it had.
 
-        Idempotent on purpose: a rerun that reaches this point must not open a
-        second topic for the same project, and the unique constraint would fail
+        Idempotent on purpose: a rerun that reaches this point must not post a
+        second card for the same project, and the unique constraint would fail
         the whole run rather than the one listing.
         """
         existing = await self.get_thread(listing_id)
         if existing is not None:
+            if existing.channel_message_id is None:
+                # A thread that was already talking about this listing before it
+                # had a card of its own — the agent bound it mid-conversation.
+                existing.channel_message_id = channel_message_id
+                existing.updated_at = _utcnow()
+                await self._session.flush()
             return existing
-        thread = TelegramThread(listing_id=listing_id, thread_id=thread_id)
+        thread = TelegramThread(listing_id=listing_id, channel_message_id=channel_message_id)
         self._session.add(thread)
         await self._session.flush()
         return thread
+
+    async def get_thread_by_channel_message(self, channel_message_id: int) -> TelegramThread | None:
+        """The row for a channel post, by the id Telegram gave that post.
+
+        This is the join between the two chats: a button press arrives on the
+        channel post, and the automatic forward names the same id as its origin.
+        """
+        result = await self._session.scalars(
+            select(TelegramThread).where(TelegramThread.channel_message_id == channel_message_id)
+        )
+        return result.first()
+
+    async def bind_thread_id(self, thread: TelegramThread, thread_id: int) -> bool:
+        """Record the comment thread Telegram opened for a channel post.
+
+        Refuses when the row already has one, or when that root belongs to
+        another row: both would mean two conversations claiming one thread, and
+        the unique constraint would fail the poll round rather than the update.
+        """
+        if thread.thread_id is not None:
+            return thread.thread_id == thread_id
+        if await self.get_thread_by_thread_id(thread_id) is not None:
+            return False
+        thread.thread_id = thread_id
+        thread.updated_at = _utcnow()
+        await self._session.flush()
+        return True
 
     async def ensure_thread(self, thread_id: int) -> TelegramThread:
         """The mapping for a topic, creating a listing-less one if it is new.
@@ -258,30 +293,26 @@ class Repository:
         return thread
 
     async def get_thread_by_thread_id(self, thread_id: int) -> TelegramThread | None:
-        """The topic mapping for an incoming Telegram message, or None if unknown.
+        """The mapping for an incoming Telegram message, or None if unknown.
 
         An unknown thread is one nothing has been recorded for yet — the
-        group's general area, or a topic a human just created.
+        discussion group's main area, or a comment thread whose automatic
+        forward has not been seen.
         """
         result = await self._session.scalars(
             select(TelegramThread).where(TelegramThread.thread_id == thread_id)
         )
         return result.first()
 
-    async def forget_thread(self, thread_id: int) -> bool:
-        """Drop the mapping for a topic that no longer exists.
+    async def delete_thread(self, thread: TelegramThread) -> None:
+        """Drop the mapping for a conversation that no longer exists.
 
-        Telegram hands topic ids out afresh, so a row left behind for a deleted
-        topic would one day point a brand-new conversation at an old listing and
-        an agent session that has nothing to do with it.
+        A declined match has had its post and its thread deleted, and the row
+        left behind would keep the listing looking like it still has a card —
+        so a later run would never post one again.
         """
-        result = await self._session.execute(
-            delete(TelegramThread)
-            .where(TelegramThread.thread_id == thread_id)
-            .returning(TelegramThread.id)
-        )
+        await self._session.delete(thread)
         await self._session.flush()
-        return result.first() is not None
 
     async def set_listing_id(self, thread: TelegramThread, listing_id: int) -> bool:
         """Bind a listing-less topic to the listing it turned out to be about.

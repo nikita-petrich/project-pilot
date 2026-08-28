@@ -127,76 +127,147 @@ async def test_unnotified_matches_recency_bound(session: AsyncSession) -> None:
     assert {listing.url_hash for listing in bounded} == {"recent"}
 
 
-async def test_record_thread_stores_the_topic_and_reads_back(session: AsyncSession) -> None:
+async def test_record_channel_message_stores_the_post_and_reads_back(
+    session: AsyncSession,
+) -> None:
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t1"))
 
-    thread = await repo.record_thread(listing.id, 4711)
-    assert thread.thread_id == 4711
+    thread = await repo.record_channel_message(listing.id, 4711)
+    assert thread.channel_message_id == 4711
+    assert thread.thread_id is None  # not until Telegram forwards the post
 
     found = await repo.get_thread(listing.id)
     assert found is not None
-    assert found.thread_id == 4711
+    assert found.channel_message_id == 4711
 
 
-async def test_get_thread_is_none_before_a_topic_exists(session: AsyncSession) -> None:
+async def test_get_thread_is_none_before_a_card_exists(session: AsyncSession) -> None:
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t2"))
     assert await repo.get_thread(listing.id) is None
 
 
-async def test_record_thread_is_idempotent_per_listing(session: AsyncSession) -> None:
-    # A rerun must not open a second topic for the same project: the unique
+async def test_record_channel_message_is_idempotent_per_listing(
+    session: AsyncSession,
+) -> None:
+    # A rerun must not post a second card for the same project: the unique
     # constraint would otherwise fail the whole run rather than this one listing.
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t3"))
 
-    first = await repo.record_thread(listing.id, 100)
-    second = await repo.record_thread(listing.id, 200)
+    first = await repo.record_channel_message(listing.id, 100)
+    second = await repo.record_channel_message(listing.id, 200)
 
     assert second.id == first.id
-    assert second.thread_id == 100  # the first topic wins; the second is ignored
+    assert second.channel_message_id == 100  # the first post wins
 
 
-async def test_thread_is_findable_by_its_telegram_thread_id(session: AsyncSession) -> None:
-    # Incoming messages carry only the thread id; that is the routing key.
+async def test_a_conversation_that_gained_a_listing_can_still_gain_a_card(
+    session: AsyncSession,
+) -> None:
+    # The agent binds a listing to a thread you started; the card is posted
+    # afterwards, and has to land on that same row rather than a second one.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t3b"))
+    thread = await repo.ensure_thread(7000)
+    assert await repo.set_listing_id(thread, listing.id) is True
+
+    same = await repo.record_channel_message(listing.id, 900)
+
+    assert same.id == thread.id
+    assert same.channel_message_id == 900
+    assert same.thread_id == 7000
+
+
+async def test_a_card_is_findable_by_the_id_of_its_channel_post(
+    session: AsyncSession,
+) -> None:
+    # A button press and the automatic forward both name only the post's id.
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t4"))
-    await repo.record_thread(listing.id, 5150)
+    await repo.record_channel_message(listing.id, 5150)
 
-    found = await repo.get_thread_by_thread_id(5150)
+    found = await repo.get_thread_by_channel_message(5150)
     assert found is not None
     assert found.listing_id == listing.id
-    assert await repo.get_thread_by_thread_id(999) is None
+    assert await repo.get_thread_by_channel_message(999) is None
 
 
-async def test_the_session_id_of_a_topic_is_written_and_replaced(
+async def test_binding_the_comment_thread_is_recorded_once(session: AsyncSession) -> None:
+    # The automatic forward can be redelivered; the second one must be harmless.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t4b"))
+    thread = await repo.record_channel_message(listing.id, 800)
+
+    assert await repo.bind_thread_id(thread, 801) is True
+    assert await repo.bind_thread_id(thread, 801) is True  # same root, still fine
+    assert await repo.bind_thread_id(thread, 999) is False  # a different one is not
+
+    found = await repo.get_thread_by_thread_id(801)
+    assert found is not None
+    assert found.listing_id == listing.id
+
+
+async def test_a_root_already_claimed_is_not_taken_from_its_conversation(
+    session: AsyncSession,
+) -> None:
+    # Two rows on one thread id would fail the poll round on the unique index.
+    repo = Repository(session)
+    first, _ = await repo.upsert_listing(_listing("t4c"))
+    second, _ = await repo.upsert_listing(_listing("t4d"))
+    one = await repo.record_channel_message(first.id, 810)
+    two = await repo.record_channel_message(second.id, 811)
+    assert await repo.bind_thread_id(one, 812) is True
+
+    assert await repo.bind_thread_id(two, 812) is False
+    assert two.thread_id is None
+
+
+async def test_deleting_a_thread_removes_it_from_every_lookup(
+    session: AsyncSession,
+) -> None:
+    # Declining a match must leave nothing behind that says it still has a card.
+    repo = Repository(session)
+    listing, _ = await repo.upsert_listing(_listing("t4e"))
+    thread = await repo.record_channel_message(listing.id, 820)
+    await repo.bind_thread_id(thread, 821)
+
+    await repo.delete_thread(thread)
+
+    assert await repo.get_thread(listing.id) is None
+    assert await repo.get_thread_by_channel_message(820) is None
+    assert await repo.get_thread_by_thread_id(821) is None
+
+
+async def test_the_session_id_of_a_thread_is_written_and_replaced(
     session: AsyncSession,
 ) -> None:
     # Replaced, not appended to: the SDK hands back a new id whenever it could
-    # not resume the old one, and a stale id would restart the topic every time.
+    # not resume the old one, and a stale id would restart the thread every time.
     repo = Repository(session)
     listing, _ = await repo.upsert_listing(_listing("t5"))
-    thread = await repo.record_thread(listing.id, 5151)
+    thread = await repo.record_channel_message(listing.id, 5151)
+    await repo.bind_thread_id(thread, 5152)
     assert thread.session_id is None
 
     await repo.set_session_id(thread, "sess-1")
     await repo.set_session_id(thread, "sess-2")
 
-    stored = await repo.get_thread_by_thread_id(5151)
+    stored = await repo.get_thread_by_thread_id(5152)
     assert stored is not None
     assert stored.session_id == "sess-2"
     assert stored.updated_at >= stored.created_at
 
 
 async def test_ensure_thread_opens_a_listingless_conversation(session: AsyncSession) -> None:
-    # A topic a human opened still needs a row: that is where its session lives.
+    # A thread you started still needs a row: that is where its session lives.
     repo = Repository(session)
 
     opened = await repo.ensure_thread(4321)
     again = await repo.ensure_thread(4321)
 
-    assert opened.id == again.id  # idempotent, one conversation per topic
+    assert opened.id == again.id  # idempotent, one conversation per thread
     assert opened.listing_id is None
     await repo.set_session_id(opened, "sess-open")
     stored = await repo.get_thread_by_thread_id(4321)

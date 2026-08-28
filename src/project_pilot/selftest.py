@@ -51,7 +51,7 @@ class Checker(Protocol):
 class Notifier(Protocol):
     """The ``TelegramNotifier`` subset used to deliver the test notification."""
 
-    async def notify(self, message: MatchMessage) -> bool: ...
+    async def notify(self, message: MatchMessage) -> int | None: ...
     async def notify_warning(self, text: str) -> bool: ...
 
 
@@ -125,9 +125,10 @@ class SelfTestService:
         """Prove the channel: a match pushes its card, anything else pushes a warning."""
         try:
             if result.passed and result.message is not None:
-                if not await self._notifier.notify(result.message):
+                message_id = await self._notifier.notify(result.message)
+                if message_id is None:
                     return SelfTestStep("push", False, "telegram send failed (see the log)")
-                return SelfTestStep("push", True, "match card pushed")
+                return SelfTestStep("push", True, f"match card pushed (post {message_id})")
             sent = await self._notifier.notify_warning(
                 f"test-match: Kanal-Probe (Verdict: {result.verdict.value})"
             )
