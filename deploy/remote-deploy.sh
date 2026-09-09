@@ -37,6 +37,8 @@ cat > compose.override.yaml <<EOF
 services:
   app:
     image: ${IMAGE}
+  bot:
+    image: ${IMAGE}
   mcp:
     image: ${IMAGE}
 EOF

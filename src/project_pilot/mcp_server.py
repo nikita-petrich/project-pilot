@@ -263,8 +263,8 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     @mcp.tool
     async def project_pilot_list_matches(limit: int = 10) -> list[dict[str, object]]:
         """List the most recent matched project listings (newest first) with id,
-        title, score, status, and thread info. Use to show the match feed or to
-        find a listing id."""
+        title, score, and status. Use to show the match feed or to find a
+        listing id."""
         return await list_matches(deps, limit=limit)
 
     @mcp.tool

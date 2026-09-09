@@ -37,11 +37,14 @@ healthcheck has a baseline) and then every `SCAN_INTERVAL_MIN` minutes.
 - **app**: multi-stage build on `python:3.13-slim`, dependencies installed with
   `uv`, runs as the non-root user `pilot`. Entrypoint applies migrations then execs
   the CLI (default `daemon`).
+- **bot**: the same image with `command: ["telegram-bot"]`, long-polling
+  Telegram for the card's Ablehnen button and deleting the card. Talks to
+  Telegram only — no database, no port, no migrations.
 - **mcp**: the same image with `command: ["mcp"]`, serving the tools over
   Streamable HTTP behind its bearer token. No host port; the reverse proxy reaches
   it as `project-pilot-mcp:8765` on the `edge` network.
 - **postgres**: `postgres:16` with a named volume `pgdata` for persistence and a
-  `pg_isready` healthcheck. Both app containers wait for postgres to be healthy.
+  `pg_isready` healthcheck. `app` and `mcp` wait for postgres to be healthy.
 
 ## Healthcheck
 

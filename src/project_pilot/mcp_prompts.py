@@ -115,8 +115,8 @@ PROMPT_SLOTS = ("listing", "application", "target")
 def render(name: str, argument: str = "") -> str:
     """One prompt, with its slot filled — the text a surface hands to the model.
 
-    Shared so the MCP server and the Telegram command menu run the same
-    procedure rather than two copies that drift.
+    One renderer for every surface (Claude Code, n8n, a future menu), so the
+    procedure never exists as two copies that drift.
     """
     _, body = PROMPTS[name]
     return body.format(**dict.fromkeys(PROMPT_SLOTS, argument or "(not given)"))

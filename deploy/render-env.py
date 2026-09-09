@@ -19,8 +19,9 @@ DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A bot token as @BotFather hands it out: numeric bot id, colon, secret.
 BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
-# A supergroup chat id: negative, and Telegram prefixes supergroups with -100.
-GROUP_CHAT_ID_RE = re.compile(r"^-100\d+$")
+# A chat id is an integer: positive for the private chat with the bot (the
+# intended target), negative for a group or channel.
+CHAT_ID_RE = re.compile(r"^-?\d+$")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -28,16 +29,12 @@ REQUIRED = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "SEARCH_URLS",
-    # Telegram is THE notification channel; without it the daemon aborts at boot
-    # by design, so the deploy refuses here instead.
+    # Telegram is THE alert channel; without it the daemon aborts at boot by
+    # design, so the deploy refuses here instead.
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
-    # The thread agent calls Claude with its own key; without it the bot starts
-    # and can answer nothing. (Its MCP address is not a secret — compose points
-    # it at the mcp service.)
-    "ANTHROPIC_API_KEY",
     # The reverse proxy's Docker network. Wrong or unset, the MCP container comes
     # up healthy and stays unreachable — a 502 with nothing in its own logs, which
     # is exactly the kind of silent failure this gate exists to prevent.
@@ -91,20 +88,13 @@ def problems(settings: dict[str, str]) -> list[str]:
 
 
 def _chat_id_problems(chat_id: str) -> list[str]:
-    """Catch a private chat id where the match supergroup belongs.
-
-    Topics only exist in a forum supergroup, whose id is negative and starts
-    with -100. A personal chat id is positive, accepted by sendMessage, and then
-    every match silently lands in a chat that can never hold a topic.
-    """
+    """Catch a value that is not a chat id at all (the bot's @name, a username)."""
     if not chat_id:
         return []  # absence is already reported by the REQUIRED check
-    if not GROUP_CHAT_ID_RE.match(chat_id):
+    if not CHAT_ID_RE.match(chat_id):
         return [
-            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a supergroup id. "
-            "Expected the forum supergroup the match topics live in, a negative "
-            "id starting with -100 — a positive id is a personal chat and cannot "
-            "hold topics."
+            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a chat id. Expected the "
+            "numeric id of your private chat with the bot, as getUpdates reports it."
         ]
     return []
 

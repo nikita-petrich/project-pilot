@@ -77,10 +77,10 @@ class SelfTestReport:
 
 
 class SelfTestService:
-    """Pushes one listing through evaluation into a Claude session and reports every link.
+    """Pushes one listing through evaluation and the alert, reporting every link.
 
     A diagnostic deliberately reports failures instead of raising them: a broken LLM
-    must still yield a report that shows the routine was reached, which is the whole
+    must still yield a report that shows the channel was reached, which is the whole
     point of running it.
     """
 
@@ -101,8 +101,10 @@ class SelfTestService:
         """Evaluate one listing and prove the push channel.
 
         ``listing_id`` evaluates a stored listing; otherwise ``text`` (or the
-        built-in demo) is evaluated. A match delivers a real match push; a
-        no-match proves the channel with a warning push instead.
+        built-in demo) is evaluated. A match delivers a real card, Bewerben
+        button included — Telegram validates the button's URL on send, so this
+        also proves the session link; a no-match proves the channel with a
+        warning push instead.
         """
         steps = [SelfTestStep("profile", True, f"loaded, hash {self._profile_hash[:12]}")]
 
@@ -128,7 +130,7 @@ class SelfTestService:
                 message_id = await self._notifier.notify(result.message)
                 if message_id is None:
                     return SelfTestStep("push", False, "telegram send failed (see the log)")
-                return SelfTestStep("push", True, f"match card pushed (post {message_id})")
+                return SelfTestStep("push", True, f"match card pushed (message {message_id})")
             sent = await self._notifier.notify_warning(
                 f"test-match: Kanal-Probe (Verdict: {result.verdict.value})"
             )

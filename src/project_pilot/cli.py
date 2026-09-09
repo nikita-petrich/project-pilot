@@ -1,7 +1,7 @@
 """Typer command-line interface for project-pilot.
 
-Commands: ``init-db``, ``run-once``, ``daemon``, ``bot``, ``healthcheck``,
-``stats``, ``test-notify``.
+Commands: ``init-db``, ``run-once``, ``daemon``, ``telegram-bot``, ``mcp``,
+``healthcheck``, ``stats``, ``enrich``, ``test-match``.
 """
 
 import asyncio
@@ -13,7 +13,6 @@ from typing import Any, cast
 import typer
 import uvicorn
 
-from project_pilot.agent import ThreadAgent
 from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
 from project_pilot.application.generator import (
     ApplicationGenerator,
@@ -41,7 +40,7 @@ from project_pilot.profile_loader import Profile, ProfileService
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 from project_pilot.selftest import SelfTestReport, SelfTestService, format_selftest
-from project_pilot.telegram_bot import TelegramBot
+from project_pilot.telegram_bot import TelegramButtons
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +134,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     llm_client = OpenAiStructuredClient(api_key)
     matcher = _matcher(llm_client, model, profile)
 
-    bot_token, chat_id = settings.require_telegram()
-    notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
+    notifier = _notifier(settings)
 
     pipeline = Pipeline(
         settings=settings,
@@ -152,6 +150,14 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         await engine.dispose()
 
     return pipeline, closer
+
+
+def _notifier(settings: Settings) -> TelegramNotifier:
+    """The alert channel, with the repo every match session checks out."""
+    bot_token, chat_id = settings.require_telegram()
+    return TelegramNotifier(
+        bot_token=bot_token, chat_id=chat_id, session_repo=settings.claude_session_repo
+    )
 
 
 def _build_cv_refresher(settings: Settings, cvs: CvAttachments) -> CvRefresher | None:
@@ -264,7 +270,6 @@ async def _run_selftest(
     api_key, model = settings.require_openai()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    bot_token, chat_id = settings.require_telegram()
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
@@ -272,7 +277,7 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        notifier=TelegramNotifier(bot_token=bot_token, chat_id=chat_id),
+        notifier=_notifier(settings),
         profile_hash=profile.profile_hash,
     )
     try:
@@ -363,38 +368,10 @@ def daemon() -> None:
 
 @app.command("telegram-bot")
 def telegram_bot() -> None:
-    """Answer in the match topics: long polling, no inbound port, full agent."""
+    """Hear the Ablehnen button on the match cards: long polling, no inbound port."""
     settings = _load_settings()
     bot_token, chat_id = settings.require_telegram()
-    api_key, mcp_url = settings.require_agent()
-    mcp_token = settings.require_mcp()
-    # The agent writes here, so it has to exist and be ours before the first run;
-    # in the container this is the volume that outlives a deploy.
-    workspace = Path(settings.agent_workspace) if settings.agent_workspace else Path.cwd()
-    workspace.mkdir(parents=True, exist_ok=True)
-    engine = create_engine(settings.database_url)
-    session_factory = create_session_factory(engine)
-    bot = TelegramBot(
-        bot_token=bot_token,
-        chat_id=chat_id,
-        allowed_user_ids=settings.telegram_allowed_user_ids,
-        agent=ThreadAgent(
-            api_key=api_key,
-            mcp_url=mcp_url,
-            mcp_token=mcp_token,
-            workspace=workspace,
-            model=settings.agent_model,
-        ),
-        session_factory=session_factory,
-    )
-
-    async def _serve() -> None:
-        try:
-            await bot.run_forever()
-        finally:
-            await engine.dispose()
-
-    asyncio.run(_serve())
+    asyncio.run(TelegramButtons(bot_token=bot_token, chat_id=chat_id).run_forever())
 
 
 @app.command("mcp")
@@ -473,7 +450,7 @@ def test_match(
         help="Evaluate a stored listing instead of pasted text.",
     ),
 ) -> None:
-    """Push one listing through hard rules, LLM, and the push channel (stores nothing)."""
+    """Push one listing through hard rules, LLM, and the alert (stores nothing)."""
     settings = _load_settings()
     settings.require_telegram()
     if file is not None:

@@ -79,10 +79,10 @@ class Matcher(Protocol):
 
 
 class MatchNotifier(Protocol):
-    """The notification channel: one channel post per match, plus warnings.
+    """The alert channel: one card per match, plus warnings.
 
-    ``notify`` answers with the id of the post it made, because that id is what
-    ties the card to the comment thread Telegram opens underneath it.
+    ``notify`` answers with the id of the message it sent, or None when the
+    send failed and the match must stay pending.
     """
 
     async def notify(self, message: MatchMessage) -> int | None: ...
@@ -494,16 +494,12 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Post one card per pending match to the channel, durable per match.
+        """Send one card per pending match, durable per match.
 
         Runs in its own session after the scan's unit of work has committed, and
-        commits after every successful send, so a delivered notification can
-        never be rolled back into "unnotified" and sent twice. A failed send
-        leaves the listing pending and it is retried on the next run.
-
-        The post's id is recorded in the same commit that marks the listing
-        notified: the two facts are one event, and a card whose id was lost
-        would leave its comment thread unroutable for good.
+        commits after every successful send, so a delivered alert can never be
+        rolled back into "unnotified" and sent twice. A failed send leaves the
+        listing pending and it is retried on the next run.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -534,11 +530,10 @@ class Pipeline:
                 if message_id is None:
                     failed += 1
                     continue
-                await repo.record_channel_message(listing.id, message_id)
                 await repo.mark_notified([listing], now)
                 await session.commit()
                 outcome.notified += 1
-                logger.info("match sent: %s (post %s)", listing.external_url, message_id)
+                logger.info("match sent: %s (message %s)", listing.external_url, message_id)
             if failed:
                 logger.warning("notification failed; %d match(es) will retry next run", failed)
 

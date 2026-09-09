@@ -144,9 +144,8 @@ Required — the container dies at boot without them:
 | `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
 | `LLM_MODEL` | model name, e.g. a small, cheap one |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
-| `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE notification channel |
-| `TELEGRAM_CHAT_ID` | the chat the bot sends to |
-| `ANTHROPIC_API_KEY` | the thread agent's own key |
+| `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE alert channel |
+| `TELEGRAM_CHAT_ID` | your private chat with the bot (a positive number) |
 | `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
 | `PROXY_NETWORK` | the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 

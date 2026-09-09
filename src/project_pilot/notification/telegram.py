@@ -1,25 +1,20 @@
-"""Telegram push: THE notification channel.
+"""Telegram push: THE alert channel.
 
 Every match is sent from the worker itself, seconds after the verdict, over one
 HTTP POST with retry. That is the whole point of this module: delivery must not
-depend on a model deciding a run is "worth telling you about", which is how the
-previous channel (a Claude routine whose completion push was a per-run model
-decision) lost notifications.
+depend on a model deciding a run is "worth telling you about", which is how a
+Claude-side push lost notifications before — and the platform still offers no
+guaranteed push for a cloud session, so the alert stays in code.
 
 Send-only, deliberately. There is no polling loop, no webhook and no inbound
-port here: every action — checking, drafting, sending — happens in the post's
-comment thread, where the thread agent answers (``telegram_bot.py``, its own
-process).
+port here. The card is a decision surface and nothing more: two of its three
+buttons are plain links — the original listing, and a new Claude session with
+the card already in its prompt (``claude_link.py``) — and only **Ablehnen**
+needs a process to hear the press (``telegram_bot.py``, which does exactly that
+and nothing else).
 
-The target is a **channel**. Telegram forwards each post into the channel's
-linked discussion group by itself and roots a comment thread on the forwarded
-copy, so one project is one post you can open into its own conversation — and
-declining it is a plain ``deleteMessage`` on the post, which is what makes a
-turned-down match vanish from the feed entirely.
-
-The id of the sent post is what ``notify`` returns: it is the only handle that
-ties the card to the comment thread the automatic forward is about to create,
-and the bot needs it to route a reply back to its listing.
+The target is the private chat between Nik and the bot. A bot may delete its
+own messages there, which is what makes a declined match vanish from the feed.
 
 Telegram was chosen over a push service for one reason the alternatives could
 not match: its desktop app delivers a real system notification with nothing
@@ -37,6 +32,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
+from project_pilot.notification.claude_link import session_link
 from project_pilot.notification.messages import MatchMessage, headline, render_match_details
 
 logger = logging.getLogger(__name__)
@@ -45,6 +41,11 @@ API_BASE = "https://api.telegram.org"
 # Telegram rejects anything past 4096 characters outright.
 MAX_TEXT_CHARS = 4_000
 _TIMEOUT = 15.0
+
+OPEN_LISTING = "📄 Projektbeschreibung öffnen"
+APPLY = "✅ Bewerben"
+DECLINE = "🚫 Ablehnen"
+DECLINE_ACTION = "decline"
 
 
 def _is_retryable(err: BaseException) -> bool:
@@ -55,55 +56,59 @@ def _is_retryable(err: BaseException) -> bool:
     return isinstance(err, httpx.TransportError)
 
 
+def _is_link(url: str) -> bool:
+    """Telegram only accepts http(s) in a URL button; an ingested listing may have none."""
+    return url.startswith(("http://", "https://"))
+
+
 def match_text(message: MatchMessage) -> str:
     """The message body: the headline, then every fact and the verdict.
 
-    The description is deliberately absent — it rides behind its own button, so
-    a listing of several thousand characters cannot push the facts off the
+    The description is deliberately absent — the listing link is one tap away,
+    and a listing of several thousand characters would push the facts off the
     first screen.
     """
     return "\n\n".join([headline(message), render_match_details(message)])[:MAX_TEXT_CHARS]
 
 
-def match_keyboard(message: MatchMessage) -> dict[str, object] | None:
-    """The three decisions a match offers, or nothing for an unstored listing.
+def match_keyboard(message: MatchMessage, *, session_repo: str = "") -> dict[str, object] | None:
+    """The three decisions a match offers.
 
-    The callbacks carry the listing id, so a press is unambiguous even when
-    several matches are open at once.
+    Bewerben and the listing are URL buttons: a tap opens a new Claude session
+    (this very card in its prompt) or the original ad, with no process in
+    between. Ablehnen is the one callback; it carries the listing id so a press
+    is unambiguous in the log. An unstored listing (test-match) has nothing to
+    decline, and one without a real link (an ingested text) gets no link button.
     """
-    if message.listing_id is None:
-        return None
-    listing_id = message.listing_id
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "✅ Annehmen", "callback_data": f"accept:{listing_id}"},
-                {"text": "🚫 Ablehnen", "callback_data": f"decline:{listing_id}"},
-            ],
-            [{"text": "📄 Projektbeschreibung", "callback_data": f"describe:{listing_id}"}],
-        ]
-    }
+    top: list[dict[str, object]] = [
+        {"text": APPLY, "url": session_link(message, repo=session_repo)}
+    ]
+    if message.listing_id is not None:
+        top.append({"text": DECLINE, "callback_data": f"{DECLINE_ACTION}:{message.listing_id}"})
+    rows = [top]
+    if _is_link(message.url):
+        rows.append([{"text": OPEN_LISTING, "url": message.url}])
+    return {"inline_keyboard": rows}
 
 
 class TelegramNotifier:
-    """Sends one match (or one warning) to the Telegram channel."""
+    """Sends one match (or one warning) to the Telegram chat."""
 
-    def __init__(self, *, bot_token: str, chat_id: str) -> None:
+    def __init__(self, *, bot_token: str, chat_id: str, session_repo: str = "") -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
         self._chat_id = chat_id
+        self._session_repo = session_repo
 
     async def notify(self, message: MatchMessage) -> int | None:
-        """Post one match to the channel; its message id, or None on failure.
+        """Send one match card; its message id, or None on failure.
 
         A failed send must not fail the pipeline run: the listing stays
-        unnotified and is retried on the next run. The returned id is stored,
-        because it is how the comment thread Telegram is about to open gets
-        matched back to this listing.
+        unnotified and is retried on the next run.
         """
-        payload: dict[str, object] = {"text": match_text(message)}
-        keyboard = match_keyboard(message)
-        if keyboard is not None:
-            payload["reply_markup"] = keyboard
+        payload: dict[str, object] = {
+            "text": match_text(message),
+            "reply_markup": match_keyboard(message, session_repo=self._session_repo),
+        }
         try:
             body = await self._post("sendMessage", payload)
         except httpx.HTTPError as err:

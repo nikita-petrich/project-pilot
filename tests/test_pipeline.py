@@ -104,7 +104,7 @@ class _FakeMatcher:
 
 
 class _FakeNotifier:
-    """The channel fake: posts and warnings record, delivery is switchable."""
+    """The channel fake: cards and warnings record, delivery is switchable."""
 
     def __init__(self, *, delivers: bool = True) -> None:
         self.delivers = delivers
@@ -860,55 +860,42 @@ async def test_preflight_is_silent_when_the_model_answers(
     assert notifier.warnings == []
 
 
-async def test_each_match_gets_a_channel_post_and_the_post_id_is_stored(
+async def test_each_match_gets_one_card_and_is_marked_notified(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     notifier = _FakeNotifier()
     pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
-    await pipeline.run_once(now=NOW)
+    outcome = await pipeline.run_once(now=NOW)
 
-    assert len(notifier.posted) == len(notifier.matches)
+    assert outcome.notified == len(notifier.matches) == 1
+    assert notifier.matches[0].listing_id is not None  # the card can be declined
 
     async with session_factory() as db_session:
         repo = Repository(db_session)
         listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
         assert listing is not None
-        thread = await repo.get_thread(listing.id)
-        assert thread is not None
-        # The id of the post is the only handle onto the comment thread
-        # Telegram is about to open; losing it would strand the conversation.
-        assert thread.channel_message_id == notifier.posted[0]
-        assert thread.thread_id is None  # not until the automatic forward lands
+        assert listing.notified_at is not None
 
 
-async def test_a_failed_send_stores_nothing_and_retries_next_run(
+async def test_a_failed_send_stays_pending_and_retries_next_run(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    # No post exists, so no row may claim one: the retry has to be free to post.
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     failing = _FakeNotifier(delivers=False)
     first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing)
-    outcome = await first.run_once(now=NOW)
-    assert outcome.notified == 0
+    assert (await first.run_once(now=NOW)).notified == 0
 
     async with session_factory() as db_session:
         repo = Repository(db_session)
         listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
         assert listing is not None
-        assert await repo.get_thread(listing.id) is None
+        assert listing.notified_at is None
 
     ok = _FakeNotifier()
     second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok)
     assert (await second.run_once(now=NOW + timedelta(minutes=15))).notified == 1
-
-    async with session_factory() as db_session:
-        repo = Repository(db_session)
-        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
-        assert listing is not None
-        thread = await repo.get_thread(listing.id)
-        assert thread is not None
-        assert thread.channel_message_id == ok.posted[0]
+    assert len(ok.matches) == 1
 
 
 async def test_a_match_already_posted_is_never_posted_twice(

@@ -1,4 +1,4 @@
-"""Telegram notifier: message shape, the inline button, retries, and failures."""
+"""Telegram notifier: message shape, the three buttons, retries, and failures."""
 
 import json
 from dataclasses import replace
@@ -9,10 +9,12 @@ import respx
 
 from project_pilot.config import Settings
 from project_pilot.errors import ConfigError
+from project_pilot.notification.claude_link import session_link
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.telegram import (
     MAX_TEXT_CHARS,
     TelegramNotifier,
+    match_keyboard,
     match_text,
 )
 
@@ -20,6 +22,7 @@ BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 SENT = {"ok": True, "result": {"message_id": 5150}}
+REPO = "nikita-petrich/project-pilot"
 
 
 def _message(
@@ -40,7 +43,7 @@ def _message(
 
 
 def _notifier() -> TelegramNotifier:
-    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID)
+    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, session_repo=REPO)
 
 
 def test_match_text_leads_with_the_headline_then_every_fact() -> None:
@@ -54,10 +57,11 @@ def test_match_text_leads_with_the_headline_then_every_fact() -> None:
 
 
 def test_match_text_names_no_command_to_type_elsewhere() -> None:
-    # The work happens in the post's own thread; a pointer at another app's
-    # command would send you somewhere you no longer need to go.
-    assert "check-project" not in match_text(_message())
-    assert "claude.ai" not in match_text(_message())
+    # The session is one tap away on the Bewerben button; the card itself
+    # carries no command and no link to type or copy.
+    text = match_text(_message())
+    assert "check-project" not in text
+    assert "claude.ai" not in text
 
 
 def test_match_text_is_capped_below_the_telegram_limit() -> None:
@@ -75,29 +79,43 @@ async def test_notify_sends_the_card_under_its_three_decisions() -> None:
     assert payload["text"] == match_text(_message())
     assert payload["disable_web_page_preview"] is True
     rows = payload["reply_markup"]["inline_keyboard"]
-    assert [button["text"] for row in rows for button in row] == [
-        "✅ Annehmen",
-        "🚫 Ablehnen",
-        "📄 Projektbeschreibung",
-    ]
-    # Every callback carries the listing, so two open matches cannot be confused.
-    assert [button["callback_data"] for row in rows for button in row] == [
-        "accept:42",
-        "decline:42",
-        "describe:42",
+    assert rows == [
+        [
+            # Bewerben opens a new session with this card in its prompt;
+            # Ablehnen is the one press the bot hears.
+            {"text": "✅ Bewerben", "url": session_link(_message(), repo=REPO)},
+            {"text": "🚫 Ablehnen", "callback_data": "decline:42"},
+        ],
+        [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
     ]
     # No parse_mode: an underscore in a listing title would reject the message.
     assert "parse_mode" not in payload
 
 
-@respx.mock
-async def test_an_unstored_listing_gets_no_buttons() -> None:
-    # Without an id there is nothing for a press to act on; a dead button is
-    # worse than none.
-    route = respx.post(SEND_URL).respond(200, json=SENT)
-    await _notifier().notify(replace(_message(), listing_id=None))
-    payload = json.loads(route.calls.last.request.read())
-    assert "reply_markup" not in payload
+def test_an_unstored_listing_has_nothing_to_decline() -> None:
+    # test-match stores nothing, so there is no id for Ablehnen to name — but
+    # the session and the ad are still worth a tap.
+    message = replace(_message(), listing_id=None)
+    assert match_keyboard(message, session_repo=REPO) == {
+        "inline_keyboard": [
+            [{"text": "✅ Bewerben", "url": session_link(message, repo=REPO)}],
+            [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
+        ]
+    }
+
+
+def test_a_listing_without_a_real_link_gets_no_link_button() -> None:
+    # An ingested listing may carry a pilot:// placeholder, which Telegram
+    # rejects in a URL button — and would reject the whole message with it.
+    message = replace(_message(), url="pilot://ingest/abc")
+    assert match_keyboard(message) == {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Bewerben", "url": session_link(message)},
+                {"text": "🚫 Ablehnen", "callback_data": "decline:42"},
+            ]
+        ]
+    }
 
 
 @respx.mock
@@ -154,25 +172,6 @@ def test_require_telegram_names_the_missing_half(monkeypatch: pytest.MonkeyPatch
 
 @respx.mock
 async def test_notify_returns_none_when_telegram_names_no_message_id() -> None:
-    """Without the post's id the card can never be tied to its comment thread."""
+    """A send whose id is unknown counts as failed, so it is retried next run."""
     respx.post(SEND_URL).respond(200, json={"ok": True, "result": {}})
     assert await _notifier().notify(_message()) is None
-
-
-@respx.mock
-async def test_the_card_goes_to_the_channel_and_names_no_thread() -> None:
-    """Telegram roots the thread itself by forwarding the post; nothing to pass."""
-    route = respx.post(SEND_URL).respond(200, json=SENT)
-    await _notifier().notify(_message())
-    payload = json.loads(route.calls.last.request.read())
-    assert payload["chat_id"] == CHAT_ID
-    assert "message_thread_id" not in payload
-    assert "reply_parameters" not in payload
-
-
-@respx.mock
-async def test_warning_carries_no_thread_of_its_own() -> None:
-    # An operator warning belongs to the worker, not to any one listing.
-    route = respx.post(SEND_URL).respond(200, json={"ok": True})
-    await _notifier().notify_warning("Quelle im Cooldown")
-    assert "message_thread_id" not in json.loads(route.calls.last.request.read())

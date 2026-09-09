@@ -17,7 +17,6 @@ from project_pilot.models import (
     Run,
     RunStatus,
     SourceState,
-    TelegramThread,
     Verdict,
 )
 
@@ -129,7 +128,7 @@ class Repository:
         Covers this run's new matches and any that a prior run failed to send, so a
         failed notification is retried on the next run. ``not_before`` bounds the set
         by ``first_seen_at`` so that lowering ``MATCH_THRESHOLD`` (or configuring
-        the routine after fire-less runs) does not retro-flood the channel with every
+        the channel after notifier-less runs) does not retro-flood the channel with every
         historical listing that was below the old threshold.
         """
         conditions = [
@@ -219,130 +218,6 @@ class Repository:
         )
         await self._session.flush()
         return result.first() is not None
-
-    async def get_thread(self, listing_id: int) -> TelegramThread | None:
-        """The channel post recorded for this listing, or None if it has none yet."""
-        result = await self._session.scalars(
-            select(TelegramThread).where(TelegramThread.listing_id == listing_id)
-        )
-        return result.first()
-
-    async def record_channel_message(
-        self, listing_id: int, channel_message_id: int
-    ) -> TelegramThread:
-        """Record the channel post a listing got, or return the one it had.
-
-        Idempotent on purpose: a rerun that reaches this point must not post a
-        second card for the same project, and the unique constraint would fail
-        the whole run rather than the one listing.
-        """
-        existing = await self.get_thread(listing_id)
-        if existing is not None:
-            if existing.channel_message_id is None:
-                # A thread that was already talking about this listing before it
-                # had a card of its own — the agent bound it mid-conversation.
-                existing.channel_message_id = channel_message_id
-                existing.updated_at = _utcnow()
-                await self._session.flush()
-            return existing
-        thread = TelegramThread(listing_id=listing_id, channel_message_id=channel_message_id)
-        self._session.add(thread)
-        await self._session.flush()
-        return thread
-
-    async def get_thread_by_channel_message(self, channel_message_id: int) -> TelegramThread | None:
-        """The row for a channel post, by the id Telegram gave that post.
-
-        This is the join between the two chats: a button press arrives on the
-        channel post, and the automatic forward names the same id as its origin.
-        """
-        result = await self._session.scalars(
-            select(TelegramThread).where(TelegramThread.channel_message_id == channel_message_id)
-        )
-        return result.first()
-
-    async def bind_thread_id(self, thread: TelegramThread, thread_id: int) -> bool:
-        """Record the comment thread Telegram opened for a channel post.
-
-        Refuses when the row already has one, or when that root belongs to
-        another row: both would mean two conversations claiming one thread, and
-        the unique constraint would fail the poll round rather than the update.
-        """
-        if thread.thread_id is not None:
-            return thread.thread_id == thread_id
-        if await self.get_thread_by_thread_id(thread_id) is not None:
-            return False
-        thread.thread_id = thread_id
-        thread.updated_at = _utcnow()
-        await self._session.flush()
-        return True
-
-    async def ensure_thread(self, thread_id: int) -> TelegramThread:
-        """The mapping for a topic, creating a listing-less one if it is new.
-
-        This is how a topic a human opened becomes a conversation the agent can
-        continue: it gets a row for its session id and no listing, and picks up
-        whatever is brought into it.
-        """
-        existing = await self.get_thread_by_thread_id(thread_id)
-        if existing is not None:
-            return existing
-        thread = TelegramThread(thread_id=thread_id)
-        self._session.add(thread)
-        await self._session.flush()
-        return thread
-
-    async def get_thread_by_thread_id(self, thread_id: int) -> TelegramThread | None:
-        """The mapping for an incoming Telegram message, or None if unknown.
-
-        An unknown thread is one nothing has been recorded for yet — the
-        discussion group's main area, or a comment thread whose automatic
-        forward has not been seen.
-        """
-        result = await self._session.scalars(
-            select(TelegramThread).where(TelegramThread.thread_id == thread_id)
-        )
-        return result.first()
-
-    async def delete_thread(self, thread: TelegramThread) -> None:
-        """Drop the mapping for a conversation that no longer exists.
-
-        A declined match has had its post and its thread deleted, and the row
-        left behind would keep the listing looking like it still has a card —
-        so a later run would never post one again.
-        """
-        await self._session.delete(thread)
-        await self._session.flush()
-
-    async def set_listing_id(self, thread: TelegramThread, listing_id: int) -> bool:
-        """Bind a listing-less topic to the listing it turned out to be about.
-
-        Refuses when that listing already has a topic of its own: two topics for
-        one match is exactly what the unique constraint exists to prevent, and a
-        constraint error here would fail the answer rather than the binding.
-        """
-        if thread.listing_id is not None:
-            return False
-        if await self.get_thread(listing_id) is not None:
-            return False
-        thread.listing_id = listing_id
-        thread.updated_at = _utcnow()
-        await self._session.flush()
-        return True
-
-    async def set_session_id(
-        self, thread: TelegramThread, session_id: str | None
-    ) -> TelegramThread:
-        """Point a topic at the agent session its next message should continue.
-
-        Written after every successful answer, not only the first: the SDK hands
-        back a fresh id whenever it could not resume the old one, and a stale id
-        here would make the topic start over on every message.
-        """
-        thread.session_id = session_id
-        thread.updated_at = _utcnow()
-        await self._session.flush()
-        return thread
 
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)

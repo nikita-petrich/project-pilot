@@ -106,18 +106,10 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
-    telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
-    anthropic_api_key: str = Field(default="", repr=False)
-    agent_model: str = "claude-opus-5"
-    # Where the thread agent reaches project-pilot's own tools. The agent runs
-    # the MCP client itself, so this is an address *it* must reach: inside the
-    # stack that is the mcp service, not the public hostname.
-    mcp_url: str = "http://mcp:8765/mcp"
-    # Where the thread agent works. Empty means the process's own directory,
-    # which is right for a local run; the container points it at a volume so
-    # what the agent writes survives a deploy.
-    agent_workspace: str = ""
+    # The repository a match session checks out (owner/name), so it has the
+    # repo's skills and CLAUDE.md. Empty leaves the session's repo picker alone.
+    claude_session_repo: str = "nikita-petrich/project-pilot"
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
@@ -129,17 +121,14 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", "telegram_allowed_user_ids", mode="before")
+    @field_validator("search_urls", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         """Read a list from ENV the way a human writes one: ``a,b,c``.
 
-        pydantic-settings would otherwise expect JSON for a list field, so a
-        single id (``TELEGRAM_ALLOWED_USER_IDS=4242``) parses as an int and the
-        process dies at boot with a type error.
+        pydantic-settings would otherwise expect JSON for a list field and the
+        process would die at boot with a type error.
         """
-        if isinstance(value, int):
-            return [value]
         if isinstance(value, str):
             # Tolerate the JSON form too, so a pasted ["a","b"] is not a boot error.
             items = (item.strip().strip("\"'") for item in value.strip().strip("[]").split(","))
@@ -216,18 +205,6 @@ class Settings(BaseSettings):
         if not self.telegram_chat_id:
             raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
         return self.telegram_bot_token, self.telegram_chat_id
-
-    def require_agent(self) -> tuple[str, str]:
-        """The key and the MCP URL the thread agent needs, or a clear abort.
-
-        The MCP URL is the agent's whole domain surface, so an unset one would
-        produce an agent that can talk but not act.
-        """
-        if not self.anthropic_api_key:
-            raise ConfigError("ANTHROPIC_API_KEY must be set (the thread agent calls Claude)")
-        if not self.mcp_url:
-            raise ConfigError("MCP_URL must be set (where the agent reaches the MCP server)")
-        return self.anthropic_api_key, self.mcp_url
 
     def require_mcp(self) -> str:
         if not self.mcp_token:
