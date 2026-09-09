@@ -1,976 +1,191 @@
-"""The bot process: reads the match threads and answers in them.
+"""The bot process: hears the one button that needs hearing, **Ablehnen**.
 
 Long polling, not a webhook: the worker keeps no inbound port, exactly as the
 notification side does. ``getUpdates`` blocks on Telegram's side until something
 arrives or the timeout expires, so an idle bot costs one open connection and
-nothing else.
+nothing else — and it asks for ``callback_query`` updates only, because that is
+all it acts on.
 
-**Two chats, one conversation.** A match is a post in the *channel*; Telegram
-forwards that post into the channel's linked *discussion group* by itself and
-roots a comment thread on the forwarded copy. So the card and its conversation
-live in different chats, under different ids, and the bot works both: it reads
-the discussion group, it decides on the channel post, and the row in
-``telegram_threads`` is what ties the two together. The channel id is
-configured; the group is read off the channel at startup, because Telegram
-already knows which group is linked and asking beats a second setting that can
-disagree with reality.
-
-Routing follows from that. The automatic forward names the channel post it came
-from, which is how a comment thread learns its listing. Every later message in
-that thread carries the root's id as ``message_thread_id``; that id maps to a
-listing in ``telegram_threads``, which makes the thread the conversation's
-identity. A message in the group's main area belongs to no match and is answered
-where it stands.
-
-Answering runs as its own task rather than inside the poll loop, because a run
-can stop mid-way to ask permission for a tool: the question is a message with
-two buttons, and the press that answers it arrives through the very same
-``getUpdates`` call. Blocking the loop on the answer would deadlock on the
-question it just asked.
+This is deliberately all the process does. Bewerben and the listing are URL
+buttons that open on their own; the conversation about a match happens in its
+Claude session, not here. No agent, no database, no history: a press names the
+message it sits on, and deleting that message is the whole job. The chat id is
+the only guard it needs — the card lives in the private chat with the bot, so a
+press from any other chat is not one of ours.
 """
 
 import asyncio
 import logging
-import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import httpx
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from project_pilot.agent import AgentReply, Approve, Progress, ThreadAgent
-from project_pilot.db import session_scope
-from project_pilot.mcp_prompts import PROMPTS, render
-from project_pilot.notification.messages import from_stored
-from project_pilot.notification.telegram import match_keyboard, match_text
-from project_pilot.repository import Repository
+from project_pilot.notification.telegram import API_BASE, DECLINE_ACTION
 
 logger = logging.getLogger(__name__)
 
-API_BASE = "https://api.telegram.org"
 # Telegram holds the request open this long when nothing is happening.
 POLL_TIMEOUT_S = 50
-# Comfortably under Telegram's own 4096-character message limit.
-CHUNK_CHARS = 3_500
 _HTTP_TIMEOUT = POLL_TIMEOUT_S + 15
-
-# Telegram omits message_thread_id outside a comment thread; 0 gives the group's
-# main area an identity of its own so it can hold a session like any thread.
-GENERAL = 0
-# What a `/command` fills its slot with when the thread has no listing yet.
-OPEN_SLOT = "die Ausschreibung, die Nik hier schickt"
-ALLOW, DENY = "allow", "deny"
-ACCEPT, DECLINE, DESCRIBE = "accept", "decline", "describe"
-CARD_ACTIONS = (ACCEPT, DECLINE, DESCRIBE)
-OPEN_POST = "💬 Zum Thread"
-
-# The `/` menu Telegram shows in the chat: the MCP workflow prompts, by their
-# own names and descriptions. Nothing is defined here — a command is expanded
-# into the very prompt body the MCP server serves, so the bot and every other
-# surface run the same procedure.
-COMMANDS: tuple[tuple[str, str], ...] = tuple(
-    (name, description) for name, (description, _body) in PROMPTS.items()
-)
-NO_DESCRIPTION = "Zu diesem Projekt ist keine Beschreibung gespeichert."
-# Unanswered questions must not pile up open turns forever.
-APPROVAL_TIMEOUT_S = 600
-
-# Telegram drops a chat action after about five seconds, so a turn that runs for
-# minutes needs it renewed to stay visible.
-TYPING_EVERY_S = 4.0
-# A reaction on the message being worked on: seen, and done. Best effort — the
-# allowed set is Telegram's, and a refused reaction is cosmetic.
-SEEN, DONE = "👀", "👍"
-
-
-@dataclass(frozen=True, slots=True)
-class Target:
-    """Where an answer goes: which chat, and what it hangs under.
-
-    A discussion group has no forum topics, so ``message_thread_id`` does not
-    address a comment thread there — replying to the thread's root message
-    does. One field covers both cases: the root for a comment, the human's own
-    message for anything written in the group's main area.
-    """
-
-    chat_id: str
-    reply_to: int | None = None
+# How long to wait after a failed poll before asking again.
+RETRY_DELAY_S = 5.0
+DECLINED = "🚫 Abgelehnt"
 
 
 @dataclass(frozen=True, slots=True)
 class Press:
-    """One button press: a permission answer, or a decision on a match card."""
+    """One button press: who answered, on which message, and what it asked for."""
 
-    update_id: int
     callback_id: str
-    user_id: int
+    chat_id: str
+    message_id: int
     action: str
-    argument: str
-    chat_id: int | None = None
-    thread_id: int | None = None
-    message_id: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class Forward:
-    """Telegram's own copy of a channel post, arriving in the discussion group.
-
-    ``channel_message_id`` identifies the card that was posted;
-    ``root_id`` is this copy's id in the group, and therefore the id every
-    comment on that card will carry as its ``message_thread_id``.
-    """
-
-    update_id: int
-    chat_id: int
-    channel_message_id: int
-    root_id: int
-
-
-@dataclass(frozen=True, slots=True)
-class Incoming:
-    """One message worth acting on, already narrowed to what routing needs."""
-
-    update_id: int
-    chat_id: int
-    thread_id: int | None
-    user_id: int
+    listing_id: int | None
     text: str
-    # The message itself, so the answer can react on it rather than only
-    # eventually appearing somewhere below it.
-    message_id: int | None = None
 
 
 def update_ids(payload: Mapping[str, object]) -> list[int]:
-    """Every update id in a getUpdates response, parsed or not.
-
-    The offset must move past an update the bot does not act on just as much as
-    past one it does: Telegram redelivers anything unconfirmed *immediately*, so
-    a single unparsed update — a service message, an edit, a photo without a
-    caption — turns the poll loop into a hot loop that never reaches anything
-    newer. That is a bot which has silently stopped answering.
-    """
+    """Every update id in a ``getUpdates`` result, so the offset can move past them all."""
     result = payload.get("result")
     if not isinstance(result, list):
         return []
-    return [
-        update["update_id"]
-        for update in result
-        if isinstance(update, dict) and isinstance(update.get("update_id"), int)
-    ]
+    ids = [item.get("update_id") for item in result if isinstance(item, dict)]
+    return [item for item in ids if isinstance(item, int)]
 
 
-def _messages(payload: Mapping[str, object]) -> list[tuple[int, dict[str, object]]]:
-    """The ``message`` of every update, with its update id."""
+def parse_presses(payload: Mapping[str, object]) -> list[Press]:
+    """The button presses in a ``getUpdates`` result; anything malformed is skipped."""
     result = payload.get("result")
     if not isinstance(result, list):
         return []
-    found = []
-    for update in result:
-        if not isinstance(update, dict):
+    presses: list[Press] = []
+    for item in result:
+        if not isinstance(item, dict):
             continue
-        update_id = update.get("update_id")
-        message = update.get("message")
-        if isinstance(update_id, int) and isinstance(message, dict):
-            found.append((update_id, message))
-    return found
-
-
-def parse_forwards(payload: Mapping[str, object]) -> list[Forward]:
-    """Pick out Telegram's automatic forwards of channel posts.
-
-    This is the one update that says which comment thread belongs to which card,
-    and it arrives on its own a moment after the post. Nothing else in the group
-    carries that link, so missing it would leave the thread unroutable.
-    """
-    forwards = []
-    for update_id, message in _messages(payload):
-        if message.get("is_automatic_forward") is not True:
+        query = item.get("callback_query")
+        if not isinstance(query, dict):
             continue
-        origin = message.get("forward_origin")
-        origin = origin if isinstance(origin, dict) else {}
+        message = query.get("message")
+        data = query.get("data")
+        callback_id = query.get("id")
+        if not (
+            isinstance(message, dict) and isinstance(data, str) and isinstance(callback_id, str)
+        ):
+            continue
         chat = message.get("chat")
-        channel_message_id = origin.get("message_id")
-        root_id = message.get("message_id")
-        if origin.get("type") != "channel" or not isinstance(channel_message_id, int):
+        message_id = message.get("message_id")
+        if not (isinstance(chat, dict) and isinstance(message_id, int)):
             continue
-        if not isinstance(root_id, int) or not isinstance(chat, dict):
-            continue
-        chat_id = chat.get("id")
-        if not isinstance(chat_id, int):
-            continue
-        forwards.append(
-            Forward(
-                update_id=update_id,
-                chat_id=chat_id,
-                channel_message_id=channel_message_id,
-                root_id=root_id,
-            )
-        )
-    return forwards
-
-
-def parse_callbacks(payload: Mapping[str, object]) -> list[Press]:
-    """Pick the button presses out of a getUpdates response."""
-    result = payload.get("result")
-    if not isinstance(result, list):
-        return []
-    presses = []
-    for update in result:
-        if not isinstance(update, dict):
-            continue
-        update_id = update.get("update_id")
-        callback = update.get("callback_query")
-        if not isinstance(update_id, int) or not isinstance(callback, dict):
-            continue
-        callback_id, data = callback.get("id"), callback.get("data")
-        sender = callback.get("from")
-        if not isinstance(callback_id, str) or not isinstance(data, str):
-            continue
-        if not isinstance(sender, dict) or not isinstance(sender.get("id"), int):
-            continue
-        action, _, argument = data.partition(":")
-        if action not in (ALLOW, DENY, *CARD_ACTIONS) or not argument:
-            continue
-        origin = callback.get("message")
-        origin = origin if isinstance(origin, dict) else {}
-        chat = origin.get("chat")
-        chat_id = chat.get("id") if isinstance(chat, dict) else None
-        thread_id = origin.get("message_thread_id")
-        message_id = origin.get("message_id")
+        action, _, raw_id = data.partition(":")
+        listing_id = int(raw_id) if raw_id.isdigit() else None
+        text = message.get("text")
         presses.append(
             Press(
-                update_id=update_id,
                 callback_id=callback_id,
-                user_id=int(sender["id"]),
+                chat_id=str(chat.get("id")),
+                message_id=message_id,
                 action=action,
-                argument=argument,
-                chat_id=chat_id if isinstance(chat_id, int) else None,
-                thread_id=thread_id if isinstance(thread_id, int) else None,
-                message_id=message_id if isinstance(message_id, int) else None,
+                listing_id=listing_id,
+                text=text if isinstance(text, str) else "",
             )
         )
     return presses
 
 
-def parse_updates(payload: Mapping[str, object]) -> list[Incoming]:
-    """Pick the plain text messages a human wrote out of a getUpdates response.
+class TelegramButtons:
+    """Polls for button presses on the match cards and acts on **Ablehnen**."""
 
-    Everything else — edits, joins, service messages, and Telegram's own forward
-    of each channel post — is skipped here rather than deeper in, so the routing
-    code only ever sees messages someone typed. The forward matters most: its
-    text *is* the card, and answering it would have the bot talk to itself.
-    """
-    messages = []
-    for update_id, message in _messages(payload):
-        if message.get("is_automatic_forward") is True:
-            continue
-        text = message.get("text")
-        chat = message.get("chat")
-        sender = message.get("from")
-        if not isinstance(text, str) or not text.strip():
-            continue
-        if not isinstance(chat, dict) or not isinstance(sender, dict):
-            continue
-        chat_id, user_id = chat.get("id"), sender.get("id")
-        thread_id = message.get("message_thread_id")
-        if not isinstance(chat_id, int) or not isinstance(user_id, int):
-            continue
-        message_id = message.get("message_id")
-        messages.append(
-            Incoming(
-                update_id=update_id,
-                chat_id=chat_id,
-                thread_id=thread_id if isinstance(thread_id, int) else None,
-                user_id=user_id,
-                text=text.strip(),
-                message_id=message_id if isinstance(message_id, int) else None,
-            )
-        )
-    return messages
-
-
-def _key(thread_id: int | None) -> int:
-    """The identity a conversation is stored under; the main area has its own."""
-    return GENERAL if thread_id is None else thread_id
-
-
-def expand_command(text: str) -> str | None:
-    """Turn `/write_application` into the workflow it stands for, else None.
-
-    Telegram sends `/name` and, in a group, `/name@thebot`; anything after that
-    is the user's own addition and is kept.
-    """
-    if not text.startswith("/"):
-        return None
-    head, _, rest = text[1:].partition(" ")
-    name = head.split("@", 1)[0]
-    if name not in PROMPTS:
-        return None
-    body = render(name, "{listing}")
-    return f"{body}\n\n{rest.strip()}" if rest.strip() else body
-
-
-def question_text(tool: str, detail: str) -> str:
-    """What the permission question says, kept to what fits on a phone."""
-    head = f"🔐 Freigabe: {tool}"
-    return f"{head}\n{detail}" if detail else head
-
-
-def post_link(chat_id: str, message_id: int) -> str | None:
-    """A deep link to one post in a private channel, or None if unaddressable."""
-    if not chat_id.startswith("-100"):
-        return None
-    return f"https://t.me/c/{chat_id.removeprefix('-100')}/{message_id}"
-
-
-def chunk(text: str, size: int = CHUNK_CHARS) -> list[str]:
-    """Split a long answer on line breaks where possible, hard-split otherwise.
-
-    Telegram rejects a message past its limit outright, which would lose the
-    whole answer rather than shorten it.
-    """
-    if len(text) <= size:
-        return [text]
-    parts: list[str] = []
-    rest = text
-    while len(rest) > size:
-        cut = rest.rfind("\n", 0, size)
-        if cut <= 0:
-            cut = size
-        parts.append(rest[:cut].rstrip())
-        rest = rest[cut:].lstrip("\n")
-    if rest:
-        parts.append(rest)
-    return parts
-
-
-class TelegramBot:
-    """Polls the discussion group and answers each match in its comment thread."""
-
-    def __init__(
-        self,
-        *,
-        bot_token: str,
-        chat_id: str,
-        allowed_user_ids: Sequence[int],
-        agent: ThreadAgent,
-        session_factory: async_sessionmaker[AsyncSession],
-        group_chat_id: str | None = None,
-    ) -> None:
+    def __init__(self, *, bot_token: str, chat_id: str) -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
-        self._channel_id = str(chat_id)
-        # Resolved from the channel on the first poll. Passed in only by tests
-        # and by an operator overriding a linkage Telegram reports wrongly.
-        self._group_id = str(group_chat_id) if group_chat_id is not None else None
-        self._allowed = set(allowed_user_ids)
-        self._agent = agent
-        self._session_factory = session_factory
-        self._offset = 0
-        # One lock per thread: two quick messages in the same conversation are
-        # answered in order instead of racing each other's session writes.
-        self._locks: dict[int, asyncio.Lock] = {}
-        # Answers in flight, and the permission questions they are waiting on.
-        self._answering: set[asyncio.Task[None]] = set()
-        self._pending: dict[str, asyncio.Future[bool]] = {}
+        self._chat_id = chat_id
+        self._offset: int | None = None
 
     async def run_forever(self) -> None:
-        """Poll until cancelled, surviving transient Telegram failures."""
-        logger.info("telegram bot started; allowed users: %s", sorted(self._allowed))
+        """Poll until cancelled; a failed poll is logged and retried, never fatal."""
         async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT) as client:
-            await self.register_commands(client)
             while True:
                 try:
                     await self.poll_once(client)
-                except Exception as err:
-                    # Any exception, not only HTTP: a poller that dies on one
-                    # malformed update or one unforeseen bug goes silent, and a
-                    # silent bot is indistinguishable from a bot that ignores
-                    # you. Log it and keep polling.
-                    logger.exception("polling failed, retrying: %s", err)
-                    await asyncio.sleep(5)
-
-    async def resolve_group(self, client: httpx.AsyncClient) -> str | None:
-        """The discussion group linked to the channel, asked of Telegram once.
-
-        Retried on every poll until it answers rather than fixed at startup: a
-        bot that came up before the group was linked would otherwise stay deaf
-        until someone restarted it.
-        """
-        if self._group_id is not None:
-            return self._group_id
-        try:
-            response = await client.post(f"{self._api}/getChat", json={"chat_id": self._channel_id})
-            response.raise_for_status()
-        except httpx.HTTPError as err:
-            logger.warning("could not read the channel's linked group: %s", err)
-            return None
-        body = response.json()
-        result = body.get("result") if isinstance(body, dict) else None
-        linked = result.get("linked_chat_id") if isinstance(result, dict) else None
-        if not isinstance(linked, int):
-            logger.warning(
-                "channel %s has no linked discussion group; comments cannot be read",
-                self._channel_id,
-            )
-            return None
-        self._group_id = str(linked)
-        logger.info("discussion group resolved: %s", self._group_id)
-        return self._group_id
+                except httpx.HTTPError as err:
+                    logger.warning("telegram poll failed: %s", err)
+                    await asyncio.sleep(RETRY_DELAY_S)
 
     async def poll_once(self, client: httpx.AsyncClient) -> int:
-        """One getUpdates round; returns how many updates were taken up.
+        """One ``getUpdates`` round; the number of presses handled.
 
-        Messages are dispatched, not awaited: an answer may stop to ask for a
-        permission whose button press only arrives through a later round.
+        The offset moves past every update in the batch, handled or not, so a
+        press from a foreign chat can never wedge the loop by being re-served.
         """
-        group_id = await self.resolve_group(client)
-        response = await client.post(
-            f"{self._api}/getUpdates",
-            json={
-                "offset": self._offset,
-                "timeout": POLL_TIMEOUT_S,
-                # Only what this bot acts on; everything else would arrive just
-                # to be skipped, and service messages are a large "everything".
-                "allowed_updates": ["message", "callback_query"],
-            },
-        )
+        params: dict[str, object] = {
+            "timeout": POLL_TIMEOUT_S,
+            "allowed_updates": ["callback_query"],
+        }
+        if self._offset is not None:
+            params["offset"] = self._offset
+        response = await client.post(f"{self._api}/getUpdates", json=params)
         response.raise_for_status()
-        body = response.json()
-        payload = body if isinstance(body, dict) else {}
-        results = payload.get("result")
-        logger.info("received %d update(s)", len(results) if isinstance(results, list) else 0)
-        # Before anything is acted on, and for every update rather than only the
-        # ones that parse — see update_ids for why this order matters.
-        for update_id in update_ids(payload):
-            self._offset = max(self._offset, update_id + 1)
-        taken = 0
-        # Forwards first: a card's thread must be known before a press or a
-        # comment on that same card is routed.
-        for forward in parse_forwards(payload):
-            if group_id is not None and str(forward.chat_id) != group_id:
-                logger.warning("ignoring a forward into chat %s", forward.chat_id)
-                continue
-            if await self._link(forward):
-                taken += 1
-        for press in parse_callbacks(payload):
-            try:
-                if await self._press(client, press):
-                    taken += 1
-            except Exception:  # one bad press must not stop the round
-                logger.exception("handling press %s failed", press.action)
-        for message in parse_updates(payload):
-            if not self._accepts(message, group_id):
-                continue
-            logger.info("answering message %s in thread %s", message.update_id, message.thread_id)
-            task = asyncio.create_task(self._answer_task(client, message))
-            self._answering.add(task)
-            task.add_done_callback(self._answering.discard)
-            taken += 1
-        return taken
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return 0
+        ids = update_ids(payload)
+        if ids:
+            self._offset = max(ids) + 1
+        handled = 0
+        for press in parse_presses(payload):
+            if await self._handle(client, press):
+                handled += 1
+        return handled
 
-    async def register_commands(self, client: httpx.AsyncClient) -> bool:
-        """Publish the `/` menu; False if Telegram refused it.
-
-        Best effort on purpose: a missing menu is a worse chat, not a broken
-        bot, and the agent understands the same words typed out anyway.
-        """
-        try:
-            response = await client.post(
-                f"{self._api}/setMyCommands",
-                json={
-                    "commands": [
-                        {"command": name, "description": description}
-                        for name, description in COMMANDS
-                    ]
-                },
-            )
-            response.raise_for_status()
-        except httpx.HTTPError as err:
-            logger.warning("could not register the command menu: %s", err)
+    async def _handle(self, client: httpx.AsyncClient, press: Press) -> bool:
+        if press.chat_id != self._chat_id:
+            logger.warning("ignoring a press from chat %s", press.chat_id)
             return False
+        if press.action != DECLINE_ACTION:
+            await self._answer(client, press.callback_id, "Unbekannte Aktion")
+            return False
+        await self._decline(client, press)
         return True
-
-    async def drain(self) -> None:
-        """Wait for the answers currently in flight (tests, shutdown)."""
-        while self._answering:
-            await asyncio.gather(*tuple(self._answering), return_exceptions=True)
-
-    async def _link(self, forward: Forward) -> bool:
-        """Record which comment thread Telegram opened for which card."""
-        async with session_scope(self._session_factory) as session:
-            repo = Repository(session)
-            thread = await repo.get_thread_by_channel_message(forward.channel_message_id)
-            if thread is None:
-                # A post this bot did not send, or one whose row was declined
-                # away in between. Either way there is no listing to attach.
-                logger.info("no listing behind channel post %s", forward.channel_message_id)
-                return False
-            bound = await repo.bind_thread_id(thread, forward.root_id)
-            await session.commit()
-        if bound:
-            logger.info(
-                "channel post %s discusses in thread %s",
-                forward.channel_message_id,
-                forward.root_id,
-            )
-        return bound
-
-    def _accepts(self, message: Incoming, group_id: str | None) -> bool:
-        if self._allowed and message.user_id not in self._allowed:
-            # Anyone else's message is dropped without a reply: answering would
-            # confirm the bot is here and burn tokens on a stranger.
-            logger.warning("ignoring message from user %s", message.user_id)
-            return False
-        if group_id is None or str(message.chat_id) != group_id:
-            logger.warning("ignoring message from chat %s", message.chat_id)
-            return False
-        return True
-
-    async def _answer_task(self, client: httpx.AsyncClient, message: Incoming) -> None:
-        try:
-            await self._handle(client, message)
-        except Exception:  # a crashed answer must not take the poll loop with it
-            logger.exception("answering failed in thread %s", message.thread_id)
-
-    async def _press(self, client: httpx.AsyncClient, press: Press) -> bool:
-        """Route one button press: a permission answer, or a card decision."""
-        if self._allowed and press.user_id not in self._allowed:
-            # Checked before anything is taken off a pile: a stranger's press
-            # must not consume the answer the owner is still going to give.
-            logger.warning("ignoring press from user %s", press.user_id)
-            return False
-        if press.action in CARD_ACTIONS:
-            return await self._card(client, press)
-        return await self._decide(client, press)
-
-    async def _decide(self, client: httpx.AsyncClient, press: Press) -> bool:
-        """Hand a permission answer to the question that is waiting for it."""
-        waiting = self._pending.pop(press.argument, None)
-        allowed = press.action == ALLOW
-        await self._answer_callback(
-            client, press.callback_id, "Erlaubt" if allowed else "Abgelehnt"
-        )
-        if waiting is None or waiting.done():
-            return False
-        waiting.set_result(allowed)
-        return True
-
-    async def _card(self, client: httpx.AsyncClient, press: Press) -> bool:
-        """Act on one of the three decisions a match card offers.
-
-        The press lands on the channel post, so the comment thread it belongs to
-        has to be looked up rather than read off the press. Declining needs no
-        thread at all, which is why it is decided first.
-        """
-        try:
-            listing_id = int(press.argument)
-        except ValueError:
-            logger.warning("card press with a bad listing id: %r", press.argument)
-            return False
-        if press.action == DECLINE:
-            await self._answer_callback(client, press.callback_id, "Abgelehnt")
-            await self._decline(client, press)
-            return True
-        root_id = await self._root_for(press)
-        target = Target(self._group_id or self._channel_id, reply_to=root_id)
-        if press.action == DESCRIBE:
-            await self._answer_callback(client, press.callback_id, "Beschreibung")
-            await self._describe(client, listing_id, target)
-            return True
-        await self._answer_callback(client, press.callback_id, "Angenommen")
-        # Accepting is real work, so it goes the same way a message does: its
-        # own task, because the run may stop to ask for a permission whose
-        # press can only arrive through a later poll.
-        task = asyncio.create_task(self._accept(client, listing_id, press, target))
-        self._answering.add(task)
-        task.add_done_callback(self._answering.discard)
-        return True
-
-    async def _root_for(self, press: Press) -> int | None:
-        """The comment thread belonging to the card this press landed on.
-
-        None while Telegram's automatic forward has not been seen — a few
-        seconds after the post at most. The answer then goes to the group
-        without a thread rather than nowhere.
-        """
-        if press.message_id is None:
-            return None
-        async with session_scope(self._session_factory) as session:
-            thread = await Repository(session).get_thread_by_channel_message(press.message_id)
-            return thread.thread_id if thread is not None else None
-
-    async def _describe(self, client: httpx.AsyncClient, listing_id: int, target: Target) -> None:
-        """Post the listing's own text, which the card deliberately leaves out."""
-        async with session_scope(self._session_factory) as session:
-            listing = await Repository(session).get_listing(listing_id)
-        text = (listing.description or "").strip() if listing else ""
-        for part in chunk(text or NO_DESCRIPTION):
-            await self._send(client, part, target=target)
 
     async def _decline(self, client: httpx.AsyncClient, press: Press) -> None:
-        """Take the whole match off the screen.
+        """Take the card off the feed: delete it, or strip it when Telegram refuses.
 
-        A turned-down project is not a record anyone reads; it is clutter in the
-        one list that has to stay scannable. So the channel post goes, and with
-        it the forwarded copy that roots the comment thread — deleting that root
-        is what makes the thread itself disappear rather than linger empty.
-        Comments already written stay in the group's own history; Telegram gives
-        no way to sweep them, and the verdict is in the database regardless.
+        A bot may only delete a message for 48 hours. Past that, the fallback
+        removes the buttons and marks the card declined, so the press still
+        visibly did something.
         """
-        if press.message_id is None:
-            return
-        async with session_scope(self._session_factory) as session:
-            repo = Repository(session)
-            thread = await repo.get_thread_by_channel_message(press.message_id)
-            root_id = thread.thread_id if thread is not None else None
-            if thread is not None:
-                await repo.delete_thread(thread)
-            await session.commit()
-        await self._delete(client, self._channel_id, press.message_id)
-        if root_id is not None and self._group_id is not None:
-            await self._delete(client, self._group_id, root_id)
-
-    async def _accept(
-        self, client: httpx.AsyncClient, listing_id: int, press: Press, target: Target
-    ) -> None:
-        """Start the work: run the drafting workflow in the post's own thread."""
-        if press.message_id is not None:
-            await self._clear_keyboard(client, self._channel_id, press.message_id)
-        await self._run(
-            client,
-            target=target,
-            thread_id=target.reply_to,
-            listing_id=listing_id,
-            message=render("write_application", f"Listing {listing_id}"),
+        deleted = await self._call(
+            client, "deleteMessage", {"chat_id": press.chat_id, "message_id": press.message_id}
         )
-
-    async def _handle(self, client: httpx.AsyncClient, message: Incoming) -> bool:
-        """Answer wherever the message came from, opening its session.
-
-        A comment on a match is about that match; anything in the group's main
-        area is about whatever you bring into it, and gets its own session the
-        first time you write there.
-        """
-        group_id = self._group_id or str(message.chat_id)
-        thread_id = message.thread_id
-        # A comment hangs under the thread's root; anything else under the
-        # message itself, so an answer never floats free of its question.
-        target = Target(group_id, reply_to=thread_id or message.message_id)
-        async with session_scope(self._session_factory) as session:
-            repo = Repository(session)
-            thread = await repo.ensure_thread(_key(thread_id))
-            listing_id = thread.listing_id
-            await session.commit()
-        # A `/command` is not handled here: it stands for one of the MCP
-        # workflow prompts, and what reaches the agent is that prompt's own
-        # body, so the bot runs the same procedure every other surface runs.
-        text = expand_command(message.text) or message.text
-        slot = f"Listing {listing_id}" if listing_id is not None else OPEN_SLOT
-        text = text.replace("{listing}", slot)
-        return await self._run(
-            client,
-            target=target,
-            thread_id=thread_id,
-            listing_id=listing_id,
-            message=text,
-            react_to=message.message_id,
-        )
-
-    async def _run(
-        self,
-        client: httpx.AsyncClient,
-        *,
-        target: Target,
-        thread_id: int | None,
-        listing_id: int | None,
-        message: str,
-        react_to: int | None = None,
-    ) -> bool:
-        """One agent turn in one thread, serialized per thread, answered there.
-
-        Everything around the turn exists so it never looks stalled: the message
-        is marked seen, the typing indicator is renewed, and one status line
-        names the step the agent is on.
-        """
-        lock = self._locks.setdefault(_key(thread_id), asyncio.Lock())
-        async with lock:
-            if react_to is not None:
-                await self._react(client, target.chat_id, react_to, SEEN)
-            typing = asyncio.create_task(self._keep_typing(client, target))
-            report, status = self._progress(client, target)
-            try:
-                reply = await self._answer(
-                    client,
-                    target=target,
-                    thread_id=thread_id,
-                    listing_id=listing_id,
-                    message=message,
-                    progress=report,
-                )
-            finally:
-                typing.cancel()
-                for message_id in status:
-                    await self._delete(client, target.chat_id, message_id)
-        if react_to is not None:
-            # Cleared rather than marked done when the turn failed: a thumb up
-            # over an error message would be a lie.
-            await self._react(client, target.chat_id, react_to, DONE if reply.ok else None)
-        for part in chunk(reply.text):
-            await self._send(client, part, target=target)
-        return True
-
-    async def _answer(
-        self,
-        client: httpx.AsyncClient,
-        *,
-        target: Target,
-        thread_id: int | None,
-        listing_id: int | None,
-        message: str,
-        progress: Progress,
-    ) -> AgentReply:
-        """Ask the agent, and record the session the thread continues in."""
-        async with session_scope(self._session_factory) as session:
-            repo = Repository(session)
-            thread = await repo.ensure_thread(_key(thread_id))
-            session_id = thread.session_id
-
-            reply = await self._agent.reply(
-                listing_id=listing_id,
-                session_id=session_id,
-                message=message,
-                approve=self._approver(client, target),
-                progress=progress,
-            )
-            if reply.session_id and reply.session_id != session_id:
-                # Stored even when the turn failed: the session exists either
-                # way, and losing its id would restart the thread from nothing.
-                await repo.set_session_id(thread, reply.session_id)
-            bound = (
-                reply.listing_id is not None
-                and listing_id is None
-                and await repo.set_listing_id(thread, reply.listing_id)
-            )
-            await session.commit()
-            if bound and reply.listing_id is not None:
-                await self._show_card(client, repo, reply.listing_id, target)
-                await session.commit()
-            return reply
-
-    async def _show_card(
-        self,
-        client: httpx.AsyncClient,
-        repo: Repository,
-        listing_id: int,
-        target: Target,
-    ) -> None:
-        """Post the card for a listing the agent just took on — to the channel.
-
-        The same card a scan match gets, buttons and all, built from the stored
-        verdict rather than by asking the model to format one. It goes to the
-        channel and not into this thread so that a project you brought yourself
-        ends up exactly where a scanned one does: one post, its own comment
-        thread, the same three decisions. A link back keeps the conversation you
-        are already in from becoming a dead end.
-        """
-        listing = await repo.get_listing_with_evaluations(listing_id)
-        if listing is None:
-            return
-        message = from_stored(listing, datetime.now(UTC))
-        message_id = await self._send(
-            client,
-            match_text(message),
-            target=Target(self._channel_id),
-            keyboard=match_keyboard(message),
-        )
-        if message_id is None:
-            return
-        await repo.record_channel_message(listing_id, message_id)
-        link = post_link(self._channel_id, message_id)
-        if link is not None:
-            await self._send(
+        if not deleted:
+            await self._call(
                 client,
-                "→ Das Projekt hat jetzt einen eigenen Thread.",
-                target=target,
-                keyboard={"inline_keyboard": [[{"text": OPEN_POST, "url": link}]]},
+                "editMessageText",
+                {
+                    "chat_id": press.chat_id,
+                    "message_id": press.message_id,
+                    "text": f"{DECLINED}\n\n{press.text}"[:4_000],
+                    "disable_web_page_preview": True,
+                },
             )
+        await self._answer(client, press.callback_id, "Abgelehnt")
+        logger.info("declined listing %s (message %s)", press.listing_id, press.message_id)
 
-    def _approver(self, client: httpx.AsyncClient, target: Target) -> Approve:
-        """A permission question bound to one thread, as the agent expects it."""
-
-        async def approve(tool: str, detail: str) -> bool:
-            return await self._ask(client, target, tool, detail)
-
-        return approve
-
-    async def _ask(self, client: httpx.AsyncClient, target: Target, tool: str, detail: str) -> bool:
-        """Put the question in the thread and wait for the button.
-
-        Refuses on timeout and on a failed send: an unanswered question must not
-        hold a turn open, and silently allowing would defeat the point of asking.
-        """
-        request_id = secrets.token_urlsafe(8)
-        waiting: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        self._pending[request_id] = waiting
-        message_id = await self._send(
-            client,
-            question_text(tool, detail),
-            target=target,
-            keyboard={
-                "inline_keyboard": [
-                    [
-                        {"text": "✅ Erlauben", "callback_data": f"{ALLOW}:{request_id}"},
-                        {"text": "🚫 Ablehnen", "callback_data": f"{DENY}:{request_id}"},
-                    ]
-                ]
-            },
+    async def _answer(self, client: httpx.AsyncClient, callback_id: str, text: str) -> None:
+        """Stop the button's spinner; Telegram shows the text as a toast."""
+        await self._call(
+            client, "answerCallbackQuery", {"callback_query_id": callback_id, "text": text}
         )
-        if message_id is None:
-            self._pending.pop(request_id, None)
-            return False
+
+    async def _call(
+        self, client: httpx.AsyncClient, method: str, payload: dict[str, object]
+    ) -> bool:
+        """One Bot API call; False on any failure, which is logged and not raised."""
         try:
-            allowed = await asyncio.wait_for(waiting, timeout=APPROVAL_TIMEOUT_S)
-        except TimeoutError:
-            allowed = False
-            logger.warning("permission question %s timed out (%s)", request_id, tool)
-        finally:
-            self._pending.pop(request_id, None)
-        # Rewrite the question into its answer, so the thread reads as a record
-        # rather than leaving live buttons on a decision already made.
-        await self._edit(
-            client,
-            target.chat_id,
-            message_id,
-            f"{question_text(tool, detail)}\n\n{'✅ erlaubt' if allowed else '🚫 abgelehnt'}",
-        )
-        return allowed
-
-    async def _react(
-        self, client: httpx.AsyncClient, chat_id: str, message_id: int, emoji: str | None
-    ) -> None:
-        """Put one reaction on a message, or clear it with an empty list."""
-        reaction = [] if emoji is None else [{"type": "emoji", "emoji": emoji}]
-        try:
-            await client.post(
-                f"{self._api}/setMessageReaction",
-                json={"chat_id": chat_id, "message_id": message_id, "reaction": reaction},
-            )
-        except httpx.HTTPError as err:  # decoration, never the point
-            logger.debug("reaction on %s failed: %s", message_id, err)
-
-    async def _keep_typing(self, client: httpx.AsyncClient, target: Target) -> None:
-        """Hold the typing indicator up for as long as the turn runs."""
-        while True:
-            await self._typing(client, target)
-            await asyncio.sleep(TYPING_EVERY_S)
-
-    async def _typing(self, client: httpx.AsyncClient, target: Target) -> None:
-        try:
-            await client.post(
-                f"{self._api}/sendChatAction",
-                json={"chat_id": target.chat_id, "action": "typing"},
-            )
-        except httpx.HTTPError as err:  # a missing typing indicator is cosmetic
-            logger.debug("typing action failed: %s", err)
-
-    def _progress(self, client: httpx.AsyncClient, target: Target) -> tuple[Progress, list[int]]:
-        """A single line in the thread saying what the agent is doing right now.
-
-        Sent on the first step and edited afterwards, so a long turn reports
-        one moving line rather than a wall of status messages. The returned
-        list holds its message id, for the caller to clean up.
-        """
-        holder: list[int] = []
-        seen: list[str] = []
-
-        async def report(label: str) -> None:
-            if seen and seen[-1] == label:
-                return  # the same tool twice in a row is not news
-            seen.append(label)
-            text = f"⏳ {label} …"
-            if holder:
-                await self._edit(client, target.chat_id, holder[0], text)
-                return
-            message_id = await self._send(client, text, target=target)
-            if message_id is not None:
-                holder.append(message_id)
-
-        return report, holder
-
-    async def _send(
-        self,
-        client: httpx.AsyncClient,
-        text: str,
-        *,
-        target: Target,
-        keyboard: dict[str, object] | None = None,
-    ) -> int | None:
-        """Send one message; returns its id, or None if Telegram refused it."""
-        payload: dict[str, object] = {
-            "chat_id": target.chat_id,
-            "text": text,
-            "disable_web_page_preview": True,
-        }
-        if target.reply_to is not None:
-            # allow_sending_without_reply, because a root that was deleted
-            # mid-turn must cost the reply its thread, never the answer itself.
-            payload["reply_parameters"] = {
-                "message_id": target.reply_to,
-                "allow_sending_without_reply": True,
-            }
-        if keyboard is not None:
-            payload["reply_markup"] = keyboard
-        try:
-            response = await client.post(f"{self._api}/sendMessage", json=payload)
+            response = await client.post(f"{self._api}/{method}", json=payload)
             response.raise_for_status()
         except httpx.HTTPError as err:
-            logger.warning("reply failed in chat %s: %s", target.chat_id, err)
-            return None
+            logger.warning("telegram %s failed: %s", method, err)
+            return False
         body = response.json()
-        result = body.get("result") if isinstance(body, dict) else None
-        message_id = result.get("message_id") if isinstance(result, dict) else None
-        return message_id if isinstance(message_id, int) else None
-
-    async def _delete(self, client: httpx.AsyncClient, chat_id: str, message_id: int) -> None:
-        try:
-            await client.post(
-                f"{self._api}/deleteMessage",
-                json={"chat_id": chat_id, "message_id": message_id},
-            )
-        except httpx.HTTPError as err:  # a leftover message is not a failure
-            logger.debug("deleting %s in %s failed: %s", message_id, chat_id, err)
-
-    async def _clear_keyboard(
-        self, client: httpx.AsyncClient, chat_id: str, message_id: int
-    ) -> None:
-        """Take the buttons off a card that has been decided."""
-        try:
-            await client.post(
-                f"{self._api}/editMessageReplyMarkup",
-                json={"chat_id": chat_id, "message_id": message_id},
-            )
-        except httpx.HTTPError as err:  # cosmetic; the decision already stands
-            logger.debug("clearing the keyboard on %s failed: %s", message_id, err)
-
-    async def _edit(
-        self, client: httpx.AsyncClient, chat_id: str, message_id: int, text: str
-    ) -> None:
-        try:
-            await client.post(
-                f"{self._api}/editMessageText",
-                json={"chat_id": chat_id, "message_id": message_id, "text": text},
-            )
-        except httpx.HTTPError as err:  # cosmetic; the decision already stands
-            logger.debug("editing message %s failed: %s", message_id, err)
-
-    async def _answer_callback(
-        self, client: httpx.AsyncClient, callback_id: str, text: str
-    ) -> None:
-        try:
-            await client.post(
-                f"{self._api}/answerCallbackQuery",
-                json={"callback_query_id": callback_id, "text": text},
-            )
-        except httpx.HTTPError as err:  # only the little toast in the client
-            logger.debug("answering callback failed: %s", err)
+        return isinstance(body, dict) and body.get("ok") is True

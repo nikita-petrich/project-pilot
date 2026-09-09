@@ -33,6 +33,13 @@ services:
       start_period: 60s
     restart: unless-stopped
 
+  bot:
+    # Hears the Ablehnen button on the match cards; needs only Telegram.
+    build: .
+    command: ["telegram-bot"]
+    env_file: .env
+    restart: unless-stopped
+
   mcp:
     build: .
     command: ["mcp"]

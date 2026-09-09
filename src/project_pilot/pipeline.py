@@ -79,14 +79,22 @@ class Matcher(Protocol):
 
 
 class MatchNotifier(Protocol):
-    """The notification channel: one channel post per match, plus warnings.
+    """The alert channel: one card per match, plus warnings.
 
-    ``notify`` answers with the id of the post it made, because that id is what
-    ties the card to the comment thread Telegram opens underneath it.
+    ``notify`` answers with the id of the message it sent, or None when the
+    send failed and the match must stay pending.
     """
 
-    async def notify(self, message: MatchMessage) -> int | None: ...
+    async def notify(
+        self, message: MatchMessage, *, session_url: str | None = None
+    ) -> int | None: ...
     async def notify_warning(self, text: str) -> bool: ...
+
+
+class SessionOpener(Protocol):
+    """Opens the Claude session a match is worked in; its URL, or None on failure."""
+
+    async def open_session(self, message: MatchMessage) -> str | None: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -130,6 +138,7 @@ class Pipeline:
         llm_probe: LlmProbe | None = None,
         alerter: HealthAlerter | None = None,
         notifier: MatchNotifier | None = None,
+        session_opener: SessionOpener | None = None,
     ) -> None:
         self._settings = settings
         self._profile = profile
@@ -141,6 +150,7 @@ class Pipeline:
         self._llm_probe = llm_probe
         self._alerter = alerter or HealthAlerter(self._send_operator_message)
         self._notifier = notifier
+        self._session_opener = session_opener
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
@@ -494,16 +504,19 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Post one card per pending match to the channel, durable per match.
+        """Open a Claude session and send one card per pending match, durable per match.
 
         Runs in its own session after the scan's unit of work has committed, and
-        commits after every successful send, so a delivered notification can
-        never be rolled back into "unnotified" and sent twice. A failed send
-        leaves the listing pending and it is retried on the next run.
+        commits after every successful send, so a delivered alert can never be
+        rolled back into "unnotified" and sent twice. A failed send leaves the
+        listing pending and it is retried on the next run.
 
-        The post's id is recorded in the same commit that marks the listing
-        notified: the two facts are one event, and a card whose id was lost
-        would leave its comment thread unroutable for good.
+        The session comes first and its URL is committed on its own, before the
+        card goes out: the fire endpoint has no idempotency key, so a URL that
+        was lost to a later failure would mean a second session for the same
+        project on the retry. A fire that fails does not hold the alert back —
+        the card goes out without its Bewerben button and says so, because a
+        match nobody hears about is the one failure this worker exists to prevent.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -530,15 +543,29 @@ class Pipeline:
                         listing.external_url,
                     )
                     continue
-                message_id = await notifier.notify(message)
+                if listing.claude_session_url is None and self._session_opener is not None:
+                    session_url = await self._session_opener.open_session(message)
+                    if session_url is not None:
+                        await repo.set_claude_session_url(listing, session_url)
+                        await session.commit()
+                    else:
+                        logger.warning(
+                            "no claude session for %s; sending the card without one",
+                            listing.external_url,
+                        )
+                message_id = await notifier.notify(message, session_url=listing.claude_session_url)
                 if message_id is None:
                     failed += 1
                     continue
-                await repo.record_channel_message(listing.id, message_id)
                 await repo.mark_notified([listing], now)
                 await session.commit()
                 outcome.notified += 1
-                logger.info("match sent: %s (post %s)", listing.external_url, message_id)
+                logger.info(
+                    "match sent: %s (message %s, session %s)",
+                    listing.external_url,
+                    message_id,
+                    listing.claude_session_url,
+                )
             if failed:
                 logger.warning("notification failed; %d match(es) will retry next run", failed)
 

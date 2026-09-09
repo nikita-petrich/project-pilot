@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from enum import StrEnum
 
-from sqlalchemy import BigInteger, Date, DateTime, Enum, ForeignKey, String, Text
+from sqlalchemy import Date, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -127,6 +127,10 @@ class Listing(Base):
         _pg_enum(ListingStatus, "listing_status"), default=ListingStatus.NEW
     )
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # The Claude cloud session this match is worked in, opened by the worker
+    # through the routine's fire endpoint. Also the double-fire guard: the fire
+    # endpoint has no idempotency key, so a listing with a URL is never fired again.
+    claude_session_url: Mapped[str | None] = mapped_column(String(512), default=None)
 
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
 
@@ -238,45 +242,6 @@ class ContactLead(Base):
     links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
     linkedin_message: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
-
-class TelegramThread(Base):
-    """One match's channel post, its comment thread, and the listing behind them.
-
-    A match is posted to the channel; Telegram forwards that post into the
-    linked discussion group by itself, and the forwarded copy is the root of the
-    comment thread people write in. Those are two different ids in two different
-    chats, and this row is what ties them to each other and to the listing.
-
-    ``channel_message_id`` is known the moment the card is sent.
-    ``thread_id`` — the root's id in the discussion group — is only known when
-    Telegram's automatic forward comes back through ``getUpdates`` a moment
-    later, so it starts null and is filled in then. The unique constraint on
-    ``listing_id`` is what keeps a repeated run from posting a second card for
-    the same project.
-    """
-
-    __tablename__ = "telegram_threads"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    # Null for a thread a human started themselves: it is a conversation with
-    # the agent that has no listing yet, and may never get one. Postgres allows
-    # any number of nulls under a unique constraint, so the guard against a
-    # second card for the same match still holds where it matters.
-    listing_id: Mapped[int | None] = mapped_column(
-        ForeignKey("listings.id", ondelete="CASCADE"), unique=True, default=None
-    )
-    channel_message_id: Mapped[int | None] = mapped_column(
-        BigInteger, index=True, unique=True, default=None
-    )
-    thread_id: Mapped[int | None] = mapped_column(BigInteger, index=True, unique=True, default=None)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-    # The agent session this topic continues in. The transcript itself belongs
-    # to the Claude Agent SDK (a file under CLAUDE_CONFIG_DIR); keeping only the
-    # id here means there is one copy of the conversation, not two to reconcile.
-    # Null until the topic's first answer, and again if that session is gone.
-    session_id: Mapped[str | None] = mapped_column(String(64), default=None)
 
 
 class SourceState(Base):

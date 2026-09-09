@@ -19,8 +19,14 @@ DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # A bot token as @BotFather hands it out: numeric bot id, colon, secret.
 BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
-# A supergroup chat id: negative, and Telegram prefixes supergroups with -100.
-GROUP_CHAT_ID_RE = re.compile(r"^-100\d+$")
+# A chat id is an integer: positive for the private chat with the bot (the
+# intended target), negative for a group or channel.
+CHAT_ID_RE = re.compile(r"^-?\d+$")
+# The routine's API trigger, as the modal at claude.ai/code/routines shows it.
+FIRE_URL_RE = re.compile(
+    r"^https://api\.anthropic\.com/v1/claude_code/routines/trig_[A-Za-z0-9]+/fire$"
+)
+ROUTINE_TOKEN_RE = re.compile(r"^sk-ant-oat01-")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -28,16 +34,17 @@ REQUIRED = (
     "OPENAI_API_KEY",
     "LLM_MODEL",
     "SEARCH_URLS",
-    # Telegram is THE notification channel; without it the daemon aborts at boot
-    # by design, so the deploy refuses here instead.
+    # Telegram is THE alert channel; without it the daemon aborts at boot by
+    # design, so the deploy refuses here instead.
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
+    # The routine whose fire opens one Claude session per match: without it the
+    # daemon aborts at boot too, because a card whose Bewerben leads nowhere is
+    # the one thing the alert must never be.
+    "CLAUDE_ROUTINE_FIRE_URL",
+    "CLAUDE_ROUTINE_TOKEN",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
-    # The thread agent calls Claude with its own key; without it the bot starts
-    # and can answer nothing. (Its MCP address is not a secret — compose points
-    # it at the mcp service.)
-    "ANTHROPIC_API_KEY",
     # The reverse proxy's Docker network. Wrong or unset, the MCP container comes
     # up healthy and stays unreachable — a 502 with nothing in its own logs, which
     # is exactly the kind of silent failure this gate exists to prevent.
@@ -87,26 +94,44 @@ def problems(settings: dict[str, str]) -> list[str]:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
     found.extend(_bot_token_problems(settings.get("TELEGRAM_BOT_TOKEN", "")))
     found.extend(_chat_id_problems(settings.get("TELEGRAM_CHAT_ID", "")))
+    found.extend(_routine_problems(settings))
     return found
 
 
 def _chat_id_problems(chat_id: str) -> list[str]:
-    """Catch a private chat id where the match supergroup belongs.
-
-    Topics only exist in a forum supergroup, whose id is negative and starts
-    with -100. A personal chat id is positive, accepted by sendMessage, and then
-    every match silently lands in a chat that can never hold a topic.
-    """
+    """Catch a value that is not a chat id at all (the bot's @name, a username)."""
     if not chat_id:
         return []  # absence is already reported by the REQUIRED check
-    if not GROUP_CHAT_ID_RE.match(chat_id):
+    if not CHAT_ID_RE.match(chat_id):
         return [
-            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a supergroup id. "
-            "Expected the forum supergroup the match topics live in, a negative "
-            "id starting with -100 — a positive id is a personal chat and cannot "
-            "hold topics."
+            f"TELEGRAM_CHAT_ID is {chat_id!r}, which is not a chat id. Expected the "
+            "numeric id of your private chat with the bot, as getUpdates reports it."
         ]
     return []
+
+
+def _routine_problems(settings: dict[str, str]) -> list[str]:
+    """Catch the two values of the routine's API trigger swapped or mistyped.
+
+    Both come from one modal at claude.ai/code/routines; the usual mix-ups are
+    pasting the routine page's URL instead of the fire endpoint, or an API key
+    where the per-routine token belongs. Either answers 4xx at the first match.
+    """
+    found: list[str] = []
+    fire_url = settings.get("CLAUDE_ROUTINE_FIRE_URL", "")
+    if fire_url and not FIRE_URL_RE.match(fire_url):
+        found.append(
+            "CLAUDE_ROUTINE_FIRE_URL does not look like a routine fire endpoint. Expected "
+            "https://api.anthropic.com/v1/claude_code/routines/trig_.../fire, as the "
+            "API-trigger modal shows it."
+        )
+    token = settings.get("CLAUDE_ROUTINE_TOKEN", "")
+    if token and not ROUTINE_TOKEN_RE.match(token):
+        found.append(
+            "CLAUDE_ROUTINE_TOKEN does not look like a routine token (sk-ant-oat01-...). "
+            "It is the per-routine token from the API-trigger modal, not an API key."
+        )
+    return found
 
 
 def _bot_token_problems(token: str) -> list[str]:

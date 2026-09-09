@@ -106,18 +106,12 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
-    telegram_allowed_user_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
 
-    anthropic_api_key: str = Field(default="", repr=False)
-    agent_model: str = "claude-opus-5"
-    # Where the thread agent reaches project-pilot's own tools. The agent runs
-    # the MCP client itself, so this is an address *it* must reach: inside the
-    # stack that is the mcp service, not the public hostname.
-    mcp_url: str = "http://mcp:8765/mcp"
-    # Where the thread agent works. Empty means the process's own directory,
-    # which is right for a local run; the container points it at a volume so
-    # what the agent writes survives a deploy.
-    agent_workspace: str = ""
+    # The routine whose API trigger opens one Claude session per match: the fire
+    # URL and its per-routine token, both copied from the routine's API-trigger
+    # modal at claude.ai/code/routines (see docs/claude-setup.md).
+    claude_routine_fire_url: str = ""
+    claude_routine_token: str = Field(default="", repr=False)
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
@@ -129,17 +123,14 @@ class Settings(BaseSettings):
     search_urls: Annotated[list[str], NoDecode] = Field(default_factory=list)
     log_level: str = "info"
 
-    @field_validator("search_urls", "telegram_allowed_user_ids", mode="before")
+    @field_validator("search_urls", mode="before")
     @classmethod
     def _split_csv(cls, value: object) -> object:
         """Read a list from ENV the way a human writes one: ``a,b,c``.
 
-        pydantic-settings would otherwise expect JSON for a list field, so a
-        single id (``TELEGRAM_ALLOWED_USER_IDS=4242``) parses as an int and the
-        process dies at boot with a type error.
+        pydantic-settings would otherwise expect JSON for a list field and the
+        process would die at boot with a type error.
         """
-        if isinstance(value, int):
-            return [value]
         if isinstance(value, str):
             # Tolerate the JSON form too, so a pasted ["a","b"] is not a boot error.
             items = (item.strip().strip("\"'") for item in value.strip().strip("[]").split(","))
@@ -217,17 +208,17 @@ class Settings(BaseSettings):
             raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
         return self.telegram_bot_token, self.telegram_chat_id
 
-    def require_agent(self) -> tuple[str, str]:
-        """The key and the MCP URL the thread agent needs, or a clear abort.
+    def require_claude_fire(self) -> tuple[str, str]:
+        """The routine fire URL and token, or a clear abort.
 
-        The MCP URL is the agent's whole domain surface, so an unset one would
-        produce an agent that can talk but not act.
+        Without them no match gets a session, and a card whose Bewerben button
+        leads nowhere is the one thing the alert must never be.
         """
-        if not self.anthropic_api_key:
-            raise ConfigError("ANTHROPIC_API_KEY must be set (the thread agent calls Claude)")
-        if not self.mcp_url:
-            raise ConfigError("MCP_URL must be set (where the agent reaches the MCP server)")
-        return self.anthropic_api_key, self.mcp_url
+        if not self.claude_routine_fire_url:
+            raise ConfigError("CLAUDE_ROUTINE_FIRE_URL must be set (the routine's API-trigger URL)")
+        if not self.claude_routine_token:
+            raise ConfigError("CLAUDE_ROUTINE_TOKEN must be set (the routine's API-trigger token)")
+        return self.claude_routine_fire_url, self.claude_routine_token
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

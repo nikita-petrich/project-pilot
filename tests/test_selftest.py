@@ -21,11 +21,13 @@ class _FakeNotifier:
     def __init__(self, *, ok: bool = True) -> None:
         self.ok = ok
         self.matches: list[MatchMessage] = []
+        self.session_urls: list[str | None] = []
         self.warnings: list[str] = []
 
-    async def notify(self, message: MatchMessage) -> int | None:
+    async def notify(self, message: MatchMessage, *, session_url: str | None = None) -> int | None:
         self.matches.append(message)
-        # The channel post's id, or nothing at all when the send failed.
+        self.session_urls.append(session_url)
+        # The message's id, or nothing at all when the send failed.
         return 5150 if self.ok else None
 
     async def notify_warning(self, text: str) -> bool:
@@ -48,9 +50,24 @@ def _result(*, passed: bool) -> CheckResult:
     )
 
 
-def _service(result: CheckResult, notifier: _FakeNotifier) -> SelfTestService:
+class _FakeOpener:
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.fired: list[MatchMessage] = []
+
+    async def open_session(self, message: MatchMessage) -> str | None:
+        self.fired.append(message)
+        return "https://claude.ai/code/session_01X" if self.ok else None
+
+
+def _service(
+    result: CheckResult, notifier: _FakeNotifier, opener: _FakeOpener | None = None
+) -> SelfTestService:
     return SelfTestService(
-        checker=_FakeChecker(result), notifier=notifier, profile_hash="abc123def456"
+        checker=_FakeChecker(result),
+        notifier=notifier,
+        opener=opener or _FakeOpener(),
+        profile_hash="abc123def456",
     )
 
 
@@ -59,15 +76,28 @@ async def test_match_pushes_card() -> None:
     report = await _service(_result(passed=True), notifier).run()
     assert report.ok
     assert len(notifier.matches) == 1
+    # The card links to the session the fire opened.
+    assert notifier.session_urls == ["https://claude.ai/code/session_01X"]
+    assert "claude session opened" in format_selftest(report)
     assert "match card pushed" in format_selftest(report)
 
 
 async def test_no_match_proves_channel_via_warning() -> None:
     notifier = _FakeNotifier()
-    report = await _service(_result(passed=False), notifier).run()
+    opener = _FakeOpener()
+    report = await _service(_result(passed=False), notifier, opener).run()
     assert report.ok
     assert notifier.matches == []
     assert len(notifier.warnings) == 1
+    assert opener.fired == []  # a routine run is not free; a no-match opens none
+
+
+async def test_a_failed_fire_fails_the_report_but_the_card_still_goes_out() -> None:
+    notifier = _FakeNotifier()
+    report = await _service(_result(passed=True), notifier, _FakeOpener(ok=False)).run()
+    assert not report.ok
+    assert "FAIL  session" in format_selftest(report)
+    assert notifier.session_urls == [None]  # sent, without a Bewerben button
 
 
 async def test_failed_push_fails_the_report() -> None:
