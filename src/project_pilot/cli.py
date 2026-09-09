@@ -34,7 +34,6 @@ from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
 from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
-from project_pilot.notification.claude_fire import ClaudeRoutineFire
 from project_pilot.notification.telegram import TelegramNotifier
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import Profile, ProfileService
@@ -135,10 +134,7 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
     llm_client = OpenAiStructuredClient(api_key)
     matcher = _matcher(llm_client, model, profile)
 
-    bot_token, chat_id = settings.require_telegram()
-    notifier = TelegramNotifier(bot_token=bot_token, chat_id=chat_id)
-    fire_url, routine_token = settings.require_claude_fire()
-    opener = ClaudeRoutineFire(fire_url=fire_url, token=routine_token)
+    notifier = _notifier(settings)
 
     pipeline = Pipeline(
         settings=settings,
@@ -148,13 +144,20 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
         matcher=matcher,
         llm_probe=llm_client,
         notifier=notifier,
-        session_opener=opener,
     )
 
     async def closer() -> None:
         await engine.dispose()
 
     return pipeline, closer
+
+
+def _notifier(settings: Settings) -> TelegramNotifier:
+    """The alert channel, with the repo every match session checks out."""
+    bot_token, chat_id = settings.require_telegram()
+    return TelegramNotifier(
+        bot_token=bot_token, chat_id=chat_id, session_repo=settings.claude_session_repo
+    )
 
 
 def _build_cv_refresher(settings: Settings, cvs: CvAttachments) -> CvRefresher | None:
@@ -262,13 +265,11 @@ async def _build_report(settings: Settings) -> str:
 async def _run_selftest(
     settings: Settings, *, text: str | None, listing_id: int | None
 ) -> SelfTestReport:
-    """Wire the real checker, the routine and the push channel, then run one listing through."""
+    """Wire the real checker and the push channel, then run one listing through both."""
     profile = ProfileService(Path("profile")).load()
     api_key, model = settings.require_openai()
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
-    bot_token, chat_id = settings.require_telegram()
-    fire_url, routine_token = settings.require_claude_fire()
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
@@ -276,8 +277,7 @@ async def _run_selftest(
             profile=profile,
             threshold=settings.match_threshold,
         ),
-        notifier=TelegramNotifier(bot_token=bot_token, chat_id=chat_id),
-        opener=ClaudeRoutineFire(fire_url=fire_url, token=routine_token),
+        notifier=_notifier(settings),
         profile_hash=profile.profile_hash,
     )
     try:
@@ -450,10 +450,9 @@ def test_match(
         help="Evaluate a stored listing instead of pasted text.",
     ),
 ) -> None:
-    """Push one listing through hard rules, LLM, a Claude session and the alert (stores nothing)."""
+    """Push one listing through hard rules, LLM, and the alert (stores nothing)."""
     settings = _load_settings()
     settings.require_telegram()
-    settings.require_claude_fire()
     if file is not None:
         if text is not None:
             typer.echo("use either --text or --file, not both")

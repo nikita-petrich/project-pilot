@@ -41,41 +41,59 @@ Genau dieses Verhalten hat das Projekt schon einmal erlebt (Feature 22/23: Push
 **Entscheidung:** Claude erzeugt die Session (Routine-Fire), Telegram liefert den
 Alert. Der Worker garantiert die Zustellung selbst.
 
+## Nachtrag: Deep Link statt Routine
+
+Nach dem ersten Umbau kam die Frage, ob die Routine überhaupt nötig ist. Ist
+sie nicht: `https://claude.ai/code/new?q=…&repo=…` füllt eine neue Session vor
+(offiziell: web-quickstart „Pre-fill sessions“, Support-Artikel „Open the Claude
+mobile app with a link“), die Claude-App öffnet den Link nativ. Die Session
+entsteht erst beim Senden — kein Run für abgelehnte Matches, kein Tages-Limit,
+kein Token, keine experimentelle API, nichts am Listing zu speichern.
+
+Der Prompt im Link ist die Karte aus der Telegram-Nachricht (zeichengleich),
+dann ein kurzer Auftrag (Listing-ID, `get_listing`, Karte wiedergeben, fünf
+Bullets, warten). Ein Link über 2.048 Zeichen (realistisch: ~1.900) lässt die
+Karte weg und bittet die Session, sie aus der Datenbank zu rendern.
+
+Gruppierung in der App: Code-Sessions kennen laut Doku keine Tags oder Ordner —
+nur Titel, Archivieren, Filter. Der Titel entsteht aus dem Prompt-Anfang, also
+`⭐ 87 · Rolle · Firma`; das Repo steht an jeder Session. Projects gruppieren nur
+Chats, und kein dokumentierter Link öffnet einen vorausgefüllten Chat *in* einem
+Project.
+
 ## Goal
 
-Ein Match = eine Claude-Session in Niks Account plus eine Telegram-Nachricht mit
-der bekannten Übersicht und drei Buttons:
+Ein Match = eine Telegram-Nachricht mit der bekannten Übersicht und drei
+Buttons; **Bewerben** öffnet eine neue Claude-Session mit derselben Übersicht
+im Prompt:
 
 | Button | Tut |
 |---|---|
 | 📄 Projektbeschreibung öffnen | URL-Button auf die Original-Ausschreibung |
-| ✅ Bewerben | URL-Button auf die Session (`https://claude.ai/code/session_…`) |
+| ✅ Bewerben | URL-Button `claude.ai/code/new?q=<Karte + Auftrag>&repo=<Repo>` |
 | 🚫 Ablehnen | Callback: der Bot löscht die Nachricht aus dem Chat |
 
-In der Session arbeitet Nik mit den Account-Skills und den `project_pilot_*`-Tools
-(Prüfen, Entwurf, Empfänger, Versand mit ausdrücklicher Bestätigung). Alles, was
-Telegram zur Arbeitsfläche gemacht hatte (Forum-Topics, Thread-Agent, Agent SDK),
-fällt weg.
+In der Session arbeitet Nik mit den Repo- und Account-Skills und den
+`project_pilot_*`-Tools (Prüfen, Entwurf, Empfänger, Versand mit ausdrücklicher
+Bestätigung). Alles, was Telegram zur Arbeitsfläche gemacht hatte (Forum-Topics,
+Thread-Agent, Agent SDK), fällt weg.
 
 ## In scope
 
-- `notification/claude_fire.py`: `ClaudeRoutineFire.open_session(message)` —
-  ein POST mit Retry (Netz/5xx/429, nie 4xx), liefert die Session-URL oder `None`.
-- `notification/telegram.py`: Karte wie bisher, Keyboard aus zwei URL-Buttons
-  und einem Callback; `notify(message, session_url=…)`.
+- `notification/claude_link.py`: `session_prompt(message)` (Karte + Auftrag,
+  Kurzform ohne Karte für den Überlängen-Fall), `session_link(message, repo=…)`.
+- `notification/telegram.py`: Karte wie bisher; Keyboard aus zwei URL-Buttons
+  (Session-Link, Listing) und einem Callback.
 - `telegram_bot.py` neu und klein: Long-Polling nur auf `callback_query`,
   `decline:<id>` → `deleteMessage` (Fallback nach 48 h: Buttons entfernen und
   „🚫 Abgelehnt“ voranstellen). Kein Agent, keine Datenbank, keine Whitelist —
   der Chat ist der private Chat mit dem Bot, die Chat-ID ist die Prüfung.
-- Pipeline `_notify`: erst Fire (nur wenn noch keine Session-URL am Listing;
-  URL sofort committen — Doppel-Fire-Guard), dann Karte, dann `notified_at`.
-  Schlägt der Fire fehl, geht die Karte trotzdem raus (ohne Bewerben, mit
-  Hinweis und Listing-ID) — der Alert ist die Priorität, wie beim Umzug weg vom
-  Routine-Push gelernt.
-- DB: `listings.claude_session_url` zurück, `telegram_threads` weg (eine Migration).
-- Settings: `CLAUDE_ROUTINE_FIRE_URL`, `CLAUDE_ROUTINE_TOKEN`, `require_claude_fire()`.
-- `test-match`: Fire + Push, speichert nichts.
-- MCP `list_matches`/`get_listing`: `claude_session_url` mit ausgeben.
+- Pipeline `_notify` unverändert im Kern: Karte senden, `notified_at` nur bei
+  Erfolg.
+- DB: `telegram_threads` weg (eine Migration).
+- Settings: `CLAUDE_SESSION_REPO` (Default dieses Repo).
+- `test-match`: echte Karte mit echtem Bewerben-Button — Telegram prüft die
+  Button-URL beim Senden, eine zugestellte Karte beweist den Link.
 
 ## Gelöscht
 
@@ -87,49 +105,49 @@ fällt weg.
   `TELEGRAM_ALLOWED_USER_IDS`
 - Compose: `agentdata`-Volume, `CLAUDE_CONFIG_DIR`, MCP-Abhängigkeit des Bots;
   Dockerfile: `/data`
+- Der Zwischenstand mit Routine-Fire (`claude_fire.py`, `CLAUDE_ROUTINE_*`,
+  `listings.claude_session_url`) — gebaut und im selben Branch wieder ersetzt
 
 ## Out of scope
 
-- Ablehnen archiviert die Claude-Session nicht (dafür gibt es keine öffentliche API).
+- Ablehnen archiviert keine Claude-Session (es gibt keine, bevor Nik tippt).
 - Ein zweiter Telegram-Chat oder Kanal; `TELEGRAM_CHAT_ID` ist der private Chat.
 
 ## Build steps
 
 - [x] **Step 1 — Recherche** — offizielle Quellen, Ergebnis oben.
-- [x] **Step 2 — Fire-Client + Karte + Poller** — `claude_fire.py`, `telegram.py`,
+- [x] **Step 2 — Link-Builder + Karte + Poller** — `claude_link.py`, `telegram.py`,
       `telegram_bot.py`, Tests (respx).
-- [x] **Step 3 — Pipeline, DB, Config, CLI, MCP, Selftest** — Migration,
-      Repository, `_notify`, Settings, Wiring, Tests.
+- [x] **Step 3 — Pipeline, DB, Config, CLI, Selftest** — Migration, Repository,
+      Settings, Wiring, Tests.
 - [x] **Step 4 — Rückbau** — Agent, Threads, Dependencies, Compose, Dockerfile,
       Deploy-Gate.
-- [x] **Step 5 — Doku** — `docs/claude-setup.md` (Routine anlegen, Prompt, Bot),
-      README, AGENTS.md, `.env.example`, deployment.md, overview, build-plan.
+- [x] **Step 5 — Doku** — `docs/claude-setup.md`, README, AGENTS.md,
+      `.env.example`, deployment.md, overview, build-plan.
 
 ## Data / contracts
 
-- `listings.claude_session_url` (String 512, nullable) — load-bearing: der
-  Doppel-Fire-Guard und der MCP-Feed lesen es.
-- Fire-Request/-Response wie in der offiziellen Referenz; Antwortfeld
-  `claude_code_session_url`.
+- Deep Link: `https://claude.ai/code/new?q=<prompt>&repo=<owner/name>`,
+  Obergrenze 2.048 Zeichen (`MAX_URL_CHARS`), sonst Kurzprompt.
 - Telegram-Callback `decline:<listing_id>`; die Nachricht selbst trägt ihre
   `message_id`, mehr braucht der Bot nicht.
 
 ## Testing
 
-- respx für Fire-Client, Notifier und Poller; Fake-Fire und Fake-Notifier in
-  den Pipeline-Tests (Reihenfolge, Guard, Fire-Fehler → Karte trotzdem).
+- respx für Notifier und Poller; Unit-Tests für Prompt und Link (Karte
+  zeichengleich mit der Telegram-Nachricht, Listing-ID, ASCII-sicher,
+  Längenlimit mit Fallback); Fake-Notifier in den Pipeline-Tests.
 - Migration up/down gegen Postgres 16 (`alembic upgrade head` im Gate).
 
 ## Ergebnis
 
 Quality gate grün gegen Postgres 16: `ruff check`, `ruff format --check`,
-`mypy --strict`, `alembic upgrade head` (plus `downgrade -1` und zurück),
-464 Tests, 89 % Coverage. Gelöscht: `agent.py`, der Thread-Bot, drei
-Testmodule, `TelegramThread`, neun Repository-Methoden, drei Dependencies, fünf
-Settings, das `agentdata`-Volume. Neu: `claude_fire.py` (105 Zeilen),
-`telegram_bot.py` (180 Zeilen statt 976), eine Migration.
+`mypy --strict`, `alembic upgrade head` (plus `downgrade -1` und zurück gegen
+eine geleerte Datenbank), 458 Tests, 89 % Coverage. Gelöscht: `agent.py`, der
+Thread-Bot, drei Testmodule, `TelegramThread`, neun Repository-Methoden, drei
+Dependencies, fünf Settings, das `agentdata`-Volume. Neu: `claude_link.py`
+(~90 Zeilen), `telegram_bot.py` (180 Zeilen statt 976), eine Migration.
 
-Offen für Nik (Betrieb, kein Code): Routine `match-thread` mit dem Prompt aus
-`docs/claude-setup.md` anlegen, API-Trigger erzeugen, `CLAUDE_ROUTINE_FIRE_URL`
-und `CLAUDE_ROUTINE_TOKEN` ins `prod`-Environment, `TELEGRAM_CHAT_ID` auf den
-privaten Chat mit dem Bot umstellen, dann `test-match`.
+Offen für Nik (Betrieb, kein Code): `TELEGRAM_CHAT_ID` auf den privaten Chat
+mit dem Bot umstellen, Claude-App auf dem Handy mit demselben Account, dann
+`test-match` und einmal auf Bewerben tippen.

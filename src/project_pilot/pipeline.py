@@ -85,16 +85,8 @@ class MatchNotifier(Protocol):
     send failed and the match must stay pending.
     """
 
-    async def notify(
-        self, message: MatchMessage, *, session_url: str | None = None
-    ) -> int | None: ...
+    async def notify(self, message: MatchMessage) -> int | None: ...
     async def notify_warning(self, text: str) -> bool: ...
-
-
-class SessionOpener(Protocol):
-    """Opens the Claude session a match is worked in; its URL, or None on failure."""
-
-    async def open_session(self, message: MatchMessage) -> str | None: ...
 
 
 type ClientFactory = Callable[[], SourceClient]
@@ -138,7 +130,6 @@ class Pipeline:
         llm_probe: LlmProbe | None = None,
         alerter: HealthAlerter | None = None,
         notifier: MatchNotifier | None = None,
-        session_opener: SessionOpener | None = None,
     ) -> None:
         self._settings = settings
         self._profile = profile
@@ -150,7 +141,6 @@ class Pipeline:
         self._llm_probe = llm_probe
         self._alerter = alerter or HealthAlerter(self._send_operator_message)
         self._notifier = notifier
-        self._session_opener = session_opener
 
     async def run_once(self, now: datetime | None = None) -> RunOutcome:
         """One scan in three phases: scan/evaluate (one unit of work), notify, record.
@@ -504,19 +494,12 @@ class Pipeline:
         return 1, 1 if is_matched else 0
 
     async def _notify(self, now: datetime, outcome: RunOutcome) -> None:
-        """Open a Claude session and send one card per pending match, durable per match.
+        """Send one card per pending match, durable per match.
 
         Runs in its own session after the scan's unit of work has committed, and
         commits after every successful send, so a delivered alert can never be
         rolled back into "unnotified" and sent twice. A failed send leaves the
         listing pending and it is retried on the next run.
-
-        The session comes first and its URL is committed on its own, before the
-        card goes out: the fire endpoint has no idempotency key, so a URL that
-        was lost to a later failure would mean a second session for the same
-        project on the retry. A fire that fails does not hold the alert back —
-        the card goes out without its Bewerben button and says so, because a
-        match nobody hears about is the one failure this worker exists to prevent.
         """
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
@@ -543,29 +526,14 @@ class Pipeline:
                         listing.external_url,
                     )
                     continue
-                if listing.claude_session_url is None and self._session_opener is not None:
-                    session_url = await self._session_opener.open_session(message)
-                    if session_url is not None:
-                        await repo.set_claude_session_url(listing, session_url)
-                        await session.commit()
-                    else:
-                        logger.warning(
-                            "no claude session for %s; sending the card without one",
-                            listing.external_url,
-                        )
-                message_id = await notifier.notify(message, session_url=listing.claude_session_url)
+                message_id = await notifier.notify(message)
                 if message_id is None:
                     failed += 1
                     continue
                 await repo.mark_notified([listing], now)
                 await session.commit()
                 outcome.notified += 1
-                logger.info(
-                    "match sent: %s (message %s, session %s)",
-                    listing.external_url,
-                    message_id,
-                    listing.claude_session_url,
-                )
+                logger.info("match sent: %s (message %s)", listing.external_url, message_id)
             if failed:
                 logger.warning("notification failed; %d match(es) will retry next run", failed)
 

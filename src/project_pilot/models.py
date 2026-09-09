@@ -127,10 +127,6 @@ class Listing(Base):
         _pg_enum(ListingStatus, "listing_status"), default=ListingStatus.NEW
     )
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
-    # The Claude cloud session this match is worked in, opened by the worker
-    # through the routine's fire endpoint. Also the double-fire guard: the fire
-    # endpoint has no idempotency key, so a listing with a URL is never fired again.
-    claude_session_url: Mapped[str | None] = mapped_column(String(512), default=None)
 
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
 

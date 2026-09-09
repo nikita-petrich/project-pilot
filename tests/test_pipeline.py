@@ -109,14 +109,12 @@ class _FakeNotifier:
     def __init__(self, *, delivers: bool = True) -> None:
         self.delivers = delivers
         self.matches: list[MatchMessage] = []
-        self.session_urls: list[str | None] = []
         self.warnings: list[str] = []
         self.posted: list[int] = []
         self._next_post = 1000
 
-    async def notify(self, message: MatchMessage, *, session_url: str | None = None) -> int | None:
+    async def notify(self, message: MatchMessage) -> int | None:
         self.matches.append(message)
-        self.session_urls.append(session_url)
         if not self.delivers:
             return None
         self._next_post += 1
@@ -126,20 +124,6 @@ class _FakeNotifier:
     async def notify_warning(self, text: str) -> bool:
         self.warnings.append(text)
         return self.delivers
-
-
-class _FakeOpener:
-    """The routine fake: every fire opens a new, numbered session — or fails."""
-
-    def __init__(self, *, opens: bool = True) -> None:
-        self.opens = opens
-        self.fired: list[MatchMessage] = []
-
-    async def open_session(self, message: MatchMessage) -> str | None:
-        self.fired.append(message)
-        if not self.opens:
-            return None
-        return f"https://claude.ai/code/session_{len(self.fired):03d}"
 
 
 def _settings() -> Settings:
@@ -171,7 +155,6 @@ def _pipeline(
     profile: Profile | None = None,
     llm_probe: LlmProbe | None = None,
     notifier: "_FakeNotifier | _CommitProbeNotifier | None" = None,
-    opener: _FakeOpener | None = None,
 ) -> Pipeline:
     return Pipeline(
         settings=_settings(),
@@ -181,7 +164,6 @@ def _pipeline(
         matcher=matcher or _FakeMatcher(),
         llm_probe=llm_probe,
         notifier=notifier,
-        session_opener=opener,
     )
 
 
@@ -578,7 +560,7 @@ class _CommitProbeNotifier:
         self._session_factory = session_factory
         self.saw_committed: list[bool] = []
 
-    async def notify(self, message: MatchMessage, *, session_url: str | None = None) -> int | None:
+    async def notify(self, message: MatchMessage) -> int | None:
         async with self._session_factory() as probe:
             row = await probe.scalar(
                 select(Evaluation)
@@ -878,91 +860,42 @@ async def test_preflight_is_silent_when_the_model_answers(
     assert notifier.warnings == []
 
 
-async def test_each_match_opens_a_session_whose_url_is_stored_and_sent(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
-    opener = _FakeOpener()
-    pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=notifier, opener=opener
-    )
-    await pipeline.run_once(now=NOW)
-
-    assert len(opener.fired) == len(notifier.matches) == 1
-    # The card's Bewerben button is the session the fire just opened.
-    assert notifier.session_urls == ["https://claude.ai/code/session_001"]
-
-    async with session_factory() as db_session:
-        repo = Repository(db_session)
-        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
-        assert listing is not None
-        assert listing.claude_session_url == "https://claude.ai/code/session_001"
-        assert listing.notified_at is not None
-
-
-async def test_a_failed_send_keeps_the_session_and_retries_without_a_second_fire(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    # The fire has no idempotency key: the session URL is committed before the
-    # send, so the retry links the same session instead of opening another.
-    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    failing = _FakeNotifier(delivers=False)
-    opener = _FakeOpener()
-    first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing, opener=opener)
-    outcome = await first.run_once(now=NOW)
-    assert outcome.notified == 0
-    assert len(opener.fired) == 1
-
-    async with session_factory() as db_session:
-        repo = Repository(db_session)
-        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
-        assert listing is not None
-        assert listing.claude_session_url == "https://claude.ai/code/session_001"
-        assert listing.notified_at is None
-
-    ok = _FakeNotifier()
-    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok, opener=opener)
-    assert (await second.run_once(now=NOW + timedelta(minutes=15))).notified == 1
-    assert len(opener.fired) == 1  # no second session for the same project
-    assert ok.session_urls == ["https://claude.ai/code/session_001"]
-
-
-async def test_a_failed_fire_still_sends_the_card_and_marks_the_match(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> None:
-    # The alert is the priority: a card without its Bewerben button beats no
-    # card at all, and the listing must not be re-fired forever.
-    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
-    notifier = _FakeNotifier()
-    opener = _FakeOpener(opens=False)
-    pipeline = _pipeline(
-        session_factory, client=_FakeClient(PAGES), notifier=notifier, opener=opener
-    )
-    outcome = await pipeline.run_once(now=NOW)
-
-    assert outcome.notified == 1
-    assert notifier.session_urls == [None]
-
-    async with session_factory() as db_session:
-        repo = Repository(db_session)
-        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
-        assert listing is not None
-        assert listing.claude_session_url is None
-        assert listing.notified_at is not None
-
-    await pipeline.run_once(now=NOW + timedelta(minutes=15))
-    assert len(opener.fired) == 1  # notified, so never fired again
-
-
-async def test_without_an_opener_the_card_goes_out_without_a_session(
+async def test_each_match_gets_one_card_and_is_marked_notified(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
     notifier = _FakeNotifier()
     pipeline = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=notifier)
-    assert (await pipeline.run_once(now=NOW)).notified == 1
-    assert notifier.session_urls == [None]
+    outcome = await pipeline.run_once(now=NOW)
+
+    assert outcome.notified == len(notifier.matches) == 1
+    assert notifier.matches[0].listing_id is not None  # the card can be declined
+
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        assert listing.notified_at is not None
+
+
+async def test_a_failed_send_stays_pending_and_retries_next_run(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_state(session_factory, watermark=NOW - timedelta(minutes=10))
+    failing = _FakeNotifier(delivers=False)
+    first = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=failing)
+    assert (await first.run_once(now=NOW)).notified == 0
+
+    async with session_factory() as db_session:
+        repo = Repository(db_session)
+        listing = await repo.get_listing_by_hash(compute_url_hash(DETAIL1))
+        assert listing is not None
+        assert listing.notified_at is None
+
+    ok = _FakeNotifier()
+    second = _pipeline(session_factory, client=_FakeClient(PAGES), notifier=ok)
+    assert (await second.run_once(now=NOW + timedelta(minutes=15))).notified == 1
+    assert len(ok.matches) == 1
 
 
 async def test_a_match_already_posted_is_never_posted_twice(

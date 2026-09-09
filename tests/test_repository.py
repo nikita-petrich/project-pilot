@@ -125,15 +125,3 @@ async def test_unnotified_matches_recency_bound(session: AsyncSession) -> None:
 
     bounded = await repo.get_unnotified_matches(min_score=60, not_before=now - timedelta(days=2))
     assert {listing.url_hash for listing in bounded} == {"recent"}
-
-
-async def test_set_claude_session_url_is_written_and_read_back(session: AsyncSession) -> None:
-    repo = Repository(session)
-    listing, _ = await repo.upsert_listing(_listing("t1"))
-    assert listing.claude_session_url is None  # nothing fired yet
-
-    await repo.set_claude_session_url(listing, "https://claude.ai/code/session_01X")
-
-    found = await repo.get_listing_by_hash("t1")
-    assert found is not None
-    assert found.claude_session_url == "https://claude.ai/code/session_01X"

@@ -12,11 +12,11 @@ runner = CliRunner()
 
 def test_log_level_setting_is_applied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LOG_LEVEL", "warning")
-    monkeypatch.delenv("CLAUDE_ROUTINE_FIRE_URL", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     previous = logging.getLogger().level
     try:
-        # test-match aborts on the missing fire config, but only after the log
-        # level from the environment has been applied - which is what we assert.
+        # test-match aborts on the missing Telegram config, but only after the
+        # log level from the environment has been applied - which is what we assert.
         result = runner.invoke(app, ["test-match"])
         assert result.exit_code != 0
         assert logging.getLogger().level == logging.WARNING
@@ -24,9 +24,9 @@ def test_log_level_setting_is_applied(monkeypatch: pytest.MonkeyPatch) -> None:
         logging.getLogger().setLevel(previous)
 
 
-def test_test_match_requires_fire_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDE_ROUTINE_FIRE_URL", raising=False)
-    monkeypatch.delenv("CLAUDE_ROUTINE_TOKEN", raising=False)
+def test_test_match_requires_telegram_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
     result = runner.invoke(app, ["test-match"])
     assert result.exit_code != 0
 

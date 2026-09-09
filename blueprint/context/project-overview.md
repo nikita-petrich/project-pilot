@@ -2,9 +2,9 @@
 
 > A personal, single-user worker that watches freelancermap.de, persists every
 > listing losslessly, evaluates fresh ones against Nik's profile (hard rules then
-> LLM), and pushes real matches within minutes: one Claude cloud session per
-> match (opened through a routine's API trigger) and a Telegram card with three
-> buttons that links to it. Backend only.
+> LLM), and pushes real matches within minutes: a Telegram card with three
+> buttons, one of which opens a new Claude session with that card prefilled
+> (a `claude.ai/code/new` deep link). Backend only.
 > Binding detail spec: `SPEC.md` at the repo root (its Telegram wording predates
 > the Slack detour of features 17–23 and the Claude session of feature 27).
 
@@ -37,7 +37,7 @@ Build-plan order (MVP 1-12). The headline is the evaluation-plus-alert loop
 4. **Scraper ingestion** - politeness httpx client, centralized selectors, detail fetch only for new listings, watermark pagination, normalization.
 5. **Freshness gate and hard rules** - analysis-window logic and the deterministic 0-token rule engine over `constraints.yaml`.
 6. **LLM matching** - versioned prompt, OpenAI `.parse()` against `MatchVerdict`, evaluation persistence, threshold decision, retry + `llm_error` fallback.
-7. **Match notification** - compact match message, `notified_at` only after a successful send, `test-notify`. (Built as Telegram; Slack in feature 17, Claude routine sessions in 22–23, Telegram again since 24; feature 27 pairs the Telegram card with one Claude session per match.)
+7. **Match notification** - compact match message, `notified_at` only after a successful send, `test-notify`. (Built as Telegram; Slack in feature 17, Claude routine sessions in 22–23, Telegram again since 24; feature 27 pairs the Telegram card with a prefilled Claude session link.)
 8. **Scheduler and pipeline runner** - `AsyncIOScheduler` 15-min loop, seed-run detection, orchestration of stages 0-3, per-listing isolation, `runs` protocol, cron-friendly `run-once`.
 9. **Resilience and self-monitoring** - tenacity retry (never on 403), 403/captcha cooldown, consecutive-failure warning.
 10. **Reporting basis** - verdict distribution, matches per day, top no-match reasons, token cost, via the `stats` command.
@@ -55,7 +55,7 @@ Two separate guarantees drive the whole design:
 - **Lossless DB (completeness).** `source_state` holds a **watermark** (timestamp of the last successful run). Each run paginates the "newest first" search URLs until it only sees known `url_hash` values or entries older than the watermark, so every gap (failure, restart, downtime) is closed on the next run and every listing ever seen lands in `listings`.
 - **Seed run.** On an empty DB the full current inventory is persisted as a reporting baseline with status `skipped_stale` and **zero notifications**.
 - **Analysis only for fresh entries.** `ANALYSIS_WINDOW_MIN` (default 30, = interval x 2) gates evaluation. Freshness signal order: (1) `posted_at` if minute-precise, else (2) gap rule (distance to last successful run <= window). Older new entries are stored `skipped_stale` with a reason JSON. Feature 1 verifies the real time granularity and decides the implementation.
-- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) opens a Claude session (routine fire, URL stored on the listing) and sends a Telegram card linking to it; `notified_at` is set after a successful send.
+- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Telegram card whose Bewerben button is a prefilled Claude session link; `notified_at` is set after a successful send.
 - **Traceability.** Every entry gets a stored verdict with a reason for match **and** no-match, each `evaluations` row carrying `model`, `prompt_version`, `profile_hash`, token counts and latency.
 
 ## Data model
@@ -142,7 +142,7 @@ lookups: e-mails, phones, persons, research links).
 - **OpenAI SDK** - `.parse()` with a Pydantic `response_format` for structured match verdicts; model from ENV.
 - **tenacity** - retry with backoff on network/5xx/429, never on 403.
 - **typer** - CLI: `init-db`, `run-once`, `daemon`, `telegram-bot`, `mcp`, `test-match`, `test-filter`, `stats`.
-- **Claude routine + Telegram + MCP (FastMCP)** - per match the worker fires the `match-thread` routine's API trigger (one Claude cloud session per match, URL stored on the listing) and sends the card itself over Telegram (one retried HTTP POST, no webhook, no inbound port); a tiny long-polling process hears the Ablehnen button and deletes the card. An MCP server exposes feed, checks, drafts and send to the session, to Claude chats and to n8n — including the workflow prompts, so one definition serves every surface.
+- **Telegram + Claude deep link + MCP (FastMCP)** - per match the worker sends the card itself over Telegram (one retried HTTP POST, no webhook, no inbound port); its Bewerben button is a `claude.ai/code/new?q=…&repo=…` link carrying the same card, so the Claude session is created on tap, in Nik's account, with the repo's skills; a tiny long-polling process hears the Ablehnen button and deletes the card. An MCP server exposes feed, checks, drafts and send to the session, to Claude chats and to n8n — including the workflow prompts, so one definition serves every surface.
 - **pytest + pytest-asyncio + respx + pytest-cov** - fixtures, no live requests.
 - **ruff + mypy --strict** - lint, format, and typing gate.
 - **Docker + Compose** - containerized worker plus postgres on the home server.
@@ -156,7 +156,7 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 No web UI of its own. The Claude app is the entire surface:
 
-- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens the match's own Claude session, Ablehnen deletes the card.
+- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens a new Claude session with the card prefilled (one tap on send starts it), Ablehnen deletes the card.
 - **Application flow** - checking, drafting, revisions, recipient handling and the human-confirmed send happen in that Claude session via the account skills and the MCP tools (`check`, `draft`, `revise`, `set_recipient`, `send`).
 - **Warnings** - source cooldown (403/captcha), LLM health, and consecutive-failure warnings arrive as plain Telegram messages over the same bot.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.

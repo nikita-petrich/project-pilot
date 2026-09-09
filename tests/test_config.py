@@ -52,21 +52,11 @@ def test_search_urls_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_require_claude_fire_names_the_missing_half(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDE_ROUTINE_FIRE_URL", raising=False)
-    monkeypatch.delenv("CLAUDE_ROUTINE_TOKEN", raising=False)
-    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_FIRE_URL"):
-        Settings().require_claude_fire()
-    monkeypatch.setenv(
-        "CLAUDE_ROUTINE_FIRE_URL", "https://api.anthropic.com/v1/claude_code/routines/trig_1/fire"
-    )
-    with pytest.raises(ConfigError, match="CLAUDE_ROUTINE_TOKEN"):
-        Settings().require_claude_fire()
-    monkeypatch.setenv("CLAUDE_ROUTINE_TOKEN", "sk-ant-oat01-x")
-    assert Settings().require_claude_fire() == (
-        "https://api.anthropic.com/v1/claude_code/routines/trig_1/fire",
-        "sk-ant-oat01-x",
-    )
+def test_session_repo_defaults_to_this_project(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLAUDE_SESSION_REPO", raising=False)
+    assert Settings().claude_session_repo == "nikita-petrich/project-pilot"
+    monkeypatch.setenv("CLAUDE_SESSION_REPO", "")
+    assert Settings().claude_session_repo == ""
 
 
 def test_user_agent_includes_contact(monkeypatch: pytest.MonkeyPatch) -> None:

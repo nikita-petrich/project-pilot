@@ -22,11 +22,6 @@ BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
 # A chat id is an integer: positive for the private chat with the bot (the
 # intended target), negative for a group or channel.
 CHAT_ID_RE = re.compile(r"^-?\d+$")
-# The routine's API trigger, as the modal at claude.ai/code/routines shows it.
-FIRE_URL_RE = re.compile(
-    r"^https://api\.anthropic\.com/v1/claude_code/routines/trig_[A-Za-z0-9]+/fire$"
-)
-ROUTINE_TOKEN_RE = re.compile(r"^sk-ant-oat01-")
 
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
@@ -38,11 +33,6 @@ REQUIRED = (
     # design, so the deploy refuses here instead.
     "TELEGRAM_BOT_TOKEN",
     "TELEGRAM_CHAT_ID",
-    # The routine whose fire opens one Claude session per match: without it the
-    # daemon aborts at boot too, because a card whose Bewerben leads nowhere is
-    # the one thing the alert must never be.
-    "CLAUDE_ROUTINE_FIRE_URL",
-    "CLAUDE_ROUTINE_TOKEN",
     # The MCP service refuses to start without its bearer token.
     "MCP_TOKEN",
     # The reverse proxy's Docker network. Wrong or unset, the MCP container comes
@@ -94,7 +84,6 @@ def problems(settings: dict[str, str]) -> list[str]:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
     found.extend(_bot_token_problems(settings.get("TELEGRAM_BOT_TOKEN", "")))
     found.extend(_chat_id_problems(settings.get("TELEGRAM_CHAT_ID", "")))
-    found.extend(_routine_problems(settings))
     return found
 
 
@@ -108,30 +97,6 @@ def _chat_id_problems(chat_id: str) -> list[str]:
             "numeric id of your private chat with the bot, as getUpdates reports it."
         ]
     return []
-
-
-def _routine_problems(settings: dict[str, str]) -> list[str]:
-    """Catch the two values of the routine's API trigger swapped or mistyped.
-
-    Both come from one modal at claude.ai/code/routines; the usual mix-ups are
-    pasting the routine page's URL instead of the fire endpoint, or an API key
-    where the per-routine token belongs. Either answers 4xx at the first match.
-    """
-    found: list[str] = []
-    fire_url = settings.get("CLAUDE_ROUTINE_FIRE_URL", "")
-    if fire_url and not FIRE_URL_RE.match(fire_url):
-        found.append(
-            "CLAUDE_ROUTINE_FIRE_URL does not look like a routine fire endpoint. Expected "
-            "https://api.anthropic.com/v1/claude_code/routines/trig_.../fire, as the "
-            "API-trigger modal shows it."
-        )
-    token = settings.get("CLAUDE_ROUTINE_TOKEN", "")
-    if token and not ROUTINE_TOKEN_RE.match(token):
-        found.append(
-            "CLAUDE_ROUTINE_TOKEN does not look like a routine token (sk-ant-oat01-...). "
-            "It is the per-routine token from the API-trigger modal, not an API key."
-        )
-    return found
 
 
 def _bot_token_problems(token: str) -> list[str]:

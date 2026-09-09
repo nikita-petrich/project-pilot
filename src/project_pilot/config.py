@@ -107,11 +107,9 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
 
-    # The routine whose API trigger opens one Claude session per match: the fire
-    # URL and its per-routine token, both copied from the routine's API-trigger
-    # modal at claude.ai/code/routines (see docs/claude-setup.md).
-    claude_routine_fire_url: str = ""
-    claude_routine_token: str = Field(default="", repr=False)
+    # The repository a match session checks out (owner/name), so it has the
+    # repo's skills and CLAUDE.md. Empty leaves the session's repo picker alone.
+    claude_session_repo: str = "nikita-petrich/project-pilot"
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"
@@ -207,18 +205,6 @@ class Settings(BaseSettings):
         if not self.telegram_chat_id:
             raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
         return self.telegram_bot_token, self.telegram_chat_id
-
-    def require_claude_fire(self) -> tuple[str, str]:
-        """The routine fire URL and token, or a clear abort.
-
-        Without them no match gets a session, and a card whose Bewerben button
-        leads nowhere is the one thing the alert must never be.
-        """
-        if not self.claude_routine_fire_url:
-            raise ConfigError("CLAUDE_ROUTINE_FIRE_URL must be set (the routine's API-trigger URL)")
-        if not self.claude_routine_token:
-            raise ConfigError("CLAUDE_ROUTINE_TOKEN must be set (the routine's API-trigger token)")
-        return self.claude_routine_fire_url, self.claude_routine_token
 
     def require_mcp(self) -> str:
         if not self.mcp_token:

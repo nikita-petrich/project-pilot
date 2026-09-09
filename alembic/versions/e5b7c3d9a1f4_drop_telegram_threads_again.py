@@ -1,13 +1,9 @@
-"""Claude session per match; Telegram is an alert again.
+"""Telegram is an alert again; drop telegram_threads.
 
-A match is worked in its own Claude cloud session, opened by the worker through
-the routine's fire endpoint. The session's URL lives on the listing: the MCP
-feed links to it, and the pipeline never fires twice for the same listing (the
-fire endpoint has no idempotency key).
-
-Telegram carries the alert and three buttons, nothing more. There is no thread
-to route replies into and no agent session to continue, so ``telegram_threads``
-has nothing left to store.
+A match is worked in a Claude session that the card's Bewerben button opens as
+a prefilled deep link — nothing about it is stored. Telegram carries the alert
+and three buttons, nothing more. There is no thread to route replies into and
+no agent session to continue, so ``telegram_threads`` has nothing left to store.
 
 Revision ID: e5b7c3d9a1f4
 Revises: c9e2a45b8d31
@@ -29,7 +25,6 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column("listings", sa.Column("claude_session_url", sa.String(length=512), nullable=True))
     op.drop_index("ix_telegram_threads_channel_message_id", table_name="telegram_threads")
     op.drop_index("ix_telegram_threads_thread_id", table_name="telegram_threads")
     op.drop_table("telegram_threads")
@@ -57,4 +52,3 @@ def downgrade() -> None:
         ["channel_message_id"],
         unique=True,
     )
-    op.drop_column("listings", "claude_session_url")

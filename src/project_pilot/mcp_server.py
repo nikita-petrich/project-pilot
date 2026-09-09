@@ -79,7 +79,6 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
         "origin": listing.origin.value,
         "first_seen_at": listing.first_seen_at.isoformat(),
         "notified_at": listing.notified_at.isoformat() if listing.notified_at else None,
-        "claude_session_url": listing.claude_session_url,
     }
 
 
@@ -264,8 +263,8 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     @mcp.tool
     async def project_pilot_list_matches(limit: int = 10) -> list[dict[str, object]]:
         """List the most recent matched project listings (newest first) with id,
-        title, score, status, and the Claude session it is worked in. Use to
-        show the match feed or to find a listing id."""
+        title, score, and status. Use to show the match feed or to find a
+        listing id."""
         return await list_matches(deps, limit=limit)
 
     @mcp.tool

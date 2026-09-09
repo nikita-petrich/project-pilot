@@ -9,6 +9,7 @@ import respx
 
 from project_pilot.config import Settings
 from project_pilot.errors import ConfigError
+from project_pilot.notification.claude_link import session_link
 from project_pilot.notification.messages import MatchMessage
 from project_pilot.notification.telegram import (
     MAX_TEXT_CHARS,
@@ -21,7 +22,7 @@ BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 SENT = {"ok": True, "result": {"message_id": 5150}}
-SESSION_URL = "https://claude.ai/code/session_01X"
+REPO = "nikita-petrich/project-pilot"
 
 
 def _message(
@@ -42,7 +43,7 @@ def _message(
 
 
 def _notifier() -> TelegramNotifier:
-    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID)
+    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, session_repo=REPO)
 
 
 def test_match_text_leads_with_the_headline_then_every_fact() -> None:
@@ -58,20 +59,9 @@ def test_match_text_leads_with_the_headline_then_every_fact() -> None:
 def test_match_text_names_no_command_to_type_elsewhere() -> None:
     # The session is one tap away on the Bewerben button; the card itself
     # carries no command and no link to type or copy.
-    text = match_text(_message(), session_url=SESSION_URL)
+    text = match_text(_message())
     assert "check-project" not in text
     assert "claude.ai" not in text
-
-
-def test_a_stored_match_without_a_session_says_so_on_the_card() -> None:
-    # The alert still goes out when the fire failed; the id is what a chat
-    # started by hand needs, so it is right there.
-    text = match_text(_message())
-    assert "⚠️ Keine Claude-Session" in text
-    assert "Listing-ID 42" in text
-    assert "Keine Claude-Session" not in match_text(_message(), session_url=SESSION_URL)
-    # An unstored listing (test-match) has no id to name and no warning to give.
-    assert "Keine Claude-Session" not in match_text(_message(listing_id=None))
 
 
 def test_match_text_is_capped_below_the_telegram_limit() -> None:
@@ -83,16 +73,17 @@ def test_match_text_is_capped_below_the_telegram_limit() -> None:
 @respx.mock
 async def test_notify_sends_the_card_under_its_three_decisions() -> None:
     route = respx.post(SEND_URL).respond(200, json=SENT)
-    assert await _notifier().notify(_message(), session_url=SESSION_URL) == 5150
+    assert await _notifier().notify(_message()) == 5150
     payload = json.loads(route.calls.last.request.read())
     assert payload["chat_id"] == CHAT_ID
-    assert payload["text"] == match_text(_message(), session_url=SESSION_URL)
+    assert payload["text"] == match_text(_message())
     assert payload["disable_web_page_preview"] is True
     rows = payload["reply_markup"]["inline_keyboard"]
     assert rows == [
         [
-            # Bewerben opens the session; Ablehnen is the one press the bot hears.
-            {"text": "✅ Bewerben", "url": SESSION_URL},
+            # Bewerben opens a new session with this card in its prompt;
+            # Ablehnen is the one press the bot hears.
+            {"text": "✅ Bewerben", "url": session_link(_message(), repo=REPO)},
             {"text": "🚫 Ablehnen", "callback_data": "decline:42"},
         ],
         [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
@@ -101,23 +92,14 @@ async def test_notify_sends_the_card_under_its_three_decisions() -> None:
     assert "parse_mode" not in payload
 
 
-def test_without_a_session_there_is_no_bewerben_button() -> None:
-    # A button that leads nowhere is worse than none; the card says why instead.
-    keyboard = match_keyboard(_message())
-    assert keyboard == {
+def test_an_unstored_listing_has_nothing_to_decline() -> None:
+    # test-match stores nothing, so there is no id for Ablehnen to name — but
+    # the session and the ad are still worth a tap.
+    message = replace(_message(), listing_id=None)
+    assert match_keyboard(message, session_repo=REPO) == {
         "inline_keyboard": [
-            [{"text": "🚫 Ablehnen", "callback_data": "decline:42"}],
+            [{"text": "✅ Bewerben", "url": session_link(message, repo=REPO)}],
             [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
-        ]
-    }
-
-
-def test_an_unstored_listing_gets_only_the_listing_link() -> None:
-    # Nothing to decline without an id (test-match), but the ad is still worth a tap.
-    keyboard = match_keyboard(replace(_message(), listing_id=None))
-    assert keyboard == {
-        "inline_keyboard": [
-            [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}]
         ]
     }
 
@@ -125,18 +107,15 @@ def test_an_unstored_listing_gets_only_the_listing_link() -> None:
 def test_a_listing_without_a_real_link_gets_no_link_button() -> None:
     # An ingested listing may carry a pilot:// placeholder, which Telegram
     # rejects in a URL button — and would reject the whole message with it.
-    keyboard = match_keyboard(
-        replace(_message(), url="pilot://ingest/abc"), session_url=SESSION_URL
-    )
-    assert keyboard == {
+    message = replace(_message(), url="pilot://ingest/abc")
+    assert match_keyboard(message) == {
         "inline_keyboard": [
             [
-                {"text": "✅ Bewerben", "url": SESSION_URL},
+                {"text": "✅ Bewerben", "url": session_link(message)},
                 {"text": "🚫 Ablehnen", "callback_data": "decline:42"},
             ]
         ]
     }
-    assert match_keyboard(MatchMessage(title="T", url="pilot://ingest/abc", score=1)) is None
 
 
 @respx.mock

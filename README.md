@@ -23,12 +23,11 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. For every match at or above `MATCH_THRESHOLD`, opens one Claude cloud
-   session through the `match-thread` routine's API trigger (the session gets
-   the card, every fact and the full description, and Claude adds its own
-   reading), then sends a Telegram card whose **Bewerben** button is that
-   session. A reason is stored for every verdict — match and no-match alike —
-   for later reporting.
+4. For every match at or above `MATCH_THRESHOLD`, sends a Telegram card whose
+   **Bewerben** button opens a new Claude session with that very card already in
+   its prompt (a `claude.ai/code/new` deep link — the session is created the
+   moment you send, not before). A reason is stored for every verdict — match
+   and no-match alike — for later reporting.
 
 The card is rendered in code (`notification/messages.py`), not left to the model,
 so every alert is scannable the same way:
@@ -57,7 +56,7 @@ failures) arrive as plain Telegram messages.
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
 - An OpenAI API key, a Telegram bot, and a Claude plan with Claude Code on the
-  web (routines) for the session per match ([`docs/claude-setup.md`](docs/claude-setup.md))
+  web for the session per match ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -112,7 +111,7 @@ gitignored and `.env.example` is the template):
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and your private chat with it — the alert channel |
-| `CLAUDE_ROUTINE_FIRE_URL` / `CLAUDE_ROUTINE_TOKEN` | the `match-thread` routine's API trigger — one Claude session per match |
+| `CLAUDE_SESSION_REPO` | the repo a match session checks out for its skills (default this project) |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
@@ -132,7 +131,7 @@ uv run project-pilot run-once       # one scan now (non-zero exit on a failed ru
 uv run project-pilot daemon         # the scan loop until SIGTERM
 uv run project-pilot telegram-bot   # hears the card's Ablehnen button (long polling)
 uv run project-pilot mcp            # the MCP server (Streamable HTTP + bearer token)
-uv run project-pilot test-match     # rules + LLM + a real fire + a real push, stores nothing
+uv run project-pilot test-match     # rules + LLM + a real push, stores nothing
 uv run project-pilot test-filter    # dry-run the filter against a listing
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
@@ -144,19 +143,21 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The Claude session**, one per match, opened by the worker through the
-   `match-thread` routine's API trigger in your own account. Its URL is stored
-   on the listing (`listings.claude_session_url`), which is also what stops a
-   second session for the same project — the fire endpoint has no idempotency
-   key. The session carries the card and the full listing, has the project-pilot
-   MCP connector and the repo's skills, and is where the match is worked.
+1. **The Claude session**, one per match, opened by the card's **Bewerben**
+   button: a `https://claude.ai/code/new?q=…&repo=…` deep link that prefills a
+   new Code session with the same card the alert showed plus a short brief, and
+   preselects this repository for its skills. The Claude app opens it natively
+   on the phone, the browser at the desk; one tap on send and the session
+   exists — and only then, so a declined match never creates one. The session
+   has the project-pilot MCP connector and is where the match is worked
+   (`notification/claude_link.py`).
 2. **The Telegram card**, sent by the worker itself seconds after the verdict:
    the card and three buttons. Two are plain links (the original listing, the
    session); only **Ablehnen** needs a process — `project-pilot telegram-bot`
    long-polls for that press and deletes the card. Delivery never depends on a
    model judging a run worth reporting: the official docs offer no guaranteed
-   push for a session created by API, so the alert stays in code where it can
-   be retried. The proxy's site config for the public MCP endpoint is in
+   push for a cloud session, so the alert stays in code where it can be
+   retried. The proxy's site config for the public MCP endpoint is in
    [`deploy/proxy-site/`](deploy/proxy-site).
 3. **The workflow prompts**, exposed by the MCP server itself
    (`mcp_prompts.py`), so one definition serves every surface: Claude Code
@@ -366,10 +367,10 @@ matches are missed. Restart the worker after changing `.env`.
 - **No card for a match**: delivery failed. `docker compose logs app` shows
   `telegram send failed`; the listing keeps `notified_at` empty and the next scan
   retries it — with the same session, whose URL was already stored.
-- **A card without a Bewerben button**: the routine fire failed (the log names
-  the status: `401` token, `400` paused routine, `429` daily run cap). The alert
-  still went out; start a chat by hand with `/check-project` and the listing id
-  the card names.
+- **Bewerben opens a session that shows no card**: the listing was so large
+  that the card left the link (`MAX_URL_CHARS` in `claude_link.py`); the prompt
+  then asks the session to render it from the database instead. Everything
+  else works the same.
 
 ## Development
 
@@ -418,7 +419,7 @@ src/project_pilot/
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, check, prompts/
   enrichment/   fetch, render, search, extract, links, message, service, listing
-  notification/ claude_fire (the session), telegram (the card), messages
+  notification/ claude_link (the session link), telegram (the card), messages
   telegram_bot  hears the Ablehnen button
   mcp_prompts   the workflow prompts, one source for every surface
   application/  generator, service, mailer, documents, cv_drive (apply flow)

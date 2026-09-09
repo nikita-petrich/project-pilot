@@ -51,16 +51,8 @@ class Checker(Protocol):
 class Notifier(Protocol):
     """The ``TelegramNotifier`` subset used to deliver the test notification."""
 
-    async def notify(
-        self, message: MatchMessage, *, session_url: str | None = None
-    ) -> int | None: ...
+    async def notify(self, message: MatchMessage) -> int | None: ...
     async def notify_warning(self, text: str) -> bool: ...
-
-
-class Opener(Protocol):
-    """The ``ClaudeRoutineFire`` subset used to open the test session."""
-
-    async def open_session(self, message: MatchMessage) -> str | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,10 +77,10 @@ class SelfTestReport:
 
 
 class SelfTestService:
-    """Pushes one listing through evaluation, a Claude session and the alert, reporting every link.
+    """Pushes one listing through evaluation and the alert, reporting every link.
 
     A diagnostic deliberately reports failures instead of raising them: a broken LLM
-    must still yield a report that shows the routine was reached, which is the whole
+    must still yield a report that shows the channel was reached, which is the whole
     point of running it.
     """
 
@@ -97,23 +89,22 @@ class SelfTestService:
         *,
         checker: Checker,
         notifier: Notifier,
-        opener: Opener,
         profile_hash: str,
     ) -> None:
         self._checker = checker
         self._notifier = notifier
-        self._opener = opener
         self._profile_hash = profile_hash
 
     async def run(
         self, *, text: str | None = None, listing_id: int | None = None
     ) -> SelfTestReport:
-        """Evaluate one listing and prove the session and the push channel.
+        """Evaluate one listing and prove the push channel.
 
         ``listing_id`` evaluates a stored listing; otherwise ``text`` (or the
-        built-in demo) is evaluated. A match opens a real Claude session and
-        delivers a real card; a no-match proves the channel with a warning push
-        instead (and opens no session — a routine run is not free).
+        built-in demo) is evaluated. A match delivers a real card, Bewerben
+        button included — Telegram validates the button's URL on send, so this
+        also proves the session link; a no-match proves the channel with a
+        warning push instead.
         """
         steps = [SelfTestStep("profile", True, f"loaded, hash {self._profile_hash[:12]}")]
 
@@ -129,29 +120,14 @@ class SelfTestService:
             return SelfTestReport(steps=steps, result=None)
 
         steps.append(_evaluation_step(result))
-        session_url: str | None = None
-        if result.passed and result.message is not None:
-            session_step, session_url = await self._session_step(result.message)
-            steps.append(session_step)
-        steps.append(await self._push_step(result, session_url))
+        steps.append(await self._push_step(result))
         return SelfTestReport(steps=steps, result=result)
 
-    async def _session_step(self, message: MatchMessage) -> tuple[SelfTestStep, str | None]:
-        """Prove the routine: a real fire, whose session the card then links to."""
-        try:
-            session_url = await self._opener.open_session(message)
-        except Exception as err:
-            logger.exception("self-test session fire failed")
-            return SelfTestStep("session", False, f"{type(err).__name__}: {err}"), None
-        if session_url is None:
-            return SelfTestStep("session", False, "routine fire failed (see the log)"), None
-        return SelfTestStep("session", True, f"claude session opened: {session_url}"), session_url
-
-    async def _push_step(self, result: CheckResult, session_url: str | None) -> SelfTestStep:
+    async def _push_step(self, result: CheckResult) -> SelfTestStep:
         """Prove the channel: a match pushes its card, anything else pushes a warning."""
         try:
             if result.passed and result.message is not None:
-                message_id = await self._notifier.notify(result.message, session_url=session_url)
+                message_id = await self._notifier.notify(result.message)
                 if message_id is None:
                     return SelfTestStep("push", False, "telegram send failed (see the log)")
                 return SelfTestStep("push", True, f"match card pushed (message {message_id})")

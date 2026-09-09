@@ -128,7 +128,7 @@ class Repository:
         Covers this run's new matches and any that a prior run failed to send, so a
         failed notification is retried on the next run. ``not_before`` bounds the set
         by ``first_seen_at`` so that lowering ``MATCH_THRESHOLD`` (or configuring
-        the routine after fire-less runs) does not retro-flood the channel with every
+        the channel after notifier-less runs) does not retro-flood the channel with every
         historical listing that was below the old threshold.
         """
         conditions = [
@@ -218,16 +218,6 @@ class Repository:
         )
         await self._session.flush()
         return result.first() is not None
-
-    async def set_claude_session_url(self, listing: Listing, session_url: str) -> None:
-        """Record the Claude session opened for a match.
-
-        Written the moment the fire returns and committed by the caller before
-        anything else happens: the fire endpoint has no idempotency key, so a
-        URL that was lost would mean a second session for the same project.
-        """
-        listing.claude_session_url = session_url
-        await self._session.flush()
 
     async def add_contact_lead(self, lead: ContactLead) -> ContactLead:
         self._session.add(lead)
