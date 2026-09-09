@@ -3,9 +3,9 @@
 A personal, single-user worker that watches freelancermap.de for new project
 listings, persists every listing losslessly in PostgreSQL, evaluates fresh ones
 against a profile (deterministic hard rules, then an LLM match), and pushes real
-matches within minutes: each match opens its own Claude session, and the Claude
-app delivers it to phone and laptop. Backend only, no web UI — the Claude app is
-the entire interaction surface.
+matches within minutes: each match opens its own Claude session in your account,
+and a Telegram card with three buttons delivers it to phone and laptop. Backend
+only, no web UI — the Claude app is the entire interaction surface.
 
 Built as a modern, strictly-typed Python codebase (Python 3.13, asyncio,
 Pydantic v2, SQLAlchemy 2.0, `mypy --strict`). The binding detail specification is
@@ -23,12 +23,12 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 3. For each new, fresh listing (within the analysis window), runs the evaluation
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
-4. Sends a Telegram notification for every match at or above
-   `MATCH_THRESHOLD`. That opens one Claude session carrying the match card, the
-   remaining facts and the full description; Claude repeats the card and adds its
-   own reading, and the Claude app pushes the finished session to your phone and
-   laptop. A reason is stored for every verdict — match and no-match alike — for
-   later reporting.
+4. For every match at or above `MATCH_THRESHOLD`, opens one Claude cloud
+   session through the `match-thread` routine's API trigger (the session gets
+   the card, every fact and the full description, and Claude adds its own
+   reading), then sends a Telegram card whose **Bewerben** button is that
+   session. A reason is stored for every verdict — match and no-match alike —
+   for later reporting.
 
 The card is rendered in code (`notification/messages.py`), not left to the model,
 so every alert is scannable the same way:
@@ -46,17 +46,18 @@ so every alert is scannable the same way:
 Company and location always get their line: a listing that names neither is
 itself a signal, so the card says so rather than dropping it silently.
 
-Everything after the push happens in that session: ask questions, have the
+Everything after the tap happens in that session: ask questions, have the
 application drafted and revised, and send it, through the MCP server this project
-also ships. Operator warnings (source cooldown, LLM health, repeated failures)
-arrive the same way, as their own sessions.
+also ships. **Ablehnen** on the card deletes it, **Projektbeschreibung öffnen**
+opens the original ad. Operator warnings (source cooldown, LLM health, repeated
+failures) arrive as plain Telegram messages.
 
 ## Requirements
 
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
-- An OpenAI API key, and a Claude plan with Claude Code on the web for the
-  Telegram notification and the Claude surface ([`docs/claude-setup.md`](docs/claude-setup.md))
+- An OpenAI API key, a Telegram bot, and a Claude plan with Claude Code on the
+  web (routines) for the session per match ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -110,11 +111,9 @@ gitignored and `.env.example` is the template):
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and the chat it sends to — the notification channel |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and your private chat with it — the alert channel |
+| `CLAUDE_ROUTINE_FIRE_URL` / `CLAUDE_ROUTINE_TOKEN` | the `match-thread` routine's API trigger — one Claude session per match |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
-| `ANTHROPIC_API_KEY` | the thread agent's own key (`MCP_URL` defaults to the mcp service next to it) |
-| `TELEGRAM_ALLOWED_USER_IDS` | who may drive that agent — anyone else's message is dropped |
-| `AGENT_MODEL` / `AGENT_WORKSPACE` | model (default `claude-opus-5`) and the directory the agent works in |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
@@ -131,8 +130,9 @@ gitignored and `.env.example` is the template):
 uv run project-pilot init-db        # apply Alembic migrations
 uv run project-pilot run-once       # one scan now (non-zero exit on a failed run)
 uv run project-pilot daemon         # the scan loop until SIGTERM
+uv run project-pilot telegram-bot   # hears the card's Ablehnen button (long polling)
 uv run project-pilot mcp            # the MCP server (Streamable HTTP + bearer token)
-uv run project-pilot test-match     # rules + LLM + a real push, stores nothing
+uv run project-pilot test-match     # rules + LLM + a real fire + a real push, stores nothing
 uv run project-pilot test-filter    # dry-run the filter against a listing
 uv run project-pilot stats          # reporting summary
 uv run project-pilot healthcheck    # liveness/freshness probe (exit code)
@@ -144,25 +144,26 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The Telegram channel post**, sent by the worker itself: one post per match
-   carrying the card and its three decisions. Telegram forwards each post into
-   the channel's linked discussion group and roots a comment thread on it, so a
-   project is one post you open into its own conversation. Send-only from the
-   worker — no polling, no webhook, no inbound port — and delivery never depends
-   on a model judging a run worth reporting.
-2. **The thread agent** (`project-pilot telegram-bot`), a full Claude Code agent
-   on the Claude Agent SDK that answers inside those threads. Reading runs
-   freely; writing, running a command and sending ask for a button press first.
-   Its domain layer is the MCP server next door, so profile, judging rules and
-   writing style have one home. The proxy's site config, for the public
-   endpoint Claude chats and n8n use, is in
+1. **The Claude session**, one per match, opened by the worker through the
+   `match-thread` routine's API trigger in your own account. Its URL is stored
+   on the listing (`listings.claude_session_url`), which is also what stops a
+   second session for the same project — the fire endpoint has no idempotency
+   key. The session carries the card and the full listing, has the project-pilot
+   MCP connector and the repo's skills, and is where the match is worked.
+2. **The Telegram card**, sent by the worker itself seconds after the verdict:
+   the card and three buttons. Two are plain links (the original listing, the
+   session); only **Ablehnen** needs a process — `project-pilot telegram-bot`
+   long-polls for that press and deletes the card. Delivery never depends on a
+   model judging a run worth reporting: the official docs offer no guaranteed
+   push for a session created by API, so the alert stays in code where it can
+   be retried. The proxy's site config for the public MCP endpoint is in
    [`deploy/proxy-site/`](deploy/proxy-site).
 3. **The workflow prompts**, exposed by the MCP server itself
    (`mcp_prompts.py`), so one definition serves every surface: Claude Code
-   lists them as `/mcp__project-pilot__check_project`, a bot renders its own
-   command menu from `prompts/list`, and n8n calls them the same way. The
-   account skills in [`deploy/claudeai-skills/`](deploy/claudeai-skills) are
-   thin wrappers over the same tools for surfaces that don't show MCP prompts.
+   lists them as `/mcp__project-pilot__check_project`, and n8n calls them the
+   same way. The account skills in
+   [`deploy/claudeai-skills/`](deploy/claudeai-skills) are thin wrappers over
+   the same tools for surfaces that don't show MCP prompts.
 
 Ten tools are exposed, and any Claude chat that has the connector can use them:
 
@@ -210,13 +211,13 @@ Only the scraper. Everything else was built source-agnostic and stays that way:
 | data model (`listings.source` per row, `source_state` keyed by source) | no |
 | evaluation (`constraints.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
 | application drafting, enrichment, sending | no |
-| MCP tools, the Telegram notification, the skills | no |
+| MCP tools, the Claude session, the Telegram card, the skills | no |
 
 So a second board reaches the database today through `ingest_listing` (an n8n
 workflow forwarding its mails costs no code at all), and *scanning* one is a new
 parser plus its search URLs — build-plan item 15, deliberately not built yet.
 
-## Applying from a match thread
+## Applying from a match session
 
 Ask for it in the session — "schreib die Bewerbung" — and the LLM writes a
 personalized application. The single prompt file
@@ -354,17 +355,21 @@ matches are missed. Restart the worker after changing `.env`.
 - **`SelectorMismatchError`**: freelancermap changed its markup. Update the
   selector constants at the top of `src/project_pilot/ingestion/parser.py`,
   refresh the fixtures, and re-run.
-- **Repeated failures**: three consecutive failed runs open one warning session.
+- **Repeated failures**: three consecutive failed runs send one warning.
 - **Container unhealthy**: no successful run within three times the interval;
   check `docker compose logs app`.
 - **Everything looks healthy but no matches arrive**: the LLM is the one dependency
   whose failure still produces successful runs (every listing falls back to
-  `llm_error`). The daemon preflights `LLM_MODEL` on start and opens a warning
-  session naming the cause — wrong model, rejected key, or an account out of credit
-  — then announces recovery once it works again. See `docs/operations.md`.
-- **No push for a match**: delivery failed. `docker compose logs app` shows
+  `llm_error`). The daemon preflights `LLM_MODEL` on start and sends a warning
+  naming the cause — wrong model, rejected key, or an account out of credit —
+  then announces recovery once it works again. See `docs/operations.md`.
+- **No card for a match**: delivery failed. `docker compose logs app` shows
   `telegram send failed`; the listing keeps `notified_at` empty and the next scan
-  retries it, so nothing is lost while the channel is down.
+  retries it — with the same session, whose URL was already stored.
+- **A card without a Bewerben button**: the routine fire failed (the log names
+  the status: `401` token, `400` paused routine, `429` daily run cap). The alert
+  still went out; start a chat by hand with `/check-project` and the listing id
+  the card names.
 
 ## Development
 
@@ -413,7 +418,8 @@ src/project_pilot/
   ingestion/    client, parser, normalize, watermark
   evaluation/   freshness, rules, llm, schemas, check, prompts/
   enrichment/   fetch, render, search, extract, links, message, service, listing
-  notification/ telegram (the channel), messages
+  notification/ claude_fire (the session), telegram (the card), messages
+  telegram_bot  hears the Ablehnen button
   mcp_prompts   the workflow prompts, one source for every surface
   application/  generator, service, mailer, documents, cv_drive (apply flow)
   mcp_server.py the tools any Claude surface calls

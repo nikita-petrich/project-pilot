@@ -144,13 +144,14 @@ Required — the container dies at boot without them:
 | `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
 | `LLM_MODEL` | model name, e.g. a small, cheap one |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
-| `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE notification channel |
-| `TELEGRAM_CHAT_ID` | the chat the bot sends to |
-| `ANTHROPIC_API_KEY` | the thread agent's own key |
+| `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE alert channel |
+| `TELEGRAM_CHAT_ID` | your private chat with the bot (a positive number) |
+| `CLAUDE_ROUTINE_FIRE_URL` | the `match-thread` routine's API-trigger URL — one Claude session per match |
+| `CLAUDE_ROUTINE_TOKEN` | that trigger's token, shown once in the modal |
 | `MCP_TOKEN` | bearer token for the MCP server; `openssl rand -hex 32` |
 | `PROXY_NETWORK` | the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 
-The Telegram and MCP values come from [`claude-setup.md`](claude-setup.md). The deploy fails at
+The Telegram, routine and MCP values come from [`claude-setup.md`](claude-setup.md). The deploy fails at
 the *Install .env* step if any of them is missing, before the server is touched:
 without a notification channel the worker would find matches it cannot deliver, so
 refusing to deploy beats a crash loop over SSH.

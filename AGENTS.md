@@ -10,9 +10,11 @@ there is a single source of truth.
 project-pilot is a personal, single-user worker that watches freelancermap.de for
 new project listings, persists every listing losslessly in PostgreSQL, evaluates
 fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
-and pushes real matches within minutes: the worker opens a Telegram forum topic
-per match, where a full Claude agent works it through project-pilot's own MCP
-tools; the same MCP server exposes every function to Claude chats and n8n.
+and pushes real matches within minutes: the worker opens one Claude cloud
+session per match (through a routine's API trigger) and sends a Telegram card
+whose buttons open the listing, open that session, or decline the match; the
+session works the match through project-pilot's own MCP tools and skills, and
+the same MCP server exposes every function to Claude chats and n8n.
 
 **Only the scraper is freelancermap-specific** (its parser, `SEARCH_URLS`, the
 watermark) — keep it that way. The data model, the evaluation prompts, the
@@ -122,16 +124,16 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
-- Scheduler daemon (scan loop; every notified match opens its own forum topic in
-  the Telegram match group — `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are
+- Scheduler daemon (scan loop; every match fires the `match-thread` routine for
+  its Claude session and sends its Telegram card — `TELEGRAM_BOT_TOKEN`,
+  `TELEGRAM_CHAT_ID`, `CLAUDE_ROUTINE_FIRE_URL` and `CLAUDE_ROUTINE_TOKEN` are
   required):
   `uv run project-pilot daemon`
-- Thread agent for those topics (long polling, no inbound port; a full Claude
-  Code agent on the Claude Agent SDK with project-pilot's MCP server attached —
-  `ANTHROPIC_API_KEY` and a reachable `MCP_URL` are required):
+- Button poller (long polling, no inbound port; hears only the card's Ablehnen
+  button and deletes the card — `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`):
   `uv run project-pilot telegram-bot`
 - MCP server (Streamable HTTP + `MCP_TOKEN` bearer auth, for Claude connectors/n8n): `uv run project-pilot mcp`
-- End-to-end smoke test (rules + LLM + a real push, stores nothing):
+- End-to-end smoke test (rules + LLM + a real routine fire + a real push, stores nothing):
   `uv run project-pilot test-match`
   (`--text`/`--file` for your own description, `--listing-id N` for a stored listing)
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
