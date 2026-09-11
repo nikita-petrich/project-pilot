@@ -1,4 +1,4 @@
-"""Tests for the stage 3 LLM matcher (OpenAI client fully mocked)."""
+"""Tests for the stage 3 LLM matcher (both provider clients fully mocked)."""
 
 from collections.abc import Sequence
 from datetime import date
@@ -9,16 +9,21 @@ import pytest
 from openai import APIStatusError
 
 from project_pilot.application.documents import ImageAttachment
+from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.llm import (
+    AnthropicStructuredClient,
     LlmEvaluation,
     LlmMatcher,
     LlmResponse,
+    OpenAiStructuredClient,
+    build_anthropic_content,
     build_user_content,
     is_match_notifiable,
     load_prompt,
     probe_llm,
     render_listing,
+    structured_client,
 )
 from project_pilot.evaluation.schemas import MatchVerdict
 from project_pilot.health import HealthKind
@@ -399,7 +404,69 @@ def test_build_user_content_encodes_images_as_data_urls() -> None:
     }
 
 
+def test_build_anthropic_content_is_plain_text_without_images() -> None:
+    assert build_anthropic_content("hello", []) == "hello"
+
+
+def test_build_anthropic_content_sends_raw_base64_images_before_the_text() -> None:
+    """Anthropic takes the bare base64, not OpenAI's data: URL, and wants images first."""
+    image = ImageAttachment(name="a.png", mime_type="image/png", data=b"\x89PNG")
+
+    parts = build_anthropic_content("hello", [image])
+
+    assert isinstance(parts, list)
+    assert parts[0] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw=="},
+    }
+    assert parts[1] == {"type": "text", "text": "hello"}
+
+
+def test_build_anthropic_content_falls_back_to_png_for_an_unexpected_mime_type() -> None:
+    """Upstream already rejects non-images; a surprise must not fail the whole draft."""
+    image = ImageAttachment(name="a.bmp", mime_type="image/bmp", data=b"x")
+
+    parts = build_anthropic_content("hello", [image])
+
+    assert isinstance(parts, list)
+    assert parts[0] == {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": "eA=="},
+    }
+
+
+def test_the_two_providers_build_the_same_prompt_from_the_same_inputs() -> None:
+    """The text handed to the model must not depend on which SDK carries it."""
+    image = ImageAttachment(name="a.png", mime_type="image/png", data=b"\x89PNG")
+
+    openai_parts = build_user_content("hello", [image])
+    anthropic_parts = build_anthropic_content("hello", [image])
+
+    assert isinstance(openai_parts, list) and isinstance(anthropic_parts, list)
+    text_block = {"type": "text", "text": "hello"}
+    assert text_block in openai_parts
+    assert text_block in anthropic_parts
+
+
 def test_out_of_range_scores_are_clamped_to_contract() -> None:
     assert _evaluation(_verdict(score=850)).score == 100
     assert _evaluation(_verdict(score=-5)).score == 0
     assert _evaluation(_verdict(score=850)).reason()["score"] == 100
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("openai", OpenAiStructuredClient), ("anthropic", AnthropicStructuredClient)],
+)
+def test_structured_client_follows_the_configured_provider(provider: str, expected: type) -> None:
+    credentials = LlmCredentials(provider=provider, api_key="k", model="m")
+
+    assert isinstance(structured_client(credentials), expected)
+
+
+def test_structured_client_refuses_a_provider_it_has_no_adapter_for() -> None:
+    """Adding a provider to the config without an adapter must fail loudly, not silently."""
+    credentials = LlmCredentials(provider="google", api_key="k", model="m")
+
+    with pytest.raises(ConfigError, match="google"):
+        structured_client(credentials)

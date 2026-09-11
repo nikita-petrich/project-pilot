@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from openai import APIConnectionError
+from anthropic import APIConnectionError as AnthropicConnectionError
+from openai import APIConnectionError as OpenAiConnectionError
 
 logger = logging.getLogger(__name__)
 
@@ -63,16 +64,30 @@ _RETRYABLE = frozenset(
 _QUOTA_CODES = frozenset({"insufficient_quota", "billing_hard_limit_reached", "billing_not_active"})
 _MODEL_CODES = frozenset({"model_not_found", "model_not_available"})
 
+# Either SDK's own network failure, plus the plain socket errors underneath them.
+_CONNECTION_ERRORS = (AnthropicConnectionError, OpenAiConnectionError, OSError)
+
+# An exhausted account is the failure this project must never mistake for a transient
+# one: retrying it burns the run and the alert would name the wrong fix. OpenAI labels
+# it with a machine-readable code (above); Anthropic returns a plain 400
+# ``invalid_request_error`` whose message is the only signal there is. Hence the phrase
+# match — deliberately narrow, and only ever consulted for a 400 or 403, so a 429 stays
+# a rate limit. (`coding-standards.md` bans message matching for *our* domain errors,
+# which carry a type; a third-party error that carries nothing else leaves no choice.)
+_QUOTA_PHRASES = ("credit balance is too low", "billing", "insufficient quota")
+
 _LLM_SUMMARIES: dict[HealthKind, str] = {
     HealthKind.MODEL_NOT_FOUND: (
         "the LLM model '{model}' does not exist or this API key cannot use it "
         "(HTTP 404) — fix `LLM_MODEL`"
     ),
-    HealthKind.AUTH: "OpenAI rejected the API key — check `OPENAI_API_KEY`",
-    HealthKind.QUOTA: ("the OpenAI account is out of credit or over its billing limit — top it up"),
-    HealthKind.RATE_LIMIT: "OpenAI is rate limiting project-pilot",
-    HealthKind.CONNECTION: "the OpenAI API is unreachable from the server",
-    HealthKind.UPSTREAM: "OpenAI returned a server error",
+    HealthKind.AUTH: (
+        "the LLM API rejected the key — check the API key of the configured `LLM_PROVIDER`"
+    ),
+    HealthKind.QUOTA: "the LLM account is out of credit or over its billing limit — top it up",
+    HealthKind.RATE_LIMIT: "the LLM API is rate limiting project-pilot",
+    HealthKind.CONNECTION: "the LLM API is unreachable from the server",
+    HealthKind.UPSTREAM: "the LLM API returned a server error",
     HealthKind.SCHEMA: "the model '{model}' returned no usable verdict",
     HealthKind.UNKNOWN: "the LLM call to '{model}' failed",
 }
@@ -126,6 +141,12 @@ def _error_code(err: BaseException) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _mentions_quota(err: BaseException) -> bool:
+    """Whether the provider's own message says the account, not the request, is the problem."""
+    message = str(err).lower()
+    return any(phrase in message for phrase in _QUOTA_PHRASES)
+
+
 def _llm_kind(err: BaseException) -> HealthKind:
     """Classify by the provider's own status/code, so any client implementation fits."""
     status = _status_code(err)
@@ -134,13 +155,15 @@ def _llm_kind(err: BaseException) -> HealthKind:
         return HealthKind.QUOTA
     if code in _MODEL_CODES or status == 404:
         return HealthKind.MODEL_NOT_FOUND
+    if status in (400, 403) and _mentions_quota(err):
+        return HealthKind.QUOTA
     if status in (401, 403):
         return HealthKind.AUTH
     if status == 429:
         return HealthKind.RATE_LIMIT
     if status is not None and status >= 500:
         return HealthKind.UPSTREAM
-    if isinstance(err, APIConnectionError | OSError):
+    if isinstance(err, _CONNECTION_ERRORS):
         return HealthKind.CONNECTION
     return HealthKind.UNKNOWN
 

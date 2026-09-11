@@ -3,7 +3,7 @@
 import pytest
 from pydantic import ValidationError
 
-from project_pilot.config import Settings, load_settings
+from project_pilot.config import LlmCredentials, Settings, load_settings
 from project_pilot.errors import ConfigError
 
 
@@ -74,14 +74,56 @@ def test_require_search_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().require_search_urls() == ["https://a.example/x"]
 
 
-def test_require_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.delenv("LLM_MODEL", raising=False)
+def _clear_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    for var in ("LLM_PROVIDER", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "LLM_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_require_llm_defaults_to_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm(monkeypatch)
     with pytest.raises(ConfigError):
-        Settings().require_openai()
+        Settings().require_llm()
     monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
     monkeypatch.setenv("LLM_MODEL", "gpt-mini")
-    assert Settings().require_openai() == ("sk-x", "gpt-mini")
+    assert Settings().require_llm() == LlmCredentials(
+        provider="openai", api_key="sk-x", model="gpt-mini"
+    )
+
+
+def test_require_llm_reads_the_selected_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm(monkeypatch)
+    monkeypatch.setenv("LLM_PROVIDER", "anthropic")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")  # the other provider's key never counts
+    monkeypatch.setenv("LLM_MODEL", "claude-haiku-4-5")
+    with pytest.raises(ConfigError, match="ANTHROPIC_API_KEY"):
+        Settings().require_llm()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    assert Settings().require_llm() == LlmCredentials(
+        provider="anthropic", api_key="sk-ant-x", model="claude-haiku-4-5"
+    )
+
+
+def test_require_llm_needs_a_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_llm(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-x")
+    with pytest.raises(ConfigError, match="LLM_MODEL"):
+        Settings().require_llm()
+
+
+def test_unknown_llm_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "mistral")
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_llm_provider_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "Anthropic")
+    assert Settings().llm_provider == "anthropic"
+
+
+def test_credentials_keep_the_key_out_of_reprs() -> None:
+    creds = LlmCredentials(provider="anthropic", api_key="sk-ant-secret", model="m")
+    assert "sk-ant-secret" not in repr(creds)
 
 
 def test_load_settings_success(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-"""Stage 3 LLM matching via OpenAI structured outputs."""
+"""Stage 3 LLM matching via structured outputs (OpenAI or Anthropic)."""
 
 import base64
 import logging
@@ -6,11 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from project_pilot.application.documents import ImageAttachment
+from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.nogo import enforce_nogo
 from project_pilot.evaluation.schemas import MatchVerdict
@@ -19,12 +21,27 @@ from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import Listing
 
 if TYPE_CHECKING:
+    from anthropic.types import ContentBlockParam
     from openai.types.chat import ChatCompletionContentPartParam, ChatCompletionMessageParam
+
+# The four image formats the Anthropic vision input accepts (its own param type inlines
+# this Literal rather than exporting a name for it).
+type ImageMediaType = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
 
 logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "match.v7"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+# Anthropic requires an output cap on every call (OpenAI defaults it). A MatchVerdict is
+# a handful of short lists, but on a model that reasons the cap also covers the thinking
+# tokens — and a verdict truncated by the cap parses as nothing and costs a retry. Unused
+# headroom is not billed, so this is deliberately far above what the JSON needs.
+VERDICT_MAX_TOKENS = 8192
+# The preflight's own cap. The OpenAI ping deliberately passes no options at all; here
+# the parameter is mandatory, so it is set to the smallest value that still proves the
+# model, the key and the credit in one call.
+PING_MAX_TOKENS = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +68,14 @@ class LlmProbe(Protocol):
     """The smallest possible liveness call, used as a preflight before real work."""
 
     async def ping(self, *, model: str) -> None: ...
+
+
+class MatchLlmClient(StructuredLlmClient, LlmProbe, Protocol):
+    """Both halves stage 3 needs of a provider: judge a listing, and answer a preflight.
+
+    The two capabilities stay separate Protocols so a test fake can implement only the
+    one it exercises; the concrete SDK adapters implement both.
+    """
 
 
 async def probe_llm(probe: LlmProbe, *, model: str) -> HealthIssue | None:
@@ -139,6 +164,45 @@ def build_user_content(
             }
         )
     return parts
+
+
+def build_anthropic_content(
+    user: str, images: Sequence[ImageAttachment]
+) -> "str | list[ContentBlockParam]":
+    """The user message for an Anthropic call: plain text, or image blocks then text.
+
+    Anthropic takes the raw base64 in an ``image`` block rather than OpenAI's ``data:``
+    URL, and its documented ordering puts the images ahead of the text they belong to.
+    """
+    if not images:
+        return user
+    parts: list[ContentBlockParam] = [
+        {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": _anthropic_media_type(image.mime_type),
+                "data": base64.b64encode(image.data).decode("ascii"),
+            },
+        }
+        for image in images
+    ]
+    parts.append({"type": "text", "text": user})
+    return parts
+
+
+def _anthropic_media_type(mime_type: str) -> ImageMediaType:
+    """Narrow an uploaded image's MIME type to the four the vision input accepts.
+
+    ``documents.is_image_mime_type`` has already rejected anything else upstream, so
+    this only re-states the contract for the type checker; an unexpected value falls
+    back to PNG rather than failing the whole draft.
+    """
+    allowed: tuple[ImageMediaType, ...] = ("image/jpeg", "image/png", "image/gif", "image/webp")
+    for candidate in allowed:
+        if mime_type == candidate:
+            return candidate
+    return "image/png"
 
 
 def _reference(raw: Mapping[str, object]) -> str | None:
@@ -330,6 +394,67 @@ class OpenAiStructuredClient:
             tokens_in=usage.prompt_tokens if usage is not None else None,
             tokens_out=usage.completion_tokens if usage is not None else None,
         )
+
+
+class AnthropicStructuredClient:
+    """Thin adapter over the Anthropic SDK's structured `parse` (network, not unit-tested).
+
+    Deliberately passes neither ``thinking`` nor ``output_config.effort``: ``LLM_MODEL``
+    comes from the environment, and a hard-coded reasoning option is exactly the kind of
+    parameter some models reject outright with a 400.
+    """
+
+    def __init__(
+        self, api_key: str, *, client: AsyncAnthropic | None = None
+    ) -> None:  # pragma: no cover
+        self._client = client or AsyncAnthropic(api_key=api_key)
+
+    async def ping(self, *, model: str) -> None:  # pragma: no cover
+        """Smallest real call there is: proves the model, the key and the credit at once."""
+        await self._client.messages.create(
+            model=model,
+            max_tokens=PING_MAX_TOKENS,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> LlmResponse:  # pragma: no cover
+        message = await self._client.messages.parse(
+            model=model,
+            max_tokens=VERDICT_MAX_TOKENS,
+            # Anthropic carries the system prompt in its own parameter rather than as a
+            # first message, which keeps it out of the untrusted user turn by construction.
+            system=system,
+            messages=[{"role": "user", "content": build_anthropic_content(user, images)}],
+            output_format=MatchVerdict,
+        )
+        return LlmResponse(
+            verdict=message.parsed_output,
+            tokens_in=message.usage.input_tokens,
+            tokens_out=message.usage.output_tokens,
+        )
+
+
+def structured_client(credentials: LlmCredentials) -> MatchLlmClient:
+    """The stage-3 client for the configured provider.
+
+    Unknown providers abort rather than defaulting to one, so adding a third to
+    ``config._LLM_PROVIDERS`` and forgetting the adapter fails at boot instead of
+    silently judging every listing with the wrong API.
+    """
+    match credentials.provider:
+        case "anthropic":
+            return AnthropicStructuredClient(credentials.api_key)
+        case "openai":
+            return OpenAiStructuredClient(credentials.api_key)
+        case other:
+            raise ConfigError(f"no stage-3 client for LLM_PROVIDER '{other}'")
 
 
 def _elapsed_ms(started: float) -> int:

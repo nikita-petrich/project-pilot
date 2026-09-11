@@ -44,8 +44,9 @@
 ## LLM Usage
 
 - Prompts as versioned files under `src/project_pilot/evaluation/prompts/` (`match.v1.md`, …); `prompt_version` is persisted on every evaluation
-- Outputs exclusively via OpenAI `.parse()` against the Pydantic model `MatchVerdict`; schema violation ⇒ one retry, then fallback verdict `no_match` with reason `llm_error` — the pipeline never breaks because of the LLM
-- Model name from ENV, never hardcoded; log tokens and latency per call
+- Outputs exclusively via the provider SDK's structured `.parse()` against the Pydantic model `MatchVerdict` (OpenAI `response_format`, Anthropic `output_format`); schema violation ⇒ one retry, then fallback verdict `no_match` with reason `llm_error` — the pipeline never breaks because of the LLM
+- One adapter per provider behind the `StructuredLlmClient`/`StructuredDraftClient` Protocols, selected by `LLM_PROVIDER`; nothing above the adapter may import a provider SDK
+- Model name from ENV, never hardcoded; log tokens and latency per call. For the same reason an adapter pins no reasoning options (`thinking`, `effort`): a model the ENV names may reject them
 - No personal data in the prompt other than the profile; the profile text counts as sensitive and is not logged
 
 ## Tests

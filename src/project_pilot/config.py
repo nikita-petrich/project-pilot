@@ -15,6 +15,22 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 _SEARCH_PROVIDERS = frozenset({"duckduckgo", "none"})
+_LLM_PROVIDERS = frozenset({"openai", "anthropic"})
+# The ENV variable holding each provider's key, so an error names the one to set.
+_LLM_KEY_VARS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+
+
+@dataclass(frozen=True, slots=True)
+class LlmCredentials:
+    """Which LLM the process talks to, resolved from the provider-specific settings.
+
+    The provider decides only which SDK adapter is built; everything downstream of
+    ``StructuredLlmClient``/``StructuredDraftClient`` is provider-agnostic.
+    """
+
+    provider: str
+    api_key: str = field(repr=False)
+    model: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +93,11 @@ class Settings(BaseSettings):
     )
     contact_mail: str = "you@example.com"
 
+    # Which API the matcher and the draft generator call. Both adapters stay in the
+    # code, so switching back is an ENV change and never a redeploy of new logic.
+    llm_provider: str = "openai"
     openai_api_key: str = Field(default="", repr=False)
+    anthropic_api_key: str = Field(default="", repr=False)
     llm_model: str = ""
 
     smtp_host: str = ""
@@ -156,6 +176,16 @@ class Settings(BaseSettings):
             raise ValueError("MATCH_THRESHOLD must be within 0..100")
         return value
 
+    @field_validator("llm_provider", mode="before")
+    @classmethod
+    def _known_llm_provider(cls, value: object) -> object:
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered not in _LLM_PROVIDERS:
+                raise ValueError(f"LLM_PROVIDER must be one of {sorted(_LLM_PROVIDERS)}")
+            return lowered
+        return value
+
     @field_validator("enrichment_search", mode="before")
     @classmethod
     def _known_search_provider(cls, value: object) -> object:
@@ -192,12 +222,21 @@ class Settings(BaseSettings):
             raise ConfigError("SEARCH_URLS is empty; set at least one search URL")
         return self.search_urls
 
-    def require_openai(self) -> tuple[str, str]:
-        if not self.openai_api_key:
-            raise ConfigError("OPENAI_API_KEY must be set")
+    def llm_api_key(self) -> str:
+        """The configured key of the selected provider (empty when unset)."""
+        return self.anthropic_api_key if self.llm_provider == "anthropic" else self.openai_api_key
+
+    def require_llm(self) -> LlmCredentials:
+        """The credentials the matcher and the draft generator need, or a clear abort."""
+        api_key = self.llm_api_key()
+        if not api_key:
+            raise ConfigError(
+                f"{_LLM_KEY_VARS[self.llm_provider]} must be set "
+                f"(LLM_PROVIDER is '{self.llm_provider}')"
+            )
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
-        return self.openai_api_key, self.llm_model
+        return LlmCredentials(provider=self.llm_provider, api_key=api_key, model=self.llm_model)
 
     def require_telegram(self) -> tuple[str, str]:
         if not self.telegram_bot_token:

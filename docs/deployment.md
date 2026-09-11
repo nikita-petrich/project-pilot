@@ -141,8 +141,8 @@ Required — the container dies at boot without them:
 
 | Key | Value |
 |---|---|
-| `OPENAI_API_KEY` | OpenAI key for the match and application LLM |
-| `LLM_MODEL` | model name, e.g. a small, cheap one |
+| `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` | key for the match and application LLM; the deploy requires the one `LLM_PROVIDER` selects |
+| `LLM_MODEL` | model name for that provider, e.g. a small, cheap one |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE alert channel |
 | `TELEGRAM_CHAT_ID` | your private chat with the bot (a positive number) |

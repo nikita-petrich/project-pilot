@@ -8,12 +8,16 @@ import pytest
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import (
+    AnthropicDraftClient,
     ApplicationGenerator,
     DraftResponse,
+    OpenAiDraftClient,
+    draft_client,
     load_application_prompt,
 )
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.errors import LlmSchemaError
+from project_pilot.config import LlmCredentials
+from project_pilot.errors import ConfigError, LlmSchemaError
 
 
 def _draft() -> ApplicationDraft:
@@ -195,3 +199,20 @@ async def test_revise_keeps_the_contact_in_the_prompt() -> None:
         contact_name="Nina Musterfrau",
     )
     assert "## Ansprechpartner\nNina Musterfrau" in client.calls[0]
+
+
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("openai", OpenAiDraftClient), ("anthropic", AnthropicDraftClient)],
+)
+def test_draft_client_follows_the_configured_provider(provider: str, expected: type) -> None:
+    credentials = LlmCredentials(provider=provider, api_key="k", model="m")
+
+    assert isinstance(draft_client(credentials), expected)
+
+
+def test_draft_client_refuses_a_provider_it_has_no_adapter_for() -> None:
+    credentials = LlmCredentials(provider="google", api_key="k", model="m")
+
+    with pytest.raises(ConfigError, match="google"):
+        draft_client(credentials)

@@ -91,7 +91,10 @@ Before the first live run:
 4. **Telegram.** Create the bot via @BotFather, set `TELEGRAM_BOT_TOKEN` and
    `TELEGRAM_CHAT_ID`, then run `uv run project-pilot test-notify` (this live send
    was implemented and mocked in tests but not executed here).
-5. **LLM.** Set `OPENAI_API_KEY` and `LLM_MODEL` (a small model is enough).
+5. **LLM.** Pick `LLM_PROVIDER` (`openai` or `anthropic`), set that provider's key
+   (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY`) and `LLM_MODEL` (a small model is
+   enough). Switching provider later is those two lines plus a golden-set re-run
+   (`uv run pytest -m eval`), because the prompt is tuned per model.
 6. **First run.** `uv run project-pilot run-once`, watch the output, then start the
    `daemon` (or the Docker Compose stack).
 7. **Build the image** on a machine where Docker Hub and ghcr are reachable

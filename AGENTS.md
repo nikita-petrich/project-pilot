@@ -117,7 +117,8 @@ Quality gate (all four must be green before every `/check`, checkpoint, and `/co
 - Format check: `uv run ruff format --check`
 - Types: `uv run mypy`
 - Test: `uv run pytest`
-- Judgment eval (golden set, real LLM calls — needs `OPENAI_API_KEY` + `LLM_MODEL`,
+- Judgment eval (golden set, real LLM calls — needs `LLM_MODEL` + the key of the
+  configured `LLM_PROVIDER`,
   excluded from the normal suite): `uv run pytest -m eval`
 
 App (typer CLI, entry point `project_pilot.cli:app`):

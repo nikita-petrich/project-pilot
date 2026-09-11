@@ -1,13 +1,18 @@
 """Golden-set eval: does the live judgment still decide these cases correctly?
 
-Runs the real ``LlmMatcher`` (live prompt, live no-go post-check, real OpenAI
-calls) over ``golden.jsonl`` and fails when accuracy drops below the baseline.
+Runs the real ``LlmMatcher`` (live prompt, live no-go post-check, real API calls
+against whichever ``LLM_PROVIDER`` is configured) over ``golden.jsonl`` and fails
+when accuracy drops below the baseline.
 This is the regression gate for any change to the judgment: prompt edits, skill
 rewires, model swaps.
 
 Excluded from the normal suite (``-m "not eval"`` in addopts) because it costs
-tokens and needs a key; run it with ``uv run pytest -m eval``. Without
-``OPENAI_API_KEY``/``LLM_MODEL`` it skips instead of failing.
+tokens and needs a key; run it with ``uv run pytest -m eval``. Without the selected
+provider's key and ``LLM_MODEL`` it skips instead of failing.
+
+This is the gate for a provider switch: the prompt is tuned against one model, so
+the set must be re-run (and the threshold re-checked) whenever ``LLM_PROVIDER`` or
+``LLM_MODEL`` changes.
 
 The set covers German and English listings alike, because the prompt judges both
 and a language must never decide a verdict on its own.
@@ -24,19 +29,27 @@ from pathlib import Path
 
 import pytest
 
+from project_pilot.config import load_settings
 from project_pilot.evaluation.llm import (
     LlmMatcher,
-    OpenAiStructuredClient,
     is_match_notifiable,
     load_prompt,
+    structured_client,
 )
 from project_pilot.profile_loader import ProfileService
+
+
+def _configured_key() -> str:
+    """The key of whichever provider is selected, so the skip matches the real need."""
+    provider = (os.environ.get("LLM_PROVIDER") or "openai").strip().lower()
+    return os.environ.get("ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY", "")
+
 
 pytestmark = [
     pytest.mark.eval,
     pytest.mark.skipif(
-        not (os.environ.get("OPENAI_API_KEY") and os.environ.get("LLM_MODEL")),
-        reason="eval needs OPENAI_API_KEY and LLM_MODEL",
+        not (_configured_key() and os.environ.get("LLM_MODEL")),
+        reason="eval needs LLM_MODEL and the API key of the configured LLM_PROVIDER",
     ),
 ]
 
@@ -65,9 +78,12 @@ def _cases() -> list[GoldenCase]:
 
 async def test_golden_set_accuracy() -> None:
     profile = ProfileService(Path("profile")).load()
+    # Built from the real settings, so the eval judges exactly the provider, key and
+    # model the worker would use — the whole point of the gate.
+    credentials = load_settings().require_llm()
     matcher = LlmMatcher(
-        OpenAiStructuredClient(os.environ["OPENAI_API_KEY"]),
-        model=os.environ["LLM_MODEL"],
+        structured_client(credentials),
+        model=credentials.model,
         prompt_template=load_prompt(),
         nogo_terms=profile.constraints.nogo_technologies,
     )

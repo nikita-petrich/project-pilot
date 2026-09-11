@@ -16,7 +16,7 @@ import uvicorn
 from project_pilot.application.cv_drive import CvRefresher, DriveCvRefresher
 from project_pilot.application.generator import (
     ApplicationGenerator,
-    OpenAiDraftClient,
+    draft_client,
     load_application_prompt,
 )
 from project_pilot.application.mailer import SmtpMailer
@@ -31,7 +31,12 @@ from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider
 from project_pilot.enrichment.service import EnrichmentService
 from project_pilot.errors import EnrichmentError
 from project_pilot.evaluation.check import CheckService
-from project_pilot.evaluation.llm import LlmMatcher, OpenAiStructuredClient, load_prompt
+from project_pilot.evaluation.llm import (
+    LlmMatcher,
+    MatchLlmClient,
+    load_prompt,
+    structured_client,
+)
 from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
 from project_pilot.notification.telegram import TelegramNotifier
@@ -67,7 +72,7 @@ def _load_settings() -> Settings:
     return settings
 
 
-def _matcher(client: OpenAiStructuredClient, model: str, profile: Profile) -> LlmMatcher:
+def _matcher(client: MatchLlmClient, model: str, profile: Profile) -> LlmMatcher:
     """The stage-3 matcher, wired with the profile's no-go technologies."""
     return LlmMatcher(
         client,
@@ -124,14 +129,15 @@ def _enrichment_service(
 
 def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
     profile = ProfileService(Path("profile")).load()
-    api_key, model = settings.require_openai()
+    credentials = settings.require_llm()
+    model = credentials.model
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
 
     def client_factory() -> PolitenessClient:
         return PolitenessClient(user_agent=settings.user_agent())
 
-    llm_client = OpenAiStructuredClient(api_key)
+    llm_client = structured_client(credentials)
     matcher = _matcher(llm_client, model, profile)
 
     notifier = _notifier(settings)
@@ -174,12 +180,13 @@ def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[
     """Wire the MCP server over the same services the pipeline uses."""
     token = settings.require_mcp()
     profile = ProfileService(Path("profile")).load()
-    api_key, model = settings.require_openai()
+    credentials = settings.require_llm()
+    model = credentials.model
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
 
     generator = ApplicationGenerator(
-        OpenAiDraftClient(api_key), model=model, prompt_template=load_application_prompt()
+        draft_client(credentials), model=model, prompt_template=load_application_prompt()
     )
     mailer = SmtpMailer(settings.require_smtp()) if settings.has_smtp() else None
     cv_attachments = settings.cv_attachments()
@@ -193,7 +200,7 @@ def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[
     )
     checker = CheckService(
         session_factory=session_factory,
-        matcher=_matcher(OpenAiStructuredClient(api_key), model, profile),
+        matcher=_matcher(structured_client(credentials), model, profile),
         profile=profile,
         threshold=settings.match_threshold,
     )
@@ -267,13 +274,14 @@ async def _run_selftest(
 ) -> SelfTestReport:
     """Wire the real checker and the push channel, then run one listing through both."""
     profile = ProfileService(Path("profile")).load()
-    api_key, model = settings.require_openai()
+    credentials = settings.require_llm()
+    model = credentials.model
     engine = create_engine(settings.database_url)
     session_factory = create_session_factory(engine)
     service = SelfTestService(
         checker=CheckService(
             session_factory=session_factory,
-            matcher=_matcher(OpenAiStructuredClient(api_key), model, profile),
+            matcher=_matcher(structured_client(credentials), model, profile),
             profile=profile,
             threshold=settings.match_threshold,
         ),

@@ -17,6 +17,12 @@ import sys
 # These configure the deploy, not the app, so they must not land in the app's .env.
 DEPLOY_ONLY = re.compile(r"^(VPS_.*|GITHUB_TOKEN)$", re.IGNORECASE)
 VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# The provider keys, and which settings value selects each. Keep in sync with
+# project_pilot.config._LLM_KEY_VARS — a deploy that renders the wrong key produces a
+# container that starts fine and scores every listing `llm_error`.
+LLM_KEY_VARS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+DEFAULT_LLM_PROVIDER = "openai"
+
 # A bot token as @BotFather hands it out: numeric bot id, colon, secret.
 BOT_TOKEN_RE = re.compile(r"^\d+:[A-Za-z0-9_\-]{30,}$")
 # A chat id is an integer: positive for the private chat with the bot (the
@@ -26,7 +32,8 @@ CHAT_ID_RE = re.compile(r"^-?\d+$")
 # Without these the container dies at boot (see project_pilot.cli._build_pipeline and
 # Pipeline.run_once), so failing here beats debugging a crash loop over SSH.
 REQUIRED = (
-    "OPENAI_API_KEY",
+    # The LLM key is not listed here: which one is required depends on LLM_PROVIDER,
+    # so it is checked by _llm_problems() instead.
     "LLM_MODEL",
     "SEARCH_URLS",
     # Telegram is THE alert channel; without it the daemon aborts at boot by
@@ -82,9 +89,25 @@ def problems(settings: dict[str, str]) -> list[str]:
             found.append(f"{key} has leading or trailing whitespace")
         elif " #" in value:
             found.append(f"{key} contains ' #', which dotenv readers cut off as a comment")
+    found.extend(_llm_problems(settings))
     found.extend(_bot_token_problems(settings.get("TELEGRAM_BOT_TOKEN", "")))
     found.extend(_chat_id_problems(settings.get("TELEGRAM_CHAT_ID", "")))
     return found
+
+
+def _llm_problems(settings: dict[str, str]) -> list[str]:
+    """Require the API key of the provider LLM_PROVIDER actually selects.
+
+    Both keys may be present (that is how a switch back stays a one-line change), but
+    the selected one must be, or stage 3 fails on the first listing after the deploy.
+    """
+    provider = (settings.get("LLM_PROVIDER") or DEFAULT_LLM_PROVIDER).strip().lower()
+    if provider not in LLM_KEY_VARS:
+        return [f"LLM_PROVIDER is {provider!r}; expected one of {sorted(LLM_KEY_VARS)}"]
+    key_var = LLM_KEY_VARS[provider]
+    if not settings.get(key_var):
+        return [f"{key_var} is not set, and LLM_PROVIDER is {provider!r}"]
+    return []
 
 
 def _chat_id_problems(chat_id: str) -> list[str]:

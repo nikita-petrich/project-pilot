@@ -6,18 +6,25 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Protocol
 
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.schemas import ApplicationDraft
+from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError, LlmSchemaError
-from project_pilot.evaluation.llm import build_user_content
+from project_pilot.evaluation.llm import build_anthropic_content, build_user_content
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
 
 PROMPT_VERSION = "application"
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+
+# Anthropic requires an output cap on every call. A draft is a subject, an e-mail body
+# and a LinkedIn message under 300 characters — but on a model that reasons the cap also
+# covers the thinking tokens, and unused headroom is not billed, so it stays generous.
+DRAFT_MAX_TOKENS = 8192
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,3 +195,48 @@ class OpenAiDraftClient:
             tokens_in=usage.prompt_tokens if usage is not None else None,
             tokens_out=usage.completion_tokens if usage is not None else None,
         )
+
+
+class AnthropicDraftClient:
+    """Thin adapter over the Anthropic SDK's structured `parse` (network, not unit-tested).
+
+    Passes no reasoning options, for the same reason as the matcher's adapter: the model
+    name is free-form configuration and must not meet a hard-coded parameter it rejects.
+    """
+
+    def __init__(
+        self, api_key: str, *, client: AsyncAnthropic | None = None
+    ) -> None:  # pragma: no cover
+        self._client = client or AsyncAnthropic(api_key=api_key)
+
+    async def complete(
+        self,
+        *,
+        model: str,
+        system: str,
+        user: str,
+        images: Sequence[ImageAttachment] = (),
+    ) -> DraftResponse:  # pragma: no cover
+        message = await self._client.messages.parse(
+            model=model,
+            max_tokens=DRAFT_MAX_TOKENS,
+            system=system,
+            messages=[{"role": "user", "content": build_anthropic_content(user, images)}],
+            output_format=ApplicationDraft,
+        )
+        return DraftResponse(
+            draft=message.parsed_output,
+            tokens_in=message.usage.input_tokens,
+            tokens_out=message.usage.output_tokens,
+        )
+
+
+def draft_client(credentials: LlmCredentials) -> StructuredDraftClient:
+    """The application-draft client for the configured provider (unknown ones abort)."""
+    match credentials.provider:
+        case "anthropic":
+            return AnthropicDraftClient(credentials.api_key)
+        case "openai":
+            return OpenAiDraftClient(credentials.api_key)
+        case other:
+            raise ConfigError(f"no application-draft client for LLM_PROVIDER '{other}'")

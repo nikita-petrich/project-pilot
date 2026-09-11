@@ -3,7 +3,10 @@
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import httpx2
 import pytest
+from anthropic import APIConnectionError as AnthropicConnectionError
+from anthropic import APIStatusError as AnthropicStatusError
 from openai import APIConnectionError, APIStatusError
 
 from project_pilot.health import (
@@ -28,6 +31,15 @@ def _api_error(status: int, code: str | None = None, message: str = "boom") -> A
     return APIStatusError(message, response=httpx.Response(status, request=request), body=body)
 
 
+def _anthropic_error(status: int, message: str, error_type: str) -> AnthropicStatusError:
+    """A real Anthropic SDK error. Unlike OpenAI's, it carries no machine-readable code."""
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    body: dict[str, object] = {"type": "error", "error": {"type": error_type, "message": message}}
+    return AnthropicStatusError(
+        message, response=httpx2.Response(status, request=request), body=body
+    )
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [
@@ -40,6 +52,24 @@ def _api_error(status: int, code: str | None = None, message: str = "boom") -> A
         (_api_error(500), HealthKind.UPSTREAM),
         (_api_error(503), HealthKind.UPSTREAM),
         (ValueError("something else"), HealthKind.UNKNOWN),
+        # Anthropic: no `code` anywhere, so only status and message can decide.
+        (
+            _anthropic_error(
+                400,
+                "Your credit balance is too low to access the Claude API.",
+                "invalid_request_error",
+            ),
+            HealthKind.QUOTA,
+        ),
+        (_anthropic_error(401, "invalid x-api-key", "authentication_error"), HealthKind.AUTH),
+        (_anthropic_error(404, "model: nope", "not_found_error"), HealthKind.MODEL_NOT_FOUND),
+        (_anthropic_error(429, "rate limited", "rate_limit_error"), HealthKind.RATE_LIMIT),
+        (_anthropic_error(529, "overloaded", "overloaded_error"), HealthKind.UPSTREAM),
+        # A plain bad request stays unknown — the phrase match must not swallow it.
+        (
+            _anthropic_error(400, "max_tokens is required", "invalid_request_error"),
+            HealthKind.UNKNOWN,
+        ),
     ],
 )
 def test_classify_maps_provider_errors_to_actionable_kinds(
@@ -176,3 +206,38 @@ async def test_a_problem_that_returns_after_recovery_alerts_again() -> None:
     await alerter.failed(_issue(), now=NOW + timedelta(minutes=30))
 
     assert len(recorder.sent) == 3
+
+
+def test_an_exhausted_anthropic_account_is_never_retried() -> None:
+    """The failure that started this: a 400 with no code must not look transient.
+
+    Classified as UNKNOWN it would be retried, doubling the cost of every listing and
+    telling the operator nothing about the actual fix.
+    """
+    error = _anthropic_error(
+        400, "Your credit balance is too low to access the Claude API.", "invalid_request_error"
+    )
+
+    issue = classify_llm_error(error, model=MODEL)
+
+    assert issue.kind is HealthKind.QUOTA
+    assert not issue.is_retryable
+    assert "out of credit" in issue.summary
+
+
+def test_an_anthropic_connection_failure_is_a_connection_problem() -> None:
+    """health.py must recognise either SDK's network error, not just OpenAI's."""
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    error = AnthropicConnectionError(request=request)
+
+    assert classify_llm_error(error, model=MODEL).kind is HealthKind.CONNECTION
+
+
+def test_alert_text_names_the_setting_rather_than_one_vendor() -> None:
+    """The summary must fit whichever provider LLM_PROVIDER selected."""
+    message = classify_llm_error(
+        _anthropic_error(401, "invalid x-api-key", "authentication_error"), model=MODEL
+    ).as_message()
+
+    assert "LLM_PROVIDER" in message
+    assert "OpenAI" not in message

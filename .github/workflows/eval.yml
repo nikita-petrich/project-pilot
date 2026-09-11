@@ -3,6 +3,9 @@
 # profile, evaluation code, the golden set itself). The job checks for the key
 # at runtime and skips gracefully when the secret is absent — GitHub cannot
 # reference secrets in job-level `if`.
+#
+# It judges with whatever LLM_PROVIDER/LLM_MODEL the prod environment selects, so a
+# provider switch is proved here before it reaches the worker.
 name: Eval
 
 on:
@@ -21,7 +24,9 @@ jobs:
   golden-set:
     runs-on: ubuntu-latest
     env:
+      LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       LLM_MODEL: ${{ vars.LLM_MODEL }}
     steps:
       - uses: actions/checkout@v5
@@ -38,8 +43,13 @@ jobs:
 
       - name: Golden-set eval
         run: |
-          if [ -z "$OPENAI_API_KEY" ] || [ -z "$LLM_MODEL" ]; then
-            echo "OPENAI_API_KEY/LLM_MODEL not configured — skipping eval."
+          # Only the selected provider's key matters, so check that one.
+          case "${LLM_PROVIDER:-openai}" in
+            anthropic) key="$ANTHROPIC_API_KEY" ;;
+            *)         key="$OPENAI_API_KEY" ;;
+          esac
+          if [ -z "$key" ] || [ -z "$LLM_MODEL" ]; then
+            echo "LLM key/LLM_MODEL not configured — skipping eval."
             exit 0
           fi
           uv run pytest -m eval --no-cov

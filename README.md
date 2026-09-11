@@ -55,8 +55,9 @@ failures) arrive as plain Telegram messages.
 
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
-- An OpenAI API key, a Telegram bot, and a Claude plan with Claude Code on the
-  web for the session per match ([`docs/claude-setup.md`](docs/claude-setup.md))
+- An API key for the LLM (OpenAI or Anthropic), a Telegram bot, and a Claude plan
+  with Claude Code on the web for the session per match
+  ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
 ## Setup
@@ -114,7 +115,9 @@ gitignored and `.env.example` is the template):
 | `CLAUDE_SESSION_REPO` | the repo a match session checks out for its skills (default this project) |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
-| `OPENAI_API_KEY` / `LLM_MODEL` | LLM matching (a small model is enough) |
+| `LLM_PROVIDER` | `openai` (default) or `anthropic` — which API the matching and the drafts call |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | only the selected provider's key is required |
+| `LLM_MODEL` | model name for that provider (a small model is enough) |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
 | `ANALYSIS_WINDOW_MIN` | default 30 |

@@ -15,7 +15,8 @@ Actions builds, the server pulls). This page is what to do once it runs.
   and baked into the image, so editing them means commit + deploy (or, when building
   on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
-  `OPENAI_API_KEY`, `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"),
+  the LLM key for `LLM_PROVIDER` (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`),
+  `LLM_MODEL`, `SEARCH_URLS` (sorted "newest first"),
   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `MCP_TOKEN`, and optionally
   `POSTGRES_PASSWORD`. Do not set `DATABASE_URL` in `.env`; compose sets it to reach
   the postgres service.
@@ -62,7 +63,7 @@ reports stage 3's health over the same channel as a match — a Claude session t
 as an operator warning:
 
 - **On start**, the daemon makes one minimal call to `LLM_MODEL`. A model name that
-  does not exist, a rejected `OPENAI_API_KEY` or an account out of credit is announced
+  does not exist, a rejected API key or an account out of credit is announced
   within seconds of the deploy, not at the next fresh listing.
 - **After every run** that reached the LLM, a failure is announced with the cause
   (which setting, which account) plus the provider's own error message.
@@ -102,7 +103,8 @@ matches are being missed. Restart the app after changing `.env`.
 - **No sessions although listings keep arriving**: look for an LLM health warning
   session (see above), then check the stored cause:
   `select reason->'reasons' from evaluations where stage='llm' order by created_at desc limit 3;`
-  Fix `LLM_MODEL` / `OPENAI_API_KEY` in the `prod` GitHub environment and redeploy —
+  Fix `LLM_MODEL` or the provider's API key in the `prod` GitHub environment and
+  redeploy —
   the server's `.env` is rewritten from GitHub on every deploy, so editing it on the
   server does not survive.
 - **Profile changes**: edit `profile/profile.md`, then commit and push — the deploy
