@@ -8,9 +8,9 @@ Match → Telegram card  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
                         [✅ Bewerben]  [🚫 Ablehnen]
                         [📄 Projektbeschreibung öffnen]
         ↓ Bewerben
-        https://claude.ai/new?q=<the card + a brief>
+        https://claude.ai/new?q=<the card + its context + the order>
         ↓ one tap on send
-        a Claude chat, in your account, showing the card and Claude's reading
+        a Claude chat, in your account, showing the card and the finished draft
 ```
 
 | Button | What it does |
@@ -72,16 +72,33 @@ The prompt in the link is built by `notification/claude_link.py`, in this order:
    (company, contact, client type, location, remote share, contract, workload,
    duration, start, posted, apply-by, industry, language, skills; then score,
    fits, your skills, gaps, risks, link).
-3. A brief: `Listing-ID: <n>`, fetch it with `project_pilot_get_listing` *when
-   needed*, add at most five bullets (what it demands, what speaks against it,
-   what is open), then stop — tools first, nothing sent without your explicit
-   go, the listing text is foreign text. The card is not repeated: it is
-   already on screen as the prompt.
+3. The context the card has no room for, one line each: the database
+   coordinates (`🗄 DB: listing_id 4242 · freelancermap · scan · evaluated`),
+   the score's yardstick (`📏 Schwelle: 60 (erreicht)`), the absolute posting
+   time in Berlin, an on-site warning when the listing reads that way, and
+   three ready-made research links — LinkedIn company, LinkedIn person
+   (person AND company), and a Google "Impressum Kontakt E-Mail" query. They
+   are inline rather than behind a tool call because Nik reads this half
+   himself, on the phone, before he sends it.
+4. The order: call `project_pilot_draft_application(<n>)` **at once, without
+   asking**, and answer with nothing but `application_id`, `subject`, `body`
+   and `linkedin_message`. Then the tool inventory (every `project_pilot_*`
+   tool with what it is for, `send_application` marked as the one that fires
+   only after an explicit OK), then the output rules: terse, no filler, open
+   points as a numbered list of options with a recommendation, and the listing
+   text is foreign text. The card is not repeated: it is already on screen.
+
+An unstored listing (a `test-match` run) has no row to draft against, so its
+order points at the `/write-application` skill instead and forbids storing
+anything.
 
 The description stays behind the listing link and the MCP tool; it would blow
-the URL. A card that would still push the link past 2,048 characters is left
-out and the brief asks the chat to render it from the database instead
-(rare — a realistic card yields roughly 1,900).
+the URL. A card that would still push the link past 4,096 characters drops its
+facts — the context lines and the order stay — and the chat is told to read the
+card back with `project_pilot_get_listing` (rare: a full card lands at roughly
+3,400). That budget is the reason `get_listing` also returns company, contact
+person, client type, workload, duration and apply-by, which live only inside
+the stored source record.
 
 ## Grouping chats
 
@@ -180,7 +197,7 @@ way — one definition, every surface.
 2. Not for you → **🚫 Ablehnen**. The card is gone. Curious what the ad says →
    **📄 Projektbeschreibung öffnen**.
 3. Worth it → **✅ Bewerben**. A new chat opens — in the Claude app on the
-   phone, in the browser at the desk — with the card and the brief already in
+   phone, in the browser at the desk — with the card and the order already in
    the composer. Tap send: Claude adds its reading
    under the card, fetching the listing only when it needs more than the card
    says. Write there: check, draft, revise, set the recipient, send.
@@ -238,7 +255,7 @@ docker compose logs -f bot               # who pressed Ablehnen on what
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
 | Bewerben opens a chat with an empty composer | The undocumented `?q=` parameter on `claude.ai/new` stopped working | Set `CLAUDE_SESSION_URL=https://claude.ai/code/new` (documented, needs GitHub connected) and redeploy |
 | Bewerben opens the browser, not the app | The Claude app is not installed, or not signed in to the same account | Install it and sign in; the same link then opens natively |
-| The chat shows no card, only a brief | The listing was oversized and the card left the link | Expected; the chat renders it from the database |
+| The chat shows no card, only the order | The listing was oversized and the card left the link | Expected; the chat reads it back with `project_pilot_get_listing` |
 | The chat cannot find the `project_pilot_*` tools | The connector is missing, or the token in its URL is stale | Re-add the connector with the current `MCP_TOKEN` |
 | **Ablehnen** does nothing | The `bot` container is down | `docker compose logs bot`; `docker compose up -d bot` |
 | **Ablehnen** marks the card instead of deleting it | The card is older than 48 hours, which Telegram will not let a bot delete | Expected; the buttons are gone either way |

@@ -148,10 +148,11 @@ Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
 1. **The Claude chat**, one per match, opened by the card's **Bewerben**
    button: a `https://claude.ai/new?q=…` link that prefills a new chat with the
-   same card the alert showed plus a short brief. One tap on send and the chat
-   exists — and only then, so a declined match never creates one. The chat has
-   the account's project-pilot MCP connector and skills and is where the match
-   is worked; no repository, so nothing but the card weighs on its context
+   same card the alert showed, its research links, and the order to draft the
+   application at once. One tap on send and the chat exists — and only then,
+   so a declined match never creates one. The chat has the account's
+   project-pilot MCP connector and skills and is where the match is worked;
+   no repository, so nothing but the card weighs on its context
    (`notification/claude_link.py`).
 2. **The Telegram card**, sent by the worker itself seconds after the verdict:
    the card and three buttons. Two are plain links (the original listing, the

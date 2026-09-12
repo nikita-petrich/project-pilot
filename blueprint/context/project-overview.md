@@ -156,7 +156,7 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 No web UI of its own. The Claude app is the entire surface:
 
-- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens a new Claude chat with the card prefilled (one tap on send starts it), Ablehnen deletes the card.
+- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens a new Claude chat prefilled with the card, its database coordinates and research links (LinkedIn company, LinkedIn person, Impressum query) and the order to draft the application at once (one tap on send starts it), Ablehnen deletes the card.
 - **Application flow** - checking, drafting, revisions, recipient handling and the human-confirmed send happen in that Claude chat via the account skills and the MCP tools (`check`, `draft`, `revise`, `set_recipient`, `send`).
 - **Warnings** - source cooldown (403/captcha), LLM health, and consecutive-failure warnings arrive as plain Telegram messages over the same bot.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.

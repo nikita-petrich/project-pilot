@@ -30,6 +30,7 @@ from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
 from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.models import Listing, ListingOrigin
+from project_pilot.notification.messages import from_stored
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,38 @@ def _listing_summary(listing: Listing) -> dict[str, object]:
         "origin": listing.origin.value,
         "first_seen_at": listing.first_seen_at.isoformat(),
         "notified_at": listing.notified_at.isoformat() if listing.notified_at else None,
+    }
+
+
+def _listing_facts(listing: Listing, now: datetime) -> dict[str, object]:
+    """The facts that live only inside ``raw``, rendered the way the card does.
+
+    Company, contact person, client type, workload, duration and the apply-by
+    date are parsed out of the source record, not stored as columns — so without
+    this block a chat reading a listing back would see none of them, and would
+    have to guess a salutation it could have known.
+    """
+    message = from_stored(listing, now)
+    client_type = (
+        None
+        if message.is_endcustomer is None
+        else ("direct" if message.is_endcustomer else "agency")
+    )
+    return {
+        "company": message.company,
+        "contact_name": message.contact_name,
+        # None means the source did not say — which is not the same as "agency".
+        "client_type": client_type,
+        "remote": message.remote_label,
+        "contract_type": message.contract_type,
+        "workload": message.workload_label,
+        "duration": message.duration_label,
+        "start": message.start,
+        "posted_at_berlin": message.posted_at_label,
+        "apply_by": message.expires_label,
+        "industry": message.industry,
+        "language": message.language,
+        "onsite_only": message.onsite_only,
     }
 
 
@@ -144,6 +177,7 @@ async def get_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
         if listing is None:
             raise ApplicationStateError(f"Project {listing_id} not found")
         detail = _listing_summary(listing)
+        detail.update(_listing_facts(listing, datetime.now(UTC)))
         detail["description"] = listing.description
         detail["skills"] = listing.skills
         detail["start_date"] = listing.start_date.isoformat() if listing.start_date else None

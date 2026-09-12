@@ -1,6 +1,22 @@
 """The transport-neutral match body: every fact, then the verdict."""
 
-from project_pilot.notification.messages import MatchMessage, headline, render_match_details
+from datetime import UTC, datetime
+
+from project_pilot.models import (
+    Evaluation,
+    EvaluationStage,
+    Listing,
+    ListingOrigin,
+    ListingStatus,
+    RemoteStatus,
+    Verdict,
+)
+from project_pilot.notification.messages import (
+    MatchMessage,
+    from_stored,
+    headline,
+    render_match_details,
+)
 
 
 def _full() -> MatchMessage:
@@ -97,3 +113,55 @@ def test_headline_names_score_role_and_company() -> None:
     assert headline(message) == "⭐ 87 · Senior Backend Entwickler · ACME GmbH"
     # A listing that names no company still yields a usable name.
     assert headline(MatchMessage(title="Rolle", url="", score=61)) == "⭐ 61 · Rolle"
+
+
+def _stored_listing() -> Listing:
+    """One scanned listing, posted at 06:50 UTC — 08:50 Berlin in September."""
+    listing = Listing(
+        source="freelancermap",
+        external_url="https://example.com/p/9",
+        url_hash="hash",
+        title="Senior Backend Entwickler",
+        description="Node.js und REST.",
+        status=ListingStatus.EVALUATED,
+        remote_status=RemoteStatus.REMOTE,
+        origin=ListingOrigin.SCAN,
+        posted_at=datetime(2026, 9, 12, 6, 50, tzinfo=UTC),
+        first_seen_at=datetime(2026, 9, 12, 6, 55, tzinfo=UTC),
+        last_seen_at=datetime(2026, 9, 12, 6, 55, tzinfo=UTC),
+        raw={"company": "One Day Ahead GmbH"},
+    )
+    listing.evaluations.append(
+        Evaluation(
+            stage=EvaluationStage.LLM,
+            verdict=Verdict.MATCH,
+            score=87,
+            reason={"reasons": ["passt"]},
+            created_at=datetime(2026, 9, 12, 6, 51, tzinfo=UTC),
+        )
+    )
+    return listing
+
+
+def test_a_stored_listing_carries_its_database_coordinates() -> None:
+    # The chat has to name the row it works on; guessing an id is not an option.
+    message = from_stored(_stored_listing(), datetime(2026, 9, 12, 7, 0, tzinfo=UTC))
+    assert (message.source, message.origin, message.status) == (
+        "freelancermap",
+        "scan",
+        "evaluated",
+    )
+
+
+def test_the_posting_time_is_rendered_absolute_in_berlin_time() -> None:
+    # "5 min ago" is true when the alert arrives and wrong by the evening; the
+    # absolute stamp is what a chat opened hours later can still read.
+    message = from_stored(_stored_listing(), datetime(2026, 9, 12, 7, 0, tzinfo=UTC))
+    assert message.posted_at_label == "12.09.2026 08:50"
+    assert message.posted_ago == "10 min ago"
+
+
+def test_the_threshold_travels_with_the_score_or_stays_unset() -> None:
+    now = datetime(2026, 9, 12, 7, 0, tzinfo=UTC)
+    assert from_stored(_stored_listing(), now, threshold=60).threshold == 60
+    assert from_stored(_stored_listing(), now).threshold is None

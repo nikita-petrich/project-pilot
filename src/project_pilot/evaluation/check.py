@@ -192,6 +192,7 @@ class CheckService:
                 matching_skills=list(verdict.matching_skills),
                 missing_requirements=list(verdict.missing_requirements),
                 risk_flags=list(verdict.risk_flags),
+                threshold=self._threshold,
                 description=listing_text,
             )
         return to_match_message(
@@ -202,4 +203,5 @@ class CheckService:
             matching_skills=list(verdict.matching_skills),
             missing_requirements=list(verdict.missing_requirements),
             risk_flags=list(verdict.risk_flags),
+            threshold=self._threshold,
         )
