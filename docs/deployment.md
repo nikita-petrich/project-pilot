@@ -142,7 +142,8 @@ Required — the container dies at boot without them:
 | Key | Value |
 |---|---|
 | `OPENAI_API_KEY` **or** `ANTHROPIC_API_KEY` | key for the match and application LLM; the deploy requires the one `LLM_PROVIDER` selects |
-| `LLM_MODEL` | model name for that provider, e.g. a small, cheap one |
+| `LLM_MODEL` | model name for that provider, e.g. `claude-opus-5` |
+| `LLM_EFFORT` | optional, Anthropic only: `low`…`max`. Unset sends nothing, which every model accepts |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `TELEGRAM_BOT_TOKEN` | the bot token from @BotFather — THE alert channel |
 | `TELEGRAM_CHAT_ID` | your private chat with the bot (a positive number) |

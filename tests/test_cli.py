@@ -5,7 +5,7 @@ import logging
 import pytest
 from typer.testing import CliRunner
 
-from project_pilot.cli import app
+from project_pilot.cli import app, silence_request_logging
 
 runner = CliRunner()
 
@@ -43,3 +43,13 @@ def test_enrich_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ENRICHMENT_ENABLED", raising=False)
     result = runner.invoke(app, ["enrich", "ACME GmbH"])
     assert result.exit_code != 0
+
+
+def test_request_urls_are_kept_out_of_the_log() -> None:
+    # The Telegram bot token sits inside the request URL, and httpx logs that URL
+    # at INFO — so the secret would land in `docker compose logs`.
+    for name in ("httpx", "httpx2", "httpcore"):
+        logging.getLogger(name).setLevel(logging.INFO)
+    silence_request_logging()
+    for name in ("httpx", "httpx2", "httpcore"):
+        assert logging.getLogger(name).level == logging.WARNING

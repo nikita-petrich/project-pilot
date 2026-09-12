@@ -6,21 +6,25 @@ from typing import Literal
 
 import httpx
 import pytest
+from anthropic import omit
 from openai import APIStatusError
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.llm import (
+    VERDICT_MAX_TOKENS,
     AnthropicStructuredClient,
     LlmEvaluation,
     LlmMatcher,
     LlmResponse,
     OpenAiStructuredClient,
+    anthropic_effort,
     build_anthropic_content,
     build_user_content,
     is_match_notifiable,
     load_prompt,
+    parse_failure,
     probe_llm,
     render_listing,
     structured_client,
@@ -470,3 +474,25 @@ def test_structured_client_refuses_a_provider_it_has_no_adapter_for() -> None:
 
     with pytest.raises(ConfigError, match="google"):
         structured_client(credentials)
+
+
+def test_effort_is_only_sent_when_configured() -> None:
+    # LLM_MODEL is free-form: a model without a reasoning knob rejects the whole
+    # request over this one key, so an unset LLM_EFFORT must add nothing at all.
+    assert anthropic_effort("") is omit  # the SDK drops the key from the body entirely
+    assert anthropic_effort("low") == {"effort": "low"}
+
+
+def test_a_truncated_answer_is_named_as_one() -> None:
+    # "schema violation" sent us hunting through the prompt for an hour when the
+    # answer was simply cut off at max_tokens. The two need opposite fixes.
+    assert "max_tokens" in parse_failure("max_tokens")
+    assert "raise the token ceiling" in parse_failure("max_tokens")
+    assert "refused" in parse_failure("refusal")
+    assert parse_failure(None) == "schema violation (empty parse)"
+    assert parse_failure("end_turn") == "schema violation (empty parse) (stop_reason end_turn)"
+
+
+def test_the_verdict_budget_leaves_room_for_reasoning() -> None:
+    # Thinking is spent from this same ceiling before the JSON starts.
+    assert VERDICT_MAX_TOKENS >= 16_000

@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 _SEARCH_PROVIDERS = frozenset({"duckduckgo", "none"})
+# Anthropic's reasoning depths, plus "" for "do not send the parameter".
+LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
+_LLM_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LLM_PROVIDERS = frozenset({"openai", "anthropic"})
 # The ENV variable holding each provider's key, so an error names the one to set.
 _LLM_KEY_VARS = {"openai": "OPENAI_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
@@ -31,6 +34,10 @@ class LlmCredentials:
     provider: str
     api_key: str = field(repr=False)
     model: str
+    # Reasoning depth, when the configured model takes one. Empty means "send
+    # nothing", which is the only safe default: LLM_MODEL is free-form, and a
+    # model that does not know the parameter rejects the whole request.
+    effort: LlmEffort = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +106,8 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", repr=False)
     anthropic_api_key: str = Field(default="", repr=False)
     llm_model: str = ""
+    # Anthropic only (output_config.effort). OpenAI models take no such option here.
+    llm_effort: LlmEffort = ""
 
     smtp_host: str = ""
     smtp_port: int = 587
@@ -187,6 +196,21 @@ class Settings(BaseSettings):
             return lowered
         return value
 
+    @field_validator("llm_effort", mode="before")
+    @classmethod
+    def _known_llm_effort(cls, value: object) -> object:
+        """Reject a typo at boot rather than on the first real call.
+
+        Empty is the default and means the parameter is not sent at all, which is
+        what every model without a reasoning knob needs.
+        """
+        if isinstance(value, str):
+            lowered = value.strip().lower()
+            if lowered and lowered not in _LLM_EFFORTS:
+                raise ValueError(f"LLM_EFFORT must be empty or one of {sorted(_LLM_EFFORTS)}")
+            return lowered
+        return value
+
     @field_validator("enrichment_search", mode="before")
     @classmethod
     def _known_search_provider(cls, value: object) -> object:
@@ -237,7 +261,12 @@ class Settings(BaseSettings):
             )
         if not self.llm_model:
             raise ConfigError("LLM_MODEL must be set")
-        return LlmCredentials(provider=self.llm_provider, api_key=api_key, model=self.llm_model)
+        return LlmCredentials(
+            provider=self.llm_provider,
+            api_key=api_key,
+            model=self.llm_model,
+            effort=self.llm_effort,
+        )
 
     def require_telegram(self) -> tuple[str, str]:
         if not self.telegram_bot_token:

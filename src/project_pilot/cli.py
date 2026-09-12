@@ -57,18 +57,35 @@ app = typer.Typer(
 )
 
 
+# httpx logs every request at INFO, URL included — and the Telegram bot token is
+# *in* that URL (api.telegram.org/bot<token>/sendMessage). At INFO the secret would
+# be in the container log, in `docker compose logs`, and in any pasted snippet. The
+# SDKs ship both names: `httpx` and `httpx2` (the Anthropic SDK's fork).
+_URL_LOGGING_SILENCED = ("httpx", "httpx2", "httpcore")
+
+
 @app.callback()
 def main() -> None:
     """Personal freelancermap.de listing pilot."""
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
     )
+    silence_request_logging()
+
+
+def silence_request_logging() -> None:
+    """Keep request URLs (and the credentials inside them) out of the log."""
+    for name in _URL_LOGGING_SILENCED:
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _load_settings() -> Settings:
     """Load settings and apply the configured (validated) LOG_LEVEL to the root logger."""
     settings = load_settings()
     logging.getLogger().setLevel(settings.log_level.upper())
+    # LOG_LEVEL=DEBUG raises the root logger, which would otherwise hand the
+    # HTTP loggers their URLs back.
+    silence_request_logging()
     return settings
 
 

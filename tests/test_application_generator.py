@@ -8,6 +8,7 @@ import pytest
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.generator import (
+    DRAFT_MAX_TOKENS,
     AnthropicDraftClient,
     ApplicationGenerator,
     DraftResponse,
@@ -80,6 +81,20 @@ async def test_generate_raises_after_two_schema_failures() -> None:
     client = _FakeClient([empty, empty])
     with pytest.raises(LlmSchemaError):
         await _generator(client).generate(profile_text="p", listing_text="l")
+
+
+async def test_a_truncated_draft_says_so_instead_of_blaming_the_schema() -> None:
+    # An application is long; on a model that reasons first, the old 8k ceiling cut
+    # the JSON off mid-body. The error has to name that, or the hunt goes to the
+    # prompt and the schema instead of to max_tokens.
+    cut_off = DraftResponse(draft=None, tokens_in=None, tokens_out=None, stop_reason="max_tokens")
+    client = _FakeClient([cut_off, cut_off])
+    with pytest.raises(LlmSchemaError, match="max_tokens"):
+        await _generator(client).generate(profile_text="p", listing_text="l")
+
+
+def test_the_draft_budget_leaves_room_for_reasoning() -> None:
+    assert DRAFT_MAX_TOKENS >= 16_000
 
 
 async def test_revise_prompt_includes_current_draft_and_instruction() -> None:

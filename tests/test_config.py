@@ -273,3 +273,22 @@ def test_require_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setenv("MCP_TOKEN", "s3cret")
     assert Settings().require_mcp() == "s3cret"
+
+
+def test_llm_effort_defaults_to_unset_and_rides_on_the_credentials() -> None:
+    # Unset is the only safe default: a model without a reasoning knob rejects the
+    # request over this one key, so it must not be sent unasked.
+    assert Settings().llm_effort == ""
+    settings = Settings(
+        llm_provider="anthropic",
+        anthropic_api_key="k",
+        llm_model="claude-opus-5",
+        llm_effort="LOW",
+    )
+    assert settings.llm_effort == "low"
+    assert settings.require_llm().effort == "low"
+
+
+def test_an_unknown_llm_effort_is_refused_at_boot() -> None:
+    with pytest.raises(ValidationError):
+        Settings(llm_effort="turbo")

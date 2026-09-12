@@ -11,9 +11,14 @@ from openai import AsyncOpenAI
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.application.schemas import ApplicationDraft
-from project_pilot.config import LlmCredentials
+from project_pilot.config import LlmCredentials, LlmEffort
 from project_pilot.errors import ConfigError, LlmSchemaError
-from project_pilot.evaluation.llm import build_anthropic_content, build_user_content
+from project_pilot.evaluation.llm import (
+    anthropic_effort,
+    build_anthropic_content,
+    build_user_content,
+    parse_failure,
+)
 
 if TYPE_CHECKING:
     from openai.types.chat import ChatCompletionMessageParam
@@ -24,7 +29,10 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 # Anthropic requires an output cap on every call. A draft is a subject, an e-mail body
 # and a LinkedIn message under 300 characters — but on a model that reasons the cap also
 # covers the thinking tokens, and unused headroom is not billed, so it stays generous.
-DRAFT_MAX_TOKENS = 8192
+# An application is a long answer, and on a model with thinking on by default the
+# reasoning is spent from this same budget before the first character of JSON. At
+# 8192 the draft was cut off mid-body and parsed to nothing every time.
+DRAFT_MAX_TOKENS = 16_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +42,9 @@ class DraftResponse:
     draft: ApplicationDraft | None
     tokens_in: int | None
     tokens_out: int | None
+    # Only read when nothing parsed: it separates a truncated answer from a
+    # malformed one, which need opposite fixes.
+    stop_reason: str | None = None
 
 
 class StructuredDraftClient(Protocol):
@@ -159,7 +170,7 @@ class ApplicationGenerator:
                     tokens_out=response.tokens_out,
                     latency_ms=int((perf_counter() - started) * 1000),
                 )
-            detail = "schema violation (empty parse)"
+            detail = parse_failure(response.stop_reason)
         raise LlmSchemaError(f"application draft failed: {detail}")
 
 
@@ -205,9 +216,14 @@ class AnthropicDraftClient:
     """
 
     def __init__(
-        self, api_key: str, *, client: AsyncAnthropic | None = None
+        self,
+        api_key: str,
+        *,
+        client: AsyncAnthropic | None = None,
+        effort: LlmEffort = "",
     ) -> None:  # pragma: no cover
         self._client = client or AsyncAnthropic(api_key=api_key)
+        self._effort = effort
 
     async def complete(
         self,
@@ -223,11 +239,13 @@ class AnthropicDraftClient:
             system=system,
             messages=[{"role": "user", "content": build_anthropic_content(user, images)}],
             output_format=ApplicationDraft,
+            output_config=anthropic_effort(self._effort),
         )
         return DraftResponse(
             draft=message.parsed_output,
             tokens_in=message.usage.input_tokens,
             tokens_out=message.usage.output_tokens,
+            stop_reason=message.stop_reason,
         )
 
 
@@ -235,7 +253,7 @@ def draft_client(credentials: LlmCredentials) -> StructuredDraftClient:
     """The application-draft client for the configured provider (unknown ones abort)."""
     match credentials.provider:
         case "anthropic":
-            return AnthropicDraftClient(credentials.api_key)
+            return AnthropicDraftClient(credentials.api_key, effort=credentials.effort)
         case "openai":
             return OpenAiDraftClient(credentials.api_key)
         case other:

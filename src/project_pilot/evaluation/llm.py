@@ -8,11 +8,12 @@ from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Literal, Protocol
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, Omit, omit
+from anthropic.types import OutputConfigParam
 from openai import AsyncOpenAI
 
 from project_pilot.application.documents import ImageAttachment
-from project_pilot.config import LlmCredentials
+from project_pilot.config import LlmCredentials, LlmEffort
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.nogo import enforce_nogo
 from project_pilot.evaluation.schemas import MatchVerdict
@@ -37,7 +38,10 @@ _PROMPTS_DIR = Path(__file__).parent / "prompts"
 # a handful of short lists, but on a model that reasons the cap also covers the thinking
 # tokens — and a verdict truncated by the cap parses as nothing and costs a retry. Unused
 # headroom is not billed, so this is deliberately far above what the JSON needs.
-VERDICT_MAX_TOKENS = 8192
+# Reasoning tokens count against this ceiling, and a model with thinking on by
+# default (Sonnet 5, Opus 5) can spend most of a small budget before the JSON
+# starts. A truncated response parses to nothing, so the ceiling is generous.
+VERDICT_MAX_TOKENS = 16_000
 # The preflight's own cap. The OpenAI ping deliberately passes no options at all; here
 # the parameter is mandatory, so it is set to the smallest value that still proves the
 # model, the key and the credit in one call.
@@ -51,6 +55,9 @@ class LlmResponse:
     verdict: MatchVerdict | None
     tokens_in: int | None
     tokens_out: int | None
+    # Why the model stopped. Only interesting when nothing parsed: "max_tokens"
+    # says the answer was cut off rather than malformed, which is a different fix.
+    stop_reason: str | None = None
 
 
 class StructuredLlmClient(Protocol):
@@ -164,6 +171,33 @@ def build_user_content(
             }
         )
     return parts
+
+
+def anthropic_effort(effort: LlmEffort) -> OutputConfigParam | Omit:
+    """``output_config`` carrying the configured effort, or the SDK's "absent".
+
+    ``omit`` drops the key from the request body entirely, so an unset
+    ``LLM_EFFORT`` leaves the call byte-identical to one that never knew the
+    option — which is what a model without a reasoning knob needs. The SDK
+    merges the schema it derives from ``output_format`` into whatever is passed
+    here, so the structured response survives the extra key.
+    """
+    return {"effort": effort} if effort else omit
+
+
+def parse_failure(stop_reason: str | None) -> str:
+    """Why nothing parsed, in the words the fix needs.
+
+    A truncated answer and a malformed one look identical from the parsed object
+    (both ``None``); only ``stop_reason`` separates "raise max_tokens" from
+    "the model ignored the schema".
+    """
+    if stop_reason == "max_tokens":
+        return "response truncated at max_tokens (raise the token ceiling)"
+    if stop_reason == "refusal":
+        return "the model refused the request"
+    suffix = f" (stop_reason {stop_reason})" if stop_reason else ""
+    return f"schema violation (empty parse){suffix}"
 
 
 def build_anthropic_content(
@@ -336,7 +370,7 @@ class LlmMatcher:
                     nogo_term=nogo_term,
                 )
             issue = llm_issue(
-                HealthKind.SCHEMA, model=self._model, detail="schema violation (empty parse)"
+                HealthKind.SCHEMA, model=self._model, detail=parse_failure(response.stop_reason)
             )
             logger.warning("LLM returned no parsable verdict (attempt %d)", attempt)
         return LlmEvaluation(
@@ -399,15 +433,21 @@ class OpenAiStructuredClient:
 class AnthropicStructuredClient:
     """Thin adapter over the Anthropic SDK's structured `parse` (network, not unit-tested).
 
-    Deliberately passes neither ``thinking`` nor ``output_config.effort``: ``LLM_MODEL``
-    comes from the environment, and a hard-coded reasoning option is exactly the kind of
-    parameter some models reject outright with a 400.
+    Passes no ``thinking`` option and no hard-coded effort: ``LLM_MODEL`` comes from the
+    environment, and such a parameter is exactly what some models reject with a 400.
+    ``effort`` is therefore configuration too (``LLM_EFFORT``) and is omitted unless set,
+    so the same code serves a model with a reasoning knob and one without.
     """
 
     def __init__(
-        self, api_key: str, *, client: AsyncAnthropic | None = None
+        self,
+        api_key: str,
+        *,
+        client: AsyncAnthropic | None = None,
+        effort: LlmEffort = "",
     ) -> None:  # pragma: no cover
         self._client = client or AsyncAnthropic(api_key=api_key)
+        self._effort = effort
 
     async def ping(self, *, model: str) -> None:  # pragma: no cover
         """Smallest real call there is: proves the model, the key and the credit at once."""
@@ -433,11 +473,15 @@ class AnthropicStructuredClient:
             system=system,
             messages=[{"role": "user", "content": build_anthropic_content(user, images)}],
             output_format=MatchVerdict,
+            # The SDK merges this with the schema it derives from output_format,
+            # so the structured response survives the extra key.
+            output_config=anthropic_effort(self._effort),
         )
         return LlmResponse(
             verdict=message.parsed_output,
             tokens_in=message.usage.input_tokens,
             tokens_out=message.usage.output_tokens,
+            stop_reason=message.stop_reason,
         )
 
 
@@ -450,7 +494,7 @@ def structured_client(credentials: LlmCredentials) -> MatchLlmClient:
     """
     match credentials.provider:
         case "anthropic":
-            return AnthropicStructuredClient(credentials.api_key)
+            return AnthropicStructuredClient(credentials.api_key, effort=credentials.effort)
         case "openai":
             return OpenAiStructuredClient(credentials.api_key)
         case other:
