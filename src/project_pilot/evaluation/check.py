@@ -87,12 +87,23 @@ class CheckService:
             listing = await Repository(session).get_listing(listing_id)
             if listing is None:
                 raise ApplicationStateError(f"Project {listing_id} not found")
-            return await self._evaluate(
-                title=listing.title,
-                rules_text=f"{listing.title}\n{listing.description}",
-                listing_text=render_listing_entity(listing),
-                match_source=listing,
-            )
+            return await self._evaluate_listing(listing)
+
+    async def check_latest(self) -> CheckResult:
+        """Check the most recently stored listing (a real one, not a synthetic sample)."""
+        async with session_scope(self._session_factory) as session:
+            listing = await Repository(session).get_latest_listing()
+            if listing is None:
+                raise ApplicationStateError("No stored projects yet — run a scan or ingest one")
+            return await self._evaluate_listing(listing)
+
+    async def _evaluate_listing(self, listing: Listing) -> CheckResult:
+        return await self._evaluate(
+            title=listing.title,
+            rules_text=f"{listing.title}\n{listing.description}",
+            listing_text=render_listing_entity(listing),
+            match_source=listing,
+        )
 
     async def check_parsed(self, parsed: ParsedListing) -> CheckResult:
         """Check a freshly fetched detail page (``/check`` with an unknown URL)."""

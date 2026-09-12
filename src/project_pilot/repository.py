@@ -178,6 +178,11 @@ class Repository:
     async def get_listing(self, listing_id: int) -> Listing | None:
         return await self._session.get(Listing, listing_id)
 
+    async def get_latest_listing(self) -> Listing | None:
+        """The most recently seen stored listing, newest first (``None`` on an empty DB)."""
+        stmt = select(Listing).order_by(Listing.first_seen_at.desc()).limit(1)
+        return (await self._session.scalars(stmt)).first()
+
     async def get_listing_with_evaluations(self, listing_id: int) -> Listing | None:
         """Like ``get_listing`` but with the evaluations eager-loaded.
 
