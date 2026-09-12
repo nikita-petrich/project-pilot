@@ -16,29 +16,6 @@ from project_pilot.notification.messages import MatchMessage
 
 logger = logging.getLogger(__name__)
 
-DEMO_LISTING = """\
-Senior Fullstack Entwickler (m/w/d) - NestJS / Next.js / RAG-Plattform
-
-Für den Aufbau einer KI-gestützten Dokumentenplattform im LegalTech-Umfeld suchen
-wir ab sofort einen erfahrenen Fullstack-Entwickler.
-
-Aufgaben:
-- Aufbau und Betrieb einer RAG-Pipeline (Embeddings, pgvector, semantische Suche)
-- Backend-Services mit NestJS und TypeScript, REST- und GraphQL-APIs
-- Frontend mit Next.js, React und Tailwind CSS
-- Integration der OpenAI API in produktive Workflows
-- Clean Architecture, CI/CD über GitHub Actions, Docker
-
-Anforderungen:
-- Mehrjährige Erfahrung mit TypeScript, NestJS und Next.js
-- Praxiserfahrung mit LLM-Integration und RAG
-- PostgreSQL, Docker, sauberer und getesteter Code
-- Deutsch verhandlungssicher, Englisch gut
-
-Rahmen: Start ab sofort, Laufzeit 6 Monate mit Option auf Verlängerung,
-Auslastung 100 %, 100 % Remote (EU), gelegentliche Abstimmung vor Ort in München.
-"""
-
 
 class Checker(Protocol):
     """The ``CheckService`` subset used here (fakeable in tests)."""
@@ -46,6 +23,8 @@ class Checker(Protocol):
     async def check_text(self, text: str, *, url: str = "") -> CheckResult: ...
 
     async def check_stored(self, listing_id: int) -> CheckResult: ...
+
+    async def check_latest(self) -> CheckResult: ...
 
 
 class Notifier(Protocol):
@@ -100,22 +79,24 @@ class SelfTestService:
     ) -> SelfTestReport:
         """Evaluate one listing and prove the push channel.
 
-        ``listing_id`` evaluates a stored listing; otherwise ``text`` (or the
-        built-in demo) is evaluated. A match delivers a real card, Bewerben
-        button included — Telegram validates the button's URL on send, so this
-        also proves the session link; a no-match proves the channel with a
-        warning push instead. ``url`` (only used with ``text``/the demo, since a
-        stored listing already has one) attaches a real listing link so the card
-        also shows the "Projektbeschreibung öffnen" button.
+        ``listing_id`` evaluates a stored listing; ``text`` evaluates pasted text;
+        with neither given, the most recently stored listing is used — always a
+        real project, never a synthetic sample. A match delivers a real card,
+        Bewerben button included — Telegram validates the button's URL on send,
+        so this also proves the session link; a no-match proves the channel with
+        a warning push instead. ``url`` (only used with ``text``, since a stored
+        listing already has one) attaches a real listing link so the card also
+        shows the "Projektbeschreibung öffnen" button.
         """
         steps = [SelfTestStep("profile", True, f"loaded, hash {self._profile_hash[:12]}")]
 
         try:
-            result = (
-                await self._checker.check_stored(listing_id)
-                if listing_id is not None
-                else await self._checker.check_text(text or DEMO_LISTING, url=url)
-            )
+            if listing_id is not None:
+                result = await self._checker.check_stored(listing_id)
+            elif text is not None:
+                result = await self._checker.check_text(text, url=url)
+            else:
+                result = await self._checker.check_latest()
         except Exception as err:
             logger.exception("self-test evaluation failed")
             steps.append(SelfTestStep("evaluation", False, f"{type(err).__name__}: {err}"))

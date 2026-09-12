@@ -446,7 +446,7 @@ def enrich(
 @app.command("test-match")
 def test_match(
     text: str | None = typer.Option(
-        None, "--text", "-t", help="Description to evaluate (default: the built-in demo listing)."
+        None, "--text", "-t", help="Description to evaluate instead of a stored listing."
     ),
     file: Path | None = typer.Option(
         None, "--file", "-f", help="Read the description from a file instead of --text."
@@ -455,7 +455,7 @@ def test_match(
         None,
         "--listing-id",
         "-l",
-        help="Evaluate a stored listing instead of pasted text.",
+        help="Evaluate a specific stored listing instead of the most recent one.",
     ),
     url: str | None = typer.Option(
         None,
@@ -463,11 +463,16 @@ def test_match(
         "-u",
         help=(
             "Real listing URL to attach to the card (adds the 'Projektbeschreibung "
-            "öffnen' button); only valid with --text/--file/the demo listing."
+            "öffnen' button); only valid with --text/--file, since a stored listing "
+            "already has one."
         ),
     ),
 ) -> None:
-    """Push one listing through hard rules, LLM, and the alert (stores nothing)."""
+    """Push one real listing through hard rules, LLM, and the alert (stores nothing).
+
+    With none of --text/--file/--listing-id given, evaluates the most recently
+    stored listing, so the card always carries real project data.
+    """
     settings = _load_settings()
     settings.require_telegram()
     if file is not None:
@@ -477,6 +482,12 @@ def test_match(
         text = file.read_text(encoding="utf-8")
     if url is not None and listing_id is not None:
         typer.echo("--url only applies to pasted text, not --listing-id (it already has one)")
+        raise typer.Exit(code=1)
+    if url is not None and text is None:
+        typer.echo("--url only applies to --text/--file")
+        raise typer.Exit(code=1)
+    if text is not None and listing_id is not None:
+        typer.echo("use either --text/--file or --listing-id, not both")
         raise typer.Exit(code=1)
     report = asyncio.run(_run_selftest(settings, text=text, listing_id=listing_id, url=url or ""))
     typer.echo(format_selftest(report))

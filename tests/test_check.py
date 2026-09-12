@@ -1,6 +1,7 @@
 """Tests for the manual /check evaluation service (fake matcher; one DB-backed case)."""
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Literal, cast
 
 import pytest
@@ -244,3 +245,43 @@ async def test_check_stored_unknown_listing_raises(
     service = _service(_FakeMatcher(_llm()), session_factory=session_factory)
     with pytest.raises(ApplicationStateError):
         await service.check_stored(99999)
+
+
+async def test_check_latest_evaluates_the_most_recently_seen_listing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_scope(session_factory) as session:
+        repo = Repository(session)
+        await repo.upsert_listing(
+            Listing(
+                source="freelancermap",
+                external_url="https://www.freelancermap.de/projekt/older",
+                url_hash="c" * 64,
+                title="Älteres Projekt",
+                description="Java",
+                first_seen_at=datetime(2024, 1, 1, tzinfo=UTC),
+            )
+        )
+        newest, _ = await repo.upsert_listing(
+            Listing(
+                source="freelancermap",
+                external_url="https://www.freelancermap.de/projekt/newest",
+                url_hash="d" * 64,
+                title="Neuestes Projekt",
+                description="Python und RAG",
+                first_seen_at=datetime(2024, 6, 1, tzinfo=UTC),
+            )
+        )
+    matcher = _FakeMatcher(_llm(score=70))
+    result = await _service(matcher, session_factory=session_factory).check_latest()
+    assert result.passed
+    assert result.message is not None
+    assert result.message.url == newest.external_url
+
+
+async def test_check_latest_on_empty_db_raises(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    service = _service(_FakeMatcher(_llm()), session_factory=session_factory)
+    with pytest.raises(ApplicationStateError):
+        await service.check_latest()

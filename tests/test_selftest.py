@@ -10,12 +10,19 @@ class _FakeChecker:
     def __init__(self, result: CheckResult) -> None:
         self._result = result
         self.urls: list[str] = []
+        self.stored_ids: list[int] = []
+        self.latest_calls = 0
 
     async def check_text(self, text: str, *, url: str = "") -> CheckResult:
         self.urls.append(url)
         return self._result
 
     async def check_stored(self, listing_id: int) -> CheckResult:
+        self.stored_ids.append(listing_id)
+        return self._result
+
+    async def check_latest(self) -> CheckResult:
+        self.latest_calls += 1
         return self._result
 
 
@@ -82,5 +89,22 @@ async def test_failed_push_fails_the_report() -> None:
 async def test_run_forwards_the_given_url_to_check_text() -> None:
     checker = _FakeChecker(_result(passed=True))
     service = SelfTestService(checker=checker, notifier=_FakeNotifier(), profile_hash="abc123")
-    await service.run(url="https://www.freelancermap.de/projekt/123")
+    await service.run(text="Python Projekt", url="https://www.freelancermap.de/projekt/123")
     assert checker.urls == ["https://www.freelancermap.de/projekt/123"]
+
+
+async def test_run_with_no_input_checks_the_latest_stored_listing() -> None:
+    checker = _FakeChecker(_result(passed=True))
+    service = SelfTestService(checker=checker, notifier=_FakeNotifier(), profile_hash="abc123")
+    await service.run()
+    assert checker.latest_calls == 1
+    assert checker.urls == []
+    assert checker.stored_ids == []
+
+
+async def test_run_with_listing_id_checks_that_stored_listing() -> None:
+    checker = _FakeChecker(_result(passed=True))
+    service = SelfTestService(checker=checker, notifier=_FakeNotifier(), profile_hash="abc123")
+    await service.run(listing_id=42)
+    assert checker.stored_ids == [42]
+    assert checker.latest_calls == 0
