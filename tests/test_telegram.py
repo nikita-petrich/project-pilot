@@ -92,13 +92,16 @@ async def test_notify_sends_the_card_under_its_three_decisions() -> None:
     assert "parse_mode" not in payload
 
 
-def test_an_unstored_listing_has_nothing_to_decline() -> None:
-    # test-match stores nothing, so there is no id for Ablehnen to name — but
-    # the session and the ad are still worth a tap.
+def test_an_unstored_listing_still_gets_a_working_decline() -> None:
+    # test-match stores nothing, so there is no id for Ablehnen to name — but the
+    # bot never looks the id up, only deletes the card, so the button still works.
     message = replace(_message(), listing_id=None)
     assert match_keyboard(message, session_repo=REPO) == {
         "inline_keyboard": [
-            [{"text": "✅ Bewerben", "url": session_link(message, repo=REPO)}],
+            [
+                {"text": "✅ Bewerben", "url": session_link(message, repo=REPO)},
+                {"text": "🚫 Ablehnen", "callback_data": "decline:"},
+            ],
             [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
         ]
     }

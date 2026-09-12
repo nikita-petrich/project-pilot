@@ -47,6 +47,13 @@ def test_parse_presses_reads_the_listing_id_off_the_callback() -> None:
     assert press.callback_id == "cb7"
 
 
+def test_parse_presses_reads_no_listing_id_off_an_unstored_cards_callback() -> None:
+    # test-match's card carries an empty id ("decline:") since nothing is stored.
+    (press,) = parse_presses(_updates(_press(data="decline:")))
+    assert press.action == "decline"
+    assert press.listing_id is None
+
+
 def test_parse_presses_skips_anything_that_is_not_a_press() -> None:
     payload = _updates({"update_id": 1, "message": {"text": "hi"}}, {"update_id": 2}, _press())
     assert len(parse_presses(payload)) == 1

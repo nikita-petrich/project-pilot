@@ -77,14 +77,16 @@ def match_keyboard(message: MatchMessage, *, session_repo: str = "") -> dict[str
     Bewerben and the listing are URL buttons: a tap opens a new Claude session
     (this very card in its prompt) or the original ad, with no process in
     between. Ablehnen is the one callback; it carries the listing id so a press
-    is unambiguous in the log. An unstored listing (test-match) has nothing to
-    decline, and one without a real link (an ingested text) gets no link button.
+    is unambiguous in the log, but the bot never looks the id up (deleting the
+    card is the whole job), so an unstored listing (test-match) still gets a
+    working Ablehnen with an empty id. A card without a real link (an ingested
+    text) gets no link button.
     """
+    listing_id = message.listing_id if message.listing_id is not None else ""
     top: list[dict[str, object]] = [
-        {"text": APPLY, "url": session_link(message, repo=session_repo)}
+        {"text": APPLY, "url": session_link(message, repo=session_repo)},
+        {"text": DECLINE, "callback_data": f"{DECLINE_ACTION}:{listing_id}"},
     ]
-    if message.listing_id is not None:
-        top.append({"text": DECLINE, "callback_data": f"{DECLINE_ACTION}:{message.listing_id}"})
     rows = [top]
     if _is_link(message.url):
         rows.append([{"text": OPEN_LISTING, "url": message.url}])
