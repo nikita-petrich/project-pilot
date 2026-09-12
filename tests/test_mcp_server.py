@@ -192,6 +192,49 @@ async def test_get_listing_includes_description_and_evaluations(
         await get_listing(_deps(session_factory), listing_id + 999)
 
 
+async def test_get_listing_returns_the_facts_that_only_live_in_raw(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # Company and contact person are parsed out of the source record, not stored
+    # as columns — without them a chat reading the listing back would have to
+    # guess a salutation it could have known.
+    async with session_factory() as session:
+        listing = _listing()
+        listing.raw = {
+            "company": "ACME GmbH",
+            "firstName": "Max",
+            "lastName": "Mustermann",
+            "isEndcustomerProject": True,
+            "workload": 100,
+            "durationText": "6 Monate",
+            "expires": "2026-09-30T00:00:00",
+        }
+        session.add(listing)
+        await session.commit()
+        listing_id = listing.id
+
+    detail = await get_listing(_deps(session_factory), listing_id)
+    assert detail["company"] == "ACME GmbH"
+    assert detail["contact_name"] == "Max Mustermann"
+    assert detail["client_type"] == "direct"
+    assert detail["workload"] == "100%"
+    assert detail["duration"] == "6 Monate"
+    assert detail["apply_by"] == "30.09.2026"
+
+
+async def test_get_listing_leaves_an_unstated_client_type_unknown(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # A source that says nothing is not the same as a source that says "agency".
+    async with session_factory() as session:
+        listing = _listing()
+        session.add(listing)
+        await session.commit()
+        listing_id = listing.id
+
+    assert (await get_listing(_deps(session_factory), listing_id))["client_type"] is None
+
+
 async def _ok_app(scope: Scope, receive: Receive, send: Send) -> None:
     await send({"type": "http.response.start", "status": 200, "headers": []})
     await send({"type": "http.response.body", "body": b"ok"})

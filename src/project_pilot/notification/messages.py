@@ -13,6 +13,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 from project_pilot.ingestion.normalize import (
+    BERLIN,
     detect_language,
     is_onsite_only,
     resolve_contact_name,
@@ -32,6 +33,13 @@ class MatchMessage:
     # to reach the MCP tools (get_listing, draft_application); a freshly parsed
     # listing from a manual check has none yet.
     listing_id: int | None = None
+    # The listing's own database coordinates, so a chat can name the row it is
+    # working on without a lookup. Only a stored listing has them.
+    source: str | None = None
+    origin: str | None = None
+    status: str | None = None
+    # The score's yardstick (MATCH_THRESHOLD): 87 says little without the 60.
+    threshold: int | None = None
     company: str | None = None
     contact_name: str | None = None
     is_endcustomer: bool | None = None
@@ -42,6 +50,9 @@ class MatchMessage:
     duration_label: str | None = None
     start: str | None = None
     posted_ago: str | None = None
+    # The absolute posting time in Berlin display time. ``posted_ago`` is read
+    # minutes after the alert; a chat opened hours later needs the real clock.
+    posted_at_label: str | None = None
     expires_label: str | None = None
     industry: str | None = None
     language: str | None = None
@@ -107,6 +118,11 @@ def _relative_ago(posted_at: datetime, now: datetime) -> str | None:
     return f"{minutes // 1440} d ago"
 
 
+def _berlin_label(value: datetime | None) -> str | None:
+    """The absolute timestamp in Berlin display time; storage stays UTC."""
+    return value.astimezone(BERLIN).strftime("%d.%m.%Y %H:%M") if value else None
+
+
 def _expires_label(value: str | None) -> str | None:
     if not value:
         return None
@@ -125,6 +141,7 @@ def to_match_message(
     matching_skills: list[str],
     missing_requirements: list[str],
     risk_flags: list[str],
+    threshold: int | None = None,
 ) -> MatchMessage:
     """Build the display shape from a listing (stored entity or freshly parsed)."""
     raw = _RawFields.model_validate(listing.raw or {})
@@ -168,6 +185,10 @@ def to_match_message(
         url=listing.external_url,
         score=score,
         listing_id=listing.id if isinstance(listing, Listing) else None,
+        source=listing.source,
+        origin=listing.origin.value if isinstance(listing, Listing) else None,
+        status=listing.status.value if isinstance(listing, Listing) else None,
+        threshold=threshold,
         company=raw.company,
         contact_name=contact_name,
         is_endcustomer=raw.is_endcustomer_project,
@@ -178,6 +199,7 @@ def to_match_message(
         duration_label=duration_label,
         start=start,
         posted_ago=_relative_ago(listing.posted_at, now) if listing.posted_at else None,
+        posted_at_label=_berlin_label(listing.posted_at),
         expires_label=_expires_label(raw.expires),
         industry=raw.industry.name_de if raw.industry else None,
         language=_LANGUAGE_LABELS.get(language) if language else None,
@@ -289,7 +311,7 @@ def _eval_list(evaluation: Evaluation | None, key: str) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
-def from_stored(listing: Listing, now: datetime) -> MatchMessage:
+def from_stored(listing: Listing, now: datetime, *, threshold: int | None = None) -> MatchMessage:
     """The display shape for a listing already judged and stored.
 
     Reads the verdict off the listing's own evaluations rather than asking the
@@ -305,4 +327,5 @@ def from_stored(listing: Listing, now: datetime) -> MatchMessage:
         matching_skills=_eval_list(evaluation, "matching_skills"),
         missing_requirements=_eval_list(evaluation, "missing_requirements"),
         risk_flags=_eval_list(evaluation, "risk_flags"),
+        threshold=threshold,
     )

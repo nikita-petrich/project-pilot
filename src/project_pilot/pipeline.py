@@ -516,7 +516,7 @@ class Pipeline:
             notifier = self._notifier  # narrowed above; the loop needs it non-optional
             failed = 0
             for listing in pending:  # one push per match, marked only on success
-                message = from_stored(listing, now)
+                message = from_stored(listing, now, threshold=self._settings.match_threshold)
                 if message.onsite_only:
                     # Mark it handled so it leaves the pending set after one skip
                     # instead of being re-loaded and re-skipped on every run.

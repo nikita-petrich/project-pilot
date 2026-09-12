@@ -10,7 +10,8 @@ from bs4 import BeautifulSoup
 
 from project_pilot.models import PostedPrecision, RemoteStatus
 
-_BERLIN = ZoneInfo("Europe/Berlin")
+BERLIN = ZoneInfo("Europe/Berlin")
+"""Display timezone: storage stays UTC, only output is rendered in Berlin time."""
 _DATE_RE = re.compile(r"(\d{1,2})\.(\d{1,2})\.(\d{4})")
 
 
@@ -368,11 +369,11 @@ def parse_posted(
             parsed = None
         if parsed is not None:
             if parsed.tzinfo is None:
-                parsed = parsed.replace(tzinfo=_BERLIN)
+                parsed = parsed.replace(tzinfo=BERLIN)
             return parsed.astimezone(UTC), PostedPrecision.MINUTE
     if date_text:
         day = parse_german_date(date_text)
         if day is not None:
-            midnight = datetime(day.year, day.month, day.day, tzinfo=_BERLIN)
+            midnight = datetime(day.year, day.month, day.day, tzinfo=BERLIN)
             return midnight.astimezone(UTC), PostedPrecision.DAY
     return None, PostedPrecision.UNKNOWN
