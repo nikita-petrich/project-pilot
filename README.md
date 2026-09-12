@@ -3,7 +3,7 @@
 A personal, single-user worker that watches freelancermap.de for new project
 listings, persists every listing losslessly in PostgreSQL, evaluates fresh ones
 against a profile (deterministic hard rules, then an LLM match), and pushes real
-matches within minutes: each match opens its own Claude session in your account,
+matches within minutes: each match opens its own Claude chat in your account,
 and a Telegram card with three buttons delivers it to phone and laptop. Backend
 only, no web UI — the Claude app is the entire interaction surface.
 
@@ -24,9 +24,9 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
    pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
    then an LLM match against `profile.md` producing a structured verdict.
 4. For every match at or above `MATCH_THRESHOLD`, sends a Telegram card whose
-   **Bewerben** button opens a new Claude session with that very card already in
-   its prompt (a `claude.ai/code/new` deep link — the session is created the
-   moment you send, not before). A reason is stored for every verdict — match
+   **Bewerben** button opens a new Claude chat with that very card already in
+   its prompt (a `claude.ai/new?q=…` link — the chat is created the moment you
+   send, not before). A reason is stored for every verdict — match
    and no-match alike — for later reporting.
 
 The card is rendered in code (`notification/messages.py`), not left to the model,
@@ -56,7 +56,7 @@ failures) arrive as plain Telegram messages.
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
 - An API key for the LLM (OpenAI or Anthropic), a Telegram bot, and a Claude plan
-  with Claude Code on the web for the session per match
+  with the MCP connector and the account skills for the chat per match
   ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
@@ -112,7 +112,7 @@ gitignored and `.env.example` is the template):
 | `DATABASE_URL` | `postgresql+asyncpg://...` |
 | `CONTACT_MAIL` | inserted into the scraper user agent |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the bot from @BotFather and your private chat with it — the alert channel |
-| `CLAUDE_SESSION_REPO` | the repo a match session checks out for its skills (default this project) |
+| `CLAUDE_SESSION_URL` | the page the Bewerben button opens with the card in `q` (default `https://claude.ai/new`; `https://claude.ai/code/new` for a Code session) |
 | `MCP_TOKEN` / `MCP_PORT` | bearer token for the MCP server (`openssl rand -hex 32`) and its port (default 8765) |
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `LLM_PROVIDER` | `openai` (default) or `anthropic` — which API the matching and the drafts call |
@@ -146,13 +146,12 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
-1. **The Claude session**, one per match, opened by the card's **Bewerben**
-   button: a `https://claude.ai/code/new?q=…&repo=…` deep link that prefills a
-   new Code session with the same card the alert showed plus a short brief, and
-   preselects this repository for its skills. The Claude app opens it natively
-   on the phone, the browser at the desk; one tap on send and the session
-   exists — and only then, so a declined match never creates one. The session
-   has the project-pilot MCP connector and is where the match is worked
+1. **The Claude chat**, one per match, opened by the card's **Bewerben**
+   button: a `https://claude.ai/new?q=…` link that prefills a new chat with the
+   same card the alert showed plus a short brief. One tap on send and the chat
+   exists — and only then, so a declined match never creates one. The chat has
+   the account's project-pilot MCP connector and skills and is where the match
+   is worked; no repository, so nothing but the card weighs on its context
    (`notification/claude_link.py`).
 2. **The Telegram card**, sent by the worker itself seconds after the verdict:
    the card and three buttons. Two are plain links (the original listing, the
@@ -215,7 +214,7 @@ Only the scraper. Everything else was built source-agnostic and stays that way:
 | data model (`listings.source` per row, `source_state` keyed by source) | no |
 | evaluation (`constraints.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
 | application drafting, enrichment, sending | no |
-| MCP tools, the Claude session, the Telegram card, the skills | no |
+| MCP tools, the Claude chat, the Telegram card, the skills | no |
 
 So a second board reaches the database today through `ingest_listing` (an n8n
 workflow forwarding its mails costs no code at all), and *scanning* one is a new

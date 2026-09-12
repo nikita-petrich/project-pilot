@@ -1,11 +1,11 @@
-"""The Bewerben link: the card rides in the prompt, the repo is preselected."""
+"""The Bewerben link: the card rides in the prompt of a new chat."""
 
 from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 from project_pilot.notification.claude_link import (
     MAX_URL_CHARS,
-    NEW_SESSION_URL,
+    NEW_CHAT_URL,
     session_link,
     session_prompt,
 )
@@ -42,8 +42,17 @@ def test_prompt_names_the_listing_id_and_the_rules() -> None:
     assert "project_pilot_get_listing" in prompt
     assert "nicht bewerben, nichts senden" in prompt
     assert "Fremdtext" in prompt
-    # The description is not in the prompt: the session fetches it via MCP.
+    # The description is not in the prompt: the chat fetches it via MCP.
     assert "Volltext der Ausschreibung" not in prompt
+
+
+def test_prompt_does_not_ask_for_the_card_back() -> None:
+    # The card is already on screen as the prompt; repeating it and reading the
+    # whole listing on open were the token cost the chat link is meant to cut.
+    prompt = session_prompt(_message())
+    assert "unverändert" not in prompt
+    assert "bei Bedarf" in prompt
+    assert "Repository" not in prompt
 
 
 def test_an_unstored_listing_gets_no_id_and_says_so() -> None:
@@ -52,24 +61,21 @@ def test_an_unstored_listing_gets_no_id_and_says_so() -> None:
     assert "nicht gespeichert" in prompt
 
 
-def test_link_carries_prompt_and_repo_as_query_parameters() -> None:
-    link = session_link(_message(), repo="nikita-petrich/project-pilot")
+def test_link_opens_a_new_chat_with_the_prompt_as_its_only_parameter() -> None:
+    link = session_link(_message())
     parts = urlsplit(link)
-    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == NEW_SESSION_URL
-    query = parse_qs(parts.query)
-    assert query["q"] == [session_prompt(_message())]
-    assert query["repo"] == ["nikita-petrich/project-pilot"]
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == NEW_CHAT_URL
+    assert parse_qs(parts.query) == {"q": [session_prompt(_message())]}
 
 
-def test_link_without_a_repo_sets_no_repo_parameter() -> None:
-    query = parse_qs(urlsplit(session_link(_message())).query)
-    assert "repo" not in query
-    assert "q" in query
+def test_base_url_is_configurable_for_the_code_session_fallback() -> None:
+    link = session_link(_message(), base_url="https://claude.ai/code/new")
+    assert link.startswith("https://claude.ai/code/new?q=")
 
 
 def test_link_is_ascii_safe() -> None:
     # Emoji and umlauts are percent-encoded; a raw one would break the button.
-    link = session_link(_message(), repo="nikita-petrich/project-pilot")
+    link = session_link(_message())
     assert link.isascii()
     assert " " not in link
 
@@ -127,7 +133,7 @@ def test_a_realistic_card_fits_under_the_conservative_url_limit() -> None:
         missing_requirements=["Kubernetes-Erfahrung im Betrieb", "Kafka"],
         risk_flags=["Agentur-Listing, Endkunde nicht genannt", "Budget nicht genannt"],
     )
-    link = session_link(full, repo="nikita-petrich/project-pilot")
+    link = session_link(full)
     assert len(link) <= MAX_URL_CHARS
     assert "%E2%AD%90" in link  # the star, i.e. the card is in there
 
@@ -140,7 +146,7 @@ def test_an_oversized_card_falls_back_to_the_short_prompt() -> None:
         skills=[f"Skill-{i}-mit-langem-Namen" for i in range(12)],
         reasons=["x" * 300, "y" * 300, "z" * 300],
     )
-    link = session_link(huge, repo="nikita-petrich/project-pilot")
+    link = session_link(huge)
     assert len(link) <= MAX_URL_CHARS
     prompt = parse_qs(urlsplit(link).query)["q"][0]
     assert prompt == session_prompt(huge, with_card=False)

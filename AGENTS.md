@@ -11,9 +11,9 @@ project-pilot is a personal, single-user worker that watches freelancermap.de fo
 new project listings, persists every listing losslessly in PostgreSQL, evaluates
 fresh ones against Nik's profile (deterministic hard rules, then an LLM match),
 and pushes real matches within minutes: the worker sends a Telegram card whose
-buttons open the listing, open a new Claude session with that card prefilled (a
-`claude.ai/code/new` deep link), or decline the match; the session works the
-match through project-pilot's own MCP tools and skills, and the same MCP server
+buttons open the listing, open a new Claude chat with that card prefilled (a
+`claude.ai/new?q=…` link), or decline the match; the chat works the match
+through project-pilot's own MCP tools and skills, and the same MCP server
 exposes every function to Claude chats and n8n.
 
 **Only the scraper is freelancermap-specific** (its parser, `SEARCH_URLS`, the
@@ -126,7 +126,7 @@ App (typer CLI, entry point `project_pilot.cli:app`):
 - Initialize DB schema: `uv run project-pilot init-db`
 - Single scan, cron-friendly (non-zero exit on a failed run): `uv run project-pilot run-once`
 - Scheduler daemon (scan loop; every match sends its Telegram card, whose
-  Bewerben button is a prefilled Claude session link — `TELEGRAM_BOT_TOKEN` and
+  Bewerben button is a prefilled Claude chat link — `TELEGRAM_BOT_TOKEN` and
   `TELEGRAM_CHAT_ID` are required):
   `uv run project-pilot daemon`
 - Button poller (long polling, no inbound port; hears only the card's Ablehnen

@@ -159,10 +159,10 @@ def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitabl
 
 
 def _notifier(settings: Settings) -> TelegramNotifier:
-    """The alert channel, with the repo every match session checks out."""
+    """The alert channel, with the page every Bewerben button opens."""
     bot_token, chat_id = settings.require_telegram()
     return TelegramNotifier(
-        bot_token=bot_token, chat_id=chat_id, session_repo=settings.claude_session_repo
+        bot_token=bot_token, chat_id=chat_id, session_url=settings.claude_session_url
     )
 
 

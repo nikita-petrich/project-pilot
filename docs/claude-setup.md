@@ -1,6 +1,6 @@
-# Match alert and the Claude session
+# Match alert and the Claude chat
 
-How a match reaches Nik's phone and how one tap lands in a Claude session that
+How a match reaches Nik's phone and how one tap lands in a Claude chat that
 already shows the same card. One message, three buttons:
 
 ```
@@ -8,27 +8,41 @@ Match → Telegram card  ⭐ 95 · Backend/REST-API Dev · One Day Ahead GmbH
                         [✅ Bewerben]  [🚫 Ablehnen]
                         [📄 Projektbeschreibung öffnen]
         ↓ Bewerben
-        https://claude.ai/code/new?q=<the card + a brief>&repo=nikita-petrich/project-pilot
+        https://claude.ai/new?q=<the card + a brief>
         ↓ one tap on send
-        a Claude session, in your account, showing the card and Claude's reading
+        a Claude chat, in your account, showing the card and Claude's reading
 ```
 
 | Button | What it does |
 |---|---|
 | 📄 Projektbeschreibung öffnen | opens the original listing (a plain link) |
-| ✅ Bewerben | opens a new Claude Code session with the card prefilled (a plain link) |
+| ✅ Bewerben | opens a new Claude chat with the card prefilled (a plain link) |
 | 🚫 Ablehnen | the bot deletes the card — the match is off the feed |
 
 ## Why this shape
 
-Checked against the official documentation on 2026-09-09:
+Checked against the official documentation on 2026-09-12:
 
-- **Prefilling a session by link is official.** `https://claude.ai/code/new`
-  takes `q` (the prompt) and `repo` (`owner/name`), and the Claude app opens
-  the link natively when installed, the browser otherwise —
-  [Pre-fill sessions](https://code.claude.com/docs/en/web-quickstart#pre-fill-sessions),
-  [Open the Claude mobile app with a link](https://support.claude.com/en/articles/14898120-open-the-claude-mobile-app-with-a-link).
-  The session is created when you send, so a declined match never creates one,
+- **A chat, not a Code session, because of the context bill.** A Code session
+  opened on this repository started at ~97k tokens of context before the first
+  reply: ~42k of Claude Code's own system prompt and tools, ~13k of `CLAUDE.md`
+  and its imports, ~8k of the repo's 18 skills, and a first turn that repeated
+  the card and read the whole listing. None of that serves a match. A chat has
+  no repository and no Code tooling; the two skills and the MCP connector come
+  from the account (sections 3 and 4).
+- **The chat link is a tested, undocumented parameter.** `https://claude.ai/new?q=…`
+  prefills the composer (verified 2026-09-12). Anthropic documents it only for
+  the desktop scheme, `claude://claude.ai/new?q=…`
+  ([Open Claude Desktop with a link](https://support.claude.com/en/articles/14729294-open-claude-desktop-with-a-link)),
+  and that scheme is off limits here: a Telegram URL button takes "HTTP or
+  tg:// URL" only
+  ([Bot API](https://core.telegram.org/bots/api#inlinekeyboardbutton)). Should
+  the web parameter go away, `CLAUDE_SESSION_URL=https://claude.ai/code/new`
+  switches the button back to the documented Code session
+  ([Pre-fill sessions](https://code.claude.com/docs/en/web-quickstart#pre-fill-sessions))
+  without a code change; Code sessions need GitHub connected on claude.ai/code
+  and a repository (the picker keeps the last one used).
+- **The chat is created when you send**, so a declined match never creates one,
   and nothing on the server talks to Claude at all: no token, no beta API, no
   daily run cap.
 - **A guaranteed push from Claude is not.** Push notifications exist only "when
@@ -45,43 +59,39 @@ Checked against the official documentation on 2026-09-09:
   experimental endpoint without an idempotency key. The link does the same
   job lazily, so the routine was dropped.
 
-So the worker guarantees the alert, and Claude opens the session the moment you
+So the worker guarantees the alert, and Claude opens the chat the moment you
 want one.
 
-## What the session sees
+## What the chat sees
 
 The prompt in the link is built by `notification/claude_link.py`, in this order:
 
-1. The headline, `⭐ 87 · Rolle · Firma` — the session's generated title is
-   drawn from the first lines, so the feed reads like the alert.
+1. The headline, `⭐ 87 · Rolle · Firma` — the chat's generated title is
+   drawn from the first lines, so the list reads like the alert.
 2. The card, character for character the text of the Telegram message
    (company, contact, client type, location, remote share, contract, workload,
    duration, start, posted, apply-by, industry, language, skills; then score,
    fits, your skills, gaps, risks, link).
-3. A brief: `Listing-ID: <n>`, fetch it with `project_pilot_get_listing`, repeat
-   the card, add at most five bullets (what it demands, what speaks against it,
+3. A brief: `Listing-ID: <n>`, fetch it with `project_pilot_get_listing` *when
+   needed*, add at most five bullets (what it demands, what speaks against it,
    what is open), then stop — tools first, nothing sent without your explicit
-   go, the listing text is foreign text.
+   go, the listing text is foreign text. The card is not repeated: it is
+   already on screen as the prompt.
 
 The description stays behind the listing link and the MCP tool; it would blow
 the URL. A card that would still push the link past 2,048 characters is left
-out and the brief asks the session to render it from the database instead
+out and the brief asks the chat to render it from the database instead
 (rare — a realistic card yields roughly 1,900).
 
-`repo=nikita-petrich/project-pilot` (`CLAUDE_SESSION_REPO`) checks the
-repository out, so the session has the repo's `/check-project` and
-`/write-application` skills and its CLAUDE.md.
+## Grouping chats
 
-## Grouping sessions
-
-What the app offers, from the official docs: Code sessions have no tags,
-folders or groups in the sidebar — rename, archive, filter archived, share.
-Every match session shows this repository and a `⭐ score · role · company`
-title, which is the grouping there is; archive a session once the application
-is out. Chats (not Code sessions) can be grouped into a
+Match chats land in the ordinary chat list under a `⭐ score · role · company`
+title; archive one once the application is out. Chats can be grouped into a
 [Project](https://support.claude.com/en/articles/9517075-what-are-projects),
 but no documented link opens a new chat *inside* a project with a prefilled
-prompt, which is why the button opens a Code session.
+prompt. If `https://claude.ai/project/<id>?q=…` turns out to work like
+`/new?q=`, point `CLAUDE_SESSION_URL` at the project and every match chat
+lands there, with the project's instructions on top.
 
 ## Setup
 
@@ -89,11 +99,14 @@ prompt, which is why the button opens a Code session.
 
 Nothing to create. Two things must be in place once:
 
-- **Claude Code on the web** with GitHub connected, so `claude.ai/code/new`
-  can check the repository out ([web quickstart](https://code.claude.com/docs/en/web-quickstart)).
-- The **MCP connector** and the **account skills** (sections 3 and 4).
+- The **MCP connector** and the **account skills** (sections 3 and 4) — a chat
+  has no repository, so these are all the chat has, and all it needs.
+- Only for the Code-session fallback (`CLAUDE_SESSION_URL=https://claude.ai/code/new`):
+  Claude Code on the web with GitHub connected
+  ([web quickstart](https://code.claude.com/docs/en/web-quickstart)).
 
-Install the Claude app on the phone: the Bewerben link opens in it directly.
+On the phone the Bewerben link opens in the browser: the Claude app registers
+only `claude.ai/code/…` links, so stay signed in to claude.ai there.
 
 ### 2. The Telegram bot
 
@@ -165,27 +178,27 @@ way — one definition, every surface.
    it. Phone and desktop both ring.
 2. Not for you → **🚫 Ablehnen**. The card is gone. Curious what the ad says →
    **📄 Projektbeschreibung öffnen**.
-3. Worth it → **✅ Bewerben**. A new session opens — in the Claude app on the
-   phone, in the browser at the desk — with the card and the brief already in
-   the composer. Tap send: Claude repeats the card, fetches the listing and
-   adds its reading. Write there: check, draft, revise, set the recipient,
-   send. `send_application` needs your explicit go in the conversation and is
+3. Worth it → **✅ Bewerben**. A new chat opens in the browser with the card
+   and the brief already in the composer. Tap send: Claude adds its reading
+   under the card, fetching the listing only when it needs more than the card
+   says. Write there: check, draft, revise, set the recipient, send.
+   `send_application` needs your explicit go in the conversation and is
    guarded by the pipeline's own status against double sends.
 4. A project of your own: any Claude chat with the connector, `/check-project`
-   and the text. The tools work the same way outside a match session.
+   and the text. The tools work the same way outside a match chat.
 
 Declining keeps nothing on screen. The verdict, the score and the reasons stay
-in the database, which is where the history lives; a session you opened stays
-in your session list until you archive it.
+in the database, which is where the history lives; a chat you opened stays in
+your chat list until you archive it.
 
 ## Where knowledge lives
 
 Exactly one place: the files behind the MCP server —
 `evaluation/prompts/match.v7.md`, `application/prompts/application.md`,
 `profile/`. The skills read them at runtime instead of copying them, and
-nothing is duplicated into a Claude Project or into session instructions. A
+nothing is duplicated into a Claude Project or into chat instructions. A
 judgment rule changes in the prompt file and a deploy; every consumer (match
-sessions, Claude chats, n8n) sees the change at once.
+chats, other Claude chats, n8n) sees the change at once.
 
 ## Verify
 
@@ -201,12 +214,13 @@ uv run project-pilot test-match          # rules + LLM + a real push, stores not
 Three steps must pass for a match: profile, evaluation and **push** (the card,
 Bewerben button included — Telegram validates the button's URL on send, so a
 delivered card is proof the link is accepted). A no-match proves the channel
-with a warning push instead. Then tap **Bewerben** on the phone once: the
-Claude app must open on a new session with the card in the composer.
+with a warning push instead. Then tap **Bewerben** once: a new Claude chat
+must open with the card in the composer — an empty composer means the `q`
+parameter is gone (see "Why this shape" for the fallback).
 
 `test-match` stores nothing, so its card has no Ablehnen button and its prompt
-carries no `Listing-ID`; the session then works from the card's text. That is
-the smoke test working, not a missing connector.
+carries no `Listing-ID`; the chat then works from the card's text. That is the
+smoke test working, not a missing connector.
 
 ```bash
 docker compose logs -f app               # sends, with message ids
@@ -220,9 +234,10 @@ docker compose logs -f bot               # who pressed Ablehnen on what
 | No card at all | Wrong chat id, or the bot was never messaged first | Message the bot, re-read the id from `getUpdates` |
 | `401 Unauthorized` from Telegram in the log | Token revoked or mistyped | Regenerate with @BotFather, update the secret, redeploy |
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
-| Bewerben opens the browser, not the app | The Claude app is not installed, or not signed in to the same account | Install it and sign in; the same link then opens natively |
-| The session shows no card, only a brief | The listing was oversized and the card left the link | Expected; the session renders it from the database |
-| Session opens with `⚠️ ohne MCP` | The connector is missing, or the token in its URL is stale | Re-add the connector with the current `MCP_TOKEN` |
+| Bewerben opens a chat with an empty composer | The undocumented `?q=` parameter on `claude.ai/new` stopped working | Set `CLAUDE_SESSION_URL=https://claude.ai/code/new` (documented, needs GitHub connected) and redeploy |
+| Bewerben asks you to sign in | The phone's browser is not signed in to claude.ai (the Claude app only takes `claude.ai/code/…` links) | Sign in once in that browser |
+| The chat shows no card, only a brief | The listing was oversized and the card left the link | Expected; the chat renders it from the database |
+| The chat cannot find the `project_pilot_*` tools | The connector is missing, or the token in its URL is stale | Re-add the connector with the current `MCP_TOKEN` |
 | **Ablehnen** does nothing | The `bot` container is down | `docker compose logs bot`; `docker compose up -d bot` |
 | **Ablehnen** marks the card instead of deleting it | The card is older than 48 hours, which Telegram will not let a bot delete | Expected; the buttons are gone either way |
 | `uv: command not found` on the VPS | The server has no source tree and no uv, by design | `docker compose exec app project-pilot <command>` |
