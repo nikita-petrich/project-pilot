@@ -89,9 +89,9 @@ Match chats land in the ordinary chat list under a `⭐ score · role · company
 title; archive one once the application is out. Chats can be grouped into a
 [Project](https://support.claude.com/en/articles/9517075-what-are-projects),
 but no documented link opens a new chat *inside* a project with a prefilled
-prompt. If `https://claude.ai/project/<id>?q=…` turns out to work like
-`/new?q=`, point `CLAUDE_SESSION_URL` at the project and every match chat
-lands there, with the project's instructions on top.
+prompt, and `https://claude.ai/project/<id>?q=…` does not prefill (tested
+2026-09-12). Should that change, pointing `CLAUDE_SESSION_URL` at the project
+is all it takes.
 
 ## Setup
 
@@ -105,8 +105,9 @@ Nothing to create. Two things must be in place once:
   Claude Code on the web with GitHub connected
   ([web quickstart](https://code.claude.com/docs/en/web-quickstart)).
 
-On the phone the Bewerben link opens in the browser: the Claude app registers
-only `claude.ai/code/…` links, so stay signed in to claude.ai there.
+Install the Claude app on the phone: the Bewerben link opens in it directly
+(tested 2026-09-12; the documentation lists only `claude.ai/code/…` links for
+the app, so a future app version may hand it to the browser instead).
 
 ### 2. The Telegram bot
 
@@ -178,8 +179,9 @@ way — one definition, every surface.
    it. Phone and desktop both ring.
 2. Not for you → **🚫 Ablehnen**. The card is gone. Curious what the ad says →
    **📄 Projektbeschreibung öffnen**.
-3. Worth it → **✅ Bewerben**. A new chat opens in the browser with the card
-   and the brief already in the composer. Tap send: Claude adds its reading
+3. Worth it → **✅ Bewerben**. A new chat opens — in the Claude app on the
+   phone, in the browser at the desk — with the card and the brief already in
+   the composer. Tap send: Claude adds its reading
    under the card, fetching the listing only when it needs more than the card
    says. Write there: check, draft, revise, set the recipient, send.
    `send_application` needs your explicit go in the conversation and is
@@ -235,7 +237,7 @@ docker compose logs -f bot               # who pressed Ablehnen on what
 | `401 Unauthorized` from Telegram in the log | Token revoked or mistyped | Regenerate with @BotFather, update the secret, redeploy |
 | Arrives on the phone, not at the desk | Telegram desktop not installed or not autostarting | Install it and let it start with the system |
 | Bewerben opens a chat with an empty composer | The undocumented `?q=` parameter on `claude.ai/new` stopped working | Set `CLAUDE_SESSION_URL=https://claude.ai/code/new` (documented, needs GitHub connected) and redeploy |
-| Bewerben asks you to sign in | The phone's browser is not signed in to claude.ai (the Claude app only takes `claude.ai/code/…` links) | Sign in once in that browser |
+| Bewerben opens the browser, not the app | The Claude app is not installed, or not signed in to the same account | Install it and sign in; the same link then opens natively |
 | The chat shows no card, only a brief | The listing was oversized and the card left the link | Expected; the chat renders it from the database |
 | The chat cannot find the `project_pilot_*` tools | The connector is missing, or the token in its URL is stale | Re-add the connector with the current `MCP_TOKEN` |
 | **Ablehnen** does nothing | The `bot` container is down | `docker compose logs bot`; `docker compose up -d bot` |
