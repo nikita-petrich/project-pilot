@@ -270,7 +270,7 @@ async def _build_report(settings: Settings) -> str:
 
 
 async def _run_selftest(
-    settings: Settings, *, text: str | None, listing_id: int | None
+    settings: Settings, *, text: str | None, listing_id: int | None, url: str = ""
 ) -> SelfTestReport:
     """Wire the real checker and the push channel, then run one listing through both."""
     profile = ProfileService(Path("profile")).load()
@@ -289,7 +289,7 @@ async def _run_selftest(
         profile_hash=profile.profile_hash,
     )
     try:
-        return await service.run(text=text, listing_id=listing_id)
+        return await service.run(text=text, listing_id=listing_id, url=url)
     finally:
         await engine.dispose()
 
@@ -457,6 +457,15 @@ def test_match(
         "-l",
         help="Evaluate a stored listing instead of pasted text.",
     ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help=(
+            "Real listing URL to attach to the card (adds the 'Projektbeschreibung "
+            "öffnen' button); only valid with --text/--file/the demo listing."
+        ),
+    ),
 ) -> None:
     """Push one listing through hard rules, LLM, and the alert (stores nothing)."""
     settings = _load_settings()
@@ -466,7 +475,10 @@ def test_match(
             typer.echo("use either --text or --file, not both")
             raise typer.Exit(code=1)
         text = file.read_text(encoding="utf-8")
-    report = asyncio.run(_run_selftest(settings, text=text, listing_id=listing_id))
+    if url is not None and listing_id is not None:
+        typer.echo("--url only applies to pasted text, not --listing-id (it already has one)")
+        raise typer.Exit(code=1)
+    report = asyncio.run(_run_selftest(settings, text=text, listing_id=listing_id, url=url or ""))
     typer.echo(format_selftest(report))
     if not report.ok:
         raise typer.Exit(code=1)

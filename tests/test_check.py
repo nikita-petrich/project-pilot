@@ -130,6 +130,16 @@ async def test_check_text_match_builds_message_with_the_checked_text() -> None:
     assert matcher.listing_texts == ["Python Backend Projekt\nRAG und FastAPI"]
 
 
+async def test_check_text_attaches_the_given_url_to_the_message() -> None:
+    matcher = _FakeMatcher(_llm(score=75))
+    result = await _service(matcher).check_text(
+        "Python Backend Projekt", url="https://www.freelancermap.de/projekt/123"
+    )
+    message = result.message
+    assert message is not None
+    assert message.url == "https://www.freelancermap.de/projekt/123"
+
+
 async def test_check_text_forwards_images_and_marks_them_in_the_listing_text() -> None:
     matcher = _FakeMatcher(_llm(score=75))
     image = ImageAttachment(name="shot.png", mime_type="image/png", data=b"\x89PNG")

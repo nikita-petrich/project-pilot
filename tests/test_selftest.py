@@ -9,8 +9,10 @@ from project_pilot.selftest import SelfTestService, format_selftest
 class _FakeChecker:
     def __init__(self, result: CheckResult) -> None:
         self._result = result
+        self.urls: list[str] = []
 
-    async def check_text(self, text: str) -> CheckResult:
+    async def check_text(self, text: str, *, url: str = "") -> CheckResult:
+        self.urls.append(url)
         return self._result
 
     async def check_stored(self, listing_id: int) -> CheckResult:
@@ -75,3 +77,10 @@ async def test_failed_push_fails_the_report() -> None:
     report = await _service(_result(passed=True), notifier).run()
     assert not report.ok
     assert "FAIL" in format_selftest(report)
+
+
+async def test_run_forwards_the_given_url_to_check_text() -> None:
+    checker = _FakeChecker(_result(passed=True))
+    service = SelfTestService(checker=checker, notifier=_FakeNotifier(), profile_hash="abc123")
+    await service.run(url="https://www.freelancermap.de/projekt/123")
+    assert checker.urls == ["https://www.freelancermap.de/projekt/123"]

@@ -31,6 +31,14 @@ def test_test_match_requires_telegram_config(monkeypatch: pytest.MonkeyPatch) ->
     assert result.exit_code != 0
 
 
+def test_test_match_rejects_url_with_listing_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "fake-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "fake-chat")
+    result = runner.invoke(app, ["test-match", "--listing-id", "1", "--url", "https://x/p"])
+    assert result.exit_code != 0
+    assert "--url only applies to pasted text" in result.output
+
+
 def test_enrich_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ENRICHMENT_ENABLED", raising=False)
     result = runner.invoke(app, ["enrich", "ACME GmbH"])

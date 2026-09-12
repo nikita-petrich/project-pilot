@@ -43,7 +43,7 @@ Auslastung 100 %, 100 % Remote (EU), gelegentliche Abstimmung vor Ort in Münche
 class Checker(Protocol):
     """The ``CheckService`` subset used here (fakeable in tests)."""
 
-    async def check_text(self, text: str) -> CheckResult: ...
+    async def check_text(self, text: str, *, url: str = "") -> CheckResult: ...
 
     async def check_stored(self, listing_id: int) -> CheckResult: ...
 
@@ -96,7 +96,7 @@ class SelfTestService:
         self._profile_hash = profile_hash
 
     async def run(
-        self, *, text: str | None = None, listing_id: int | None = None
+        self, *, text: str | None = None, listing_id: int | None = None, url: str = ""
     ) -> SelfTestReport:
         """Evaluate one listing and prove the push channel.
 
@@ -104,7 +104,9 @@ class SelfTestService:
         built-in demo) is evaluated. A match delivers a real card, Bewerben
         button included — Telegram validates the button's URL on send, so this
         also proves the session link; a no-match proves the channel with a
-        warning push instead.
+        warning push instead. ``url`` (only used with ``text``/the demo, since a
+        stored listing already has one) attaches a real listing link so the card
+        also shows the "Projektbeschreibung öffnen" button.
         """
         steps = [SelfTestStep("profile", True, f"loaded, hash {self._profile_hash[:12]}")]
 
@@ -112,7 +114,7 @@ class SelfTestService:
             result = (
                 await self._checker.check_stored(listing_id)
                 if listing_id is not None
-                else await self._checker.check_text(text or DEMO_LISTING)
+                else await self._checker.check_text(text or DEMO_LISTING, url=url)
             )
         except Exception as err:
             logger.exception("self-test evaluation failed")

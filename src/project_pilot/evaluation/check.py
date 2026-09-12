@@ -103,11 +103,15 @@ class CheckService:
             match_source=parsed,
         )
 
-    async def check_text(self, text: str, *, images: Sequence[ImageAttachment] = ()) -> CheckResult:
+    async def check_text(
+        self, text: str, *, images: Sequence[ImageAttachment] = (), url: str = ""
+    ) -> CheckResult:
         """Check a pasted description, an uploaded file's text, and/or screenshots.
 
         A pasted recruiter mail rarely starts with the role, so the headline is read
         out of the text; when it has none the LLM's ``project_title`` names the result.
+        ``url`` is optional and only used to render the "open the listing" button on a
+        match card, since raw text otherwise has no link of its own.
         """
         stripped = text.strip()
         return await self._evaluate(
@@ -117,6 +121,7 @@ class CheckService:
             listing_text=annotate_image_listing(stripped, images),
             match_source=None,
             images=images,
+            url=url,
         )
 
     async def _evaluate(
@@ -128,6 +133,7 @@ class CheckService:
         match_source: Listing | ParsedListing | None,
         fallback_title: str = "",
         images: Sequence[ImageAttachment] = (),
+        url: str = "",
     ) -> CheckResult:
         # The rule engine reads text, so it cannot judge a screenshot: with no text
         # to scan, stage 2 is skipped rather than failing a `must_have` it can never
@@ -161,7 +167,9 @@ class CheckService:
             threshold=self._threshold,
             reason=llm.reason(),
             message=(
-                self._match_message(resolved, llm, match_source, listing_text) if passed else None
+                self._match_message(resolved, llm, match_source, listing_text, url)
+                if passed
+                else None
             ),
             is_llm_error=llm.is_error,
         )
@@ -172,12 +180,13 @@ class CheckService:
         llm: LlmEvaluation,
         match_source: Listing | ParsedListing | None,
         listing_text: str,
+        url: str = "",
     ) -> MatchMessage:
         verdict = llm.verdict
         if match_source is None:  # raw text has no listing fields beyond the text itself
             return MatchMessage(
                 title=title,
-                url="",
+                url=url,
                 score=llm.score,
                 reasons=list(verdict.reasons),
                 matching_skills=list(verdict.matching_skills),
