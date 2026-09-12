@@ -127,9 +127,10 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(default="", repr=False)
     telegram_chat_id: str = ""
 
-    # The repository a match session checks out (owner/name), so it has the
-    # repo's skills and CLAUDE.md. Empty leaves the session's repo picker alone.
-    claude_session_repo: str = "nikita-petrich/project-pilot"
+    # The page the Bewerben button opens with the card in its ``q`` parameter:
+    # a new Claude chat by default; ``https://claude.ai/code/new`` for a Code
+    # session instead (the documented fallback, see notification/claude_link.py).
+    claude_session_url: str = "https://claude.ai/new"
 
     enrichment_enabled: bool = False
     enrichment_search: str = "duckduckgo"

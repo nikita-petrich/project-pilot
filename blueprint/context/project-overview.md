@@ -3,8 +3,8 @@
 > A personal, single-user worker that watches freelancermap.de, persists every
 > listing losslessly, evaluates fresh ones against Nik's profile (hard rules then
 > LLM), and pushes real matches within minutes: a Telegram card with three
-> buttons, one of which opens a new Claude session with that card prefilled
-> (a `claude.ai/code/new` deep link). Backend only.
+> buttons, one of which opens a new Claude chat with that card prefilled
+> (a `claude.ai/new?q=…` link). Backend only.
 > Binding detail spec: `SPEC.md` at the repo root (its Telegram wording predates
 > the Slack detour of features 17–23 and the Claude session of feature 27).
 
@@ -23,7 +23,7 @@ property.
 
 Exactly one user: Nik (freelance full-stack and AI engineer). No multi-tenant, no
 registration, no public product. Nik configures the profile and search URLs,
-receives the Telegram alerts, works each match in its Claude session, and tunes
+receives the Telegram alerts, works each match in its Claude chat, and tunes
 the match threshold over time.
 
 ## Features
@@ -55,7 +55,7 @@ Two separate guarantees drive the whole design:
 - **Lossless DB (completeness).** `source_state` holds a **watermark** (timestamp of the last successful run). Each run paginates the "newest first" search URLs until it only sees known `url_hash` values or entries older than the watermark, so every gap (failure, restart, downtime) is closed on the next run and every listing ever seen lands in `listings`.
 - **Seed run.** On an empty DB the full current inventory is persisted as a reporting baseline with status `skipped_stale` and **zero notifications**.
 - **Analysis only for fresh entries.** `ANALYSIS_WINDOW_MIN` (default 30, = interval x 2) gates evaluation. Freshness signal order: (1) `posted_at` if minute-precise, else (2) gap rule (distance to last successful run <= window). Older new entries are stored `skipped_stale` with a reason JSON. Feature 1 verifies the real time granularity and decides the implementation.
-- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Telegram card whose Bewerben button is a prefilled Claude session link; `notified_at` is set after a successful send.
+- **Evaluation pipeline per new, fresh entry.** Stage 0 dedupe by `url_hash` (known -> only update `last_seen_at`); Stage 1 freshness gate; Stage 2 hard rules from `constraints.yaml` (0 tokens); Stage 3 LLM match against `profile.md` producing a structured `MatchVerdict`. A match with `score >= MATCH_THRESHOLD` (default 60) sends a Telegram card whose Bewerben button is a prefilled Claude chat link; `notified_at` is set after a successful send.
 - **Traceability.** Every entry gets a stored verdict with a reason for match **and** no-match, each `evaluations` row carrying `model`, `prompt_version`, `profile_hash`, token counts and latency.
 
 ## Data model
@@ -142,7 +142,7 @@ lookups: e-mails, phones, persons, research links).
 - **OpenAI SDK** - `.parse()` with a Pydantic `response_format` for structured match verdicts; model from ENV.
 - **tenacity** - retry with backoff on network/5xx/429, never on 403.
 - **typer** - CLI: `init-db`, `run-once`, `daemon`, `telegram-bot`, `mcp`, `test-match`, `test-filter`, `stats`.
-- **Telegram + Claude deep link + MCP (FastMCP)** - per match the worker sends the card itself over Telegram (one retried HTTP POST, no webhook, no inbound port); its Bewerben button is a `claude.ai/code/new?q=…&repo=…` link carrying the same card, so the Claude session is created on tap, in Nik's account, with the repo's skills; a tiny long-polling process hears the Ablehnen button and deletes the card. An MCP server exposes feed, checks, drafts and send to the session, to Claude chats and to n8n — including the workflow prompts, so one definition serves every surface.
+- **Telegram + Claude chat link + MCP (FastMCP)** - per match the worker sends the card itself over Telegram (one retried HTTP POST, no webhook, no inbound port); its Bewerben button is a `claude.ai/new?q=…` link carrying the same card, so the Claude chat is created on tap, in Nik's account, with the account's skills and connector and no repository on its context (`CLAUDE_SESSION_URL` can point back at the documented `claude.ai/code/new`); a tiny long-polling process hears the Ablehnen button and deletes the card. An MCP server exposes feed, checks, drafts and send to the chat, to other Claude chats and to n8n — including the workflow prompts, so one definition serves every surface.
 - **pytest + pytest-asyncio + respx + pytest-cov** - fixtures, no live requests.
 - **ruff + mypy --strict** - lint, format, and typing gate.
 - **Docker + Compose** - containerized worker plus postgres on the home server.
@@ -156,8 +156,8 @@ Not in v1. Internal tool; the return is faster applications to matching listings
 
 No web UI of its own. The Claude app is the entire surface:
 
-- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens a new Claude session with the card prefilled (one tap on send starts it), Ablehnen deletes the card.
-- **Application flow** - checking, drafting, revisions, recipient handling and the human-confirmed send happen in that Claude session via the account skills and the MCP tools (`check`, `draft`, `revise`, `set_recipient`, `send`).
+- **Match alert** - a Telegram message carries the match card to phone and desktop within seconds (the desktop app notifies with nothing open), under three buttons: Projektbeschreibung öffnen opens the original listing, Bewerben opens a new Claude chat with the card prefilled (one tap on send starts it), Ablehnen deletes the card.
+- **Application flow** - checking, drafting, revisions, recipient handling and the human-confirmed send happen in that Claude chat via the account skills and the MCP tools (`check`, `draft`, `revise`, `set_recipient`, `send`).
 - **Warnings** - source cooldown (403/captcha), LLM health, and consecutive-failure warnings arrive as plain Telegram messages over the same bot.
 - Display timezone is Europe/Berlin at output only; storage stays UTC.
 

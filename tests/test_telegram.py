@@ -22,7 +22,7 @@ BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 SENT = {"ok": True, "result": {"message_id": 5150}}
-REPO = "nikita-petrich/project-pilot"
+CHAT_URL = "https://claude.ai/new"
 
 
 def _message(
@@ -43,7 +43,7 @@ def _message(
 
 
 def _notifier() -> TelegramNotifier:
-    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, session_repo=REPO)
+    return TelegramNotifier(bot_token=BOT_TOKEN, chat_id=CHAT_ID, session_url=CHAT_URL)
 
 
 def test_match_text_leads_with_the_headline_then_every_fact() -> None:
@@ -83,7 +83,7 @@ async def test_notify_sends_the_card_under_its_three_decisions() -> None:
         [
             # Bewerben opens a new session with this card in its prompt;
             # Ablehnen is the one press the bot hears.
-            {"text": "✅ Bewerben", "url": session_link(_message(), repo=REPO)},
+            {"text": "✅ Bewerben", "url": session_link(_message(), base_url=CHAT_URL)},
             {"text": "🚫 Ablehnen", "callback_data": "decline:42"},
         ],
         [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],
@@ -96,10 +96,10 @@ def test_an_unstored_listing_still_gets_a_working_decline() -> None:
     # test-match stores nothing, so there is no id for Ablehnen to name — but the
     # bot never looks the id up, only deletes the card, so the button still works.
     message = replace(_message(), listing_id=None)
-    assert match_keyboard(message, session_repo=REPO) == {
+    assert match_keyboard(message, session_url=CHAT_URL) == {
         "inline_keyboard": [
             [
-                {"text": "✅ Bewerben", "url": session_link(message, repo=REPO)},
+                {"text": "✅ Bewerben", "url": session_link(message, base_url=CHAT_URL)},
                 {"text": "🚫 Ablehnen", "callback_data": "decline:"},
             ],
             [{"text": "📄 Projektbeschreibung öffnen", "url": "https://example.com/p/1"}],

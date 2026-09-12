@@ -52,11 +52,12 @@ def test_search_urls_parsed_from_csv(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
-def test_session_repo_defaults_to_this_project(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDE_SESSION_REPO", raising=False)
-    assert Settings().claude_session_repo == "nikita-petrich/project-pilot"
-    monkeypatch.setenv("CLAUDE_SESSION_REPO", "")
-    assert Settings().claude_session_repo == ""
+def test_session_url_defaults_to_a_new_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CLAUDE_SESSION_URL", raising=False)
+    assert Settings().claude_session_url == "https://claude.ai/new"
+    # The documented fallback: a Code session instead of a chat.
+    monkeypatch.setenv("CLAUDE_SESSION_URL", "https://claude.ai/code/new")
+    assert Settings().claude_session_url == "https://claude.ai/code/new"
 
 
 def test_user_agent_includes_contact(monkeypatch: pytest.MonkeyPatch) -> None:

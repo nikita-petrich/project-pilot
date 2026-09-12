@@ -8,7 +8,7 @@ guaranteed push for a cloud session, so the alert stays in code.
 
 Send-only, deliberately. There is no polling loop, no webhook and no inbound
 port here. The card is a decision surface and nothing more: two of its three
-buttons are plain links — the original listing, and a new Claude session with
+buttons are plain links — the original listing, and a new Claude chat with
 the card already in its prompt (``claude_link.py``) — and only **Ablehnen**
 needs a process to hear the press (``telegram_bot.py``, which does exactly that
 and nothing else).
@@ -32,7 +32,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from project_pilot.notification.claude_link import session_link
+from project_pilot.notification.claude_link import NEW_CHAT_URL, session_link
 from project_pilot.notification.messages import MatchMessage, headline, render_match_details
 
 logger = logging.getLogger(__name__)
@@ -71,10 +71,12 @@ def match_text(message: MatchMessage) -> str:
     return "\n\n".join([headline(message), render_match_details(message)])[:MAX_TEXT_CHARS]
 
 
-def match_keyboard(message: MatchMessage, *, session_repo: str = "") -> dict[str, object] | None:
+def match_keyboard(
+    message: MatchMessage, *, session_url: str = NEW_CHAT_URL
+) -> dict[str, object] | None:
     """The three decisions a match offers.
 
-    Bewerben and the listing are URL buttons: a tap opens a new Claude session
+    Bewerben and the listing are URL buttons: a tap opens a new Claude chat
     (this very card in its prompt) or the original ad, with no process in
     between. Ablehnen is the one callback; it carries the listing id so a press
     is unambiguous in the log, but the bot never looks the id up (deleting the
@@ -84,7 +86,7 @@ def match_keyboard(message: MatchMessage, *, session_repo: str = "") -> dict[str
     """
     listing_id = message.listing_id if message.listing_id is not None else ""
     top: list[dict[str, object]] = [
-        {"text": APPLY, "url": session_link(message, repo=session_repo)},
+        {"text": APPLY, "url": session_link(message, base_url=session_url)},
         {"text": DECLINE, "callback_data": f"{DECLINE_ACTION}:{listing_id}"},
     ]
     rows = [top]
@@ -96,10 +98,10 @@ def match_keyboard(message: MatchMessage, *, session_repo: str = "") -> dict[str
 class TelegramNotifier:
     """Sends one match (or one warning) to the Telegram chat."""
 
-    def __init__(self, *, bot_token: str, chat_id: str, session_repo: str = "") -> None:
+    def __init__(self, *, bot_token: str, chat_id: str, session_url: str = NEW_CHAT_URL) -> None:
         self._api = f"{API_BASE}/bot{bot_token}"
         self._chat_id = chat_id
-        self._session_repo = session_repo
+        self._session_url = session_url
 
     async def notify(self, message: MatchMessage) -> int | None:
         """Send one match card; its message id, or None on failure.
@@ -109,7 +111,7 @@ class TelegramNotifier:
         """
         payload: dict[str, object] = {
             "text": match_text(message),
-            "reply_markup": match_keyboard(message, session_repo=self._session_repo),
+            "reply_markup": match_keyboard(message, session_url=self._session_url),
         }
         try:
             body = await self._post("sendMessage", payload)
