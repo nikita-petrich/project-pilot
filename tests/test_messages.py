@@ -1,5 +1,6 @@
 """The transport-neutral match body: every fact, then the verdict."""
 
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from project_pilot.models import (
@@ -15,6 +16,7 @@ from project_pilot.notification.messages import (
     MatchMessage,
     from_stored,
     headline,
+    render_card,
     render_match_details,
 )
 
@@ -165,3 +167,69 @@ def test_the_threshold_travels_with_the_score_or_stays_unset() -> None:
     now = datetime(2026, 9, 12, 7, 0, tzinfo=UTC)
     assert from_stored(_stored_listing(), now, threshold=60).threshold == 60
     assert from_stored(_stored_listing(), now).threshold is None
+
+
+def _card_message() -> MatchMessage:
+    return MatchMessage(
+        title="Senior Python Developer",
+        url="https://example.com/p/1",
+        score=87,
+        listing_id=42,
+        source="freelancermap",
+        origin="scan",
+        status="evaluated",
+        threshold=60,
+        company="ACME GmbH",
+        contact_name="Max Mustermann",
+        location="Remote (DE)",
+        posted_at_label="12.09.2026 08:50",
+        reasons=["Stack passt"],
+        skills=["Python"],
+    )
+
+
+def test_the_card_carries_the_database_coordinates_and_the_score_yardstick() -> None:
+    card = render_card(_card_message())
+    assert "🗄 DB: listing_id 42 · freelancermap · scan · evaluated" in card
+    assert "📏 Schwelle: 60 (erreicht)" in card
+    assert "🗓 Eingestellt: 12.09.2026 08:50 (Berlin)" in card
+
+
+def test_the_card_carries_one_search_per_subject() -> None:
+    # Company and person are two separate searches on purpose: the company page
+    # and the contact are looked up in different places before writing.
+    card = render_card(_card_message())
+    assert "👥 LinkedIn Firma: https://www.linkedin.com/search/results/companies/" in card
+    assert "keywords=ACME+GmbH" in card
+    assert "🙋 LinkedIn Person: https://www.linkedin.com/search/results/people/" in card
+    assert "keywords=Max+Mustermann+AND+ACME+GmbH" in card
+    assert "🔎 Impressum/Kontakt: https://www.google.com/search?q=ACME+GmbH+Impressum" in card
+
+
+def test_a_missing_contact_is_stated_rather_than_dropped() -> None:
+    # An ad that names nobody is a fact worth seeing at a glance — the same
+    # reason the card prints "Company: not stated" instead of hiding the line.
+    card = render_card(replace(_card_message(), contact_name=None))
+    assert "🙋 LinkedIn Person: K.A." in card
+    assert "search/results/people" not in card
+
+
+def test_a_listing_without_a_company_gets_no_empty_searches() -> None:
+    # Without a name there is nothing to search for, so those two lines go.
+    card = render_card(replace(_card_message(), company=None, contact_name=None))
+    assert "LinkedIn Firma" not in card
+    assert "Impressum" not in card
+    assert "🙋 LinkedIn Person: K.A." in card
+
+
+def test_an_onsite_only_listing_says_so_before_anything_is_written() -> None:
+    assert "Vor-Ort-Projekt" in render_card(replace(_card_message(), onsite_only=True))
+    assert "Vor-Ort-Projekt" not in render_card(_card_message())
+
+
+def test_the_card_opens_with_the_very_text_the_alert_showed() -> None:
+    # One layout for three surfaces: the alert, the chat prompt and the skill.
+    message = _card_message()
+    assert render_card(message).startswith(
+        f"{headline(message)}\n\n{render_match_details(message)}"
+    )

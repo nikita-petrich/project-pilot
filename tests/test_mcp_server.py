@@ -24,6 +24,7 @@ from project_pilot.mcp_server import (
     get_listing,
     ingest_listing,
     list_matches,
+    match_card,
     token_guard,
 )
 from project_pilot.models import (
@@ -43,6 +44,7 @@ NOW = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
 EXPECTED_TOOLS = {
     "project_pilot_list_matches",
     "project_pilot_get_listing",
+    "project_pilot_match_card",
     "project_pilot_ingest_listing",
     "project_pilot_check_listing",
     "project_pilot_check_text",
@@ -80,12 +82,18 @@ def _listing(url: str = "https://example.com/p/1", score: int = 80) -> Listing:
     return listing
 
 
+class _Threshold:
+    """All match_card wants from the check service: the score's yardstick."""
+
+    threshold = 60
+
+
 def _deps(session_factory: async_sessionmaker[AsyncSession]) -> McpDeps:
-    # The DB tools never touch check/application/enrichment, so opaque stand-ins
+    # The DB tools never run a check, draft or enrichment, so opaque stand-ins
     # are enough — constructing the real services would drag in OpenAI clients.
     return McpDeps(
         session_factory=session_factory,
-        check_service=None,  # type: ignore[arg-type]
+        check_service=_Threshold(),  # type: ignore[arg-type]
         application_service=None,  # type: ignore[arg-type]
         enricher=None,
     )
@@ -190,6 +198,31 @@ async def test_get_listing_includes_description_and_evaluations(
 
     with pytest.raises(ApplicationStateError):
         await get_listing(_deps(session_factory), listing_id + 999)
+
+
+async def test_match_card_hands_back_the_alert_s_own_card(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # One layout for three surfaces: whoever prints this needs no layout of its
+    # own, so the skill and the Telegram alert cannot drift into two cards.
+    async with session_factory() as session:
+        listing = _listing()
+        session.add(listing)
+        await session.commit()
+        listing_id = listing.id
+
+    deps = _deps(session_factory)
+    payload = await match_card(deps, listing_id)
+    card = payload["card"]
+    assert isinstance(card, str)
+    assert card.startswith("⭐ 80 · Senior Python Developer · ACME GmbH")
+    assert "🏢 Company: ACME GmbH" in card
+    assert f"🗄 DB: listing_id {listing_id}" in card
+    assert "📏 Schwelle: 60 (erreicht)" in card  # the yardstick comes from CheckService
+    assert "👥 LinkedIn Firma:" in card
+
+    with pytest.raises(ApplicationStateError):
+        await match_card(deps, listing_id + 999)
 
 
 async def test_get_listing_returns_the_facts_that_only_live_in_raw(

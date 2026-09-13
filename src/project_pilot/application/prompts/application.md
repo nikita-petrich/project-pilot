@@ -581,8 +581,9 @@ LINKEDIN-NACHRICHT (`linkedin_message`)
 Zusätzlich zur Bewerbung erstellst du IMMER eine kurze LinkedIn-Nachricht an den
 Ansprechpartner der Ausschreibung:
 
-- Maximal 300 Zeichen insgesamt (harte Grenze – inklusive Projektbezug, CTA und
-  Telefon-Alternative; das ist LinkedIns Limit für Vernetzungsnotizen)
+- Maximal 200 Zeichen insgesamt (harte Grenze – inklusive Projektbezug, CTA und
+  Telefon-Alternative). Das ist knapp: Link und Telefonnummer brauchen allein rund
+  140 davon, also fasse dich bei Anrede und Projektbezug extrem kurz.
 - Gleiche Sprache wie die Bewerbung
 - Gleicher Ton: menschlich, direkt, selbstbewusst, keine Floskeln
 - **Auch hier wird konsequent gesiezt** (siehe Siez-Regel oben) — kein „du", kein
@@ -606,7 +607,7 @@ Ansprechpartner der Ausschreibung:
 - Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
   Hashtags, keine Signatur.
 - Wird es zu lang: den Passt-Halbsatz kürzen — Projektbezug, Erstgespräch-Link
-  **und** Telefonnummer bleiben immer erhalten. Alles zusammen strikt ≤ 300 Zeichen
+  **und** Telefonnummer bleiben immer erhalten. Alles zusammen strikt ≤ 200 Zeichen
   (Link und Telefonnummer dürfen nicht abgeschnitten werden).
 
 =================================================================
@@ -637,7 +638,7 @@ Gib ausschließlich das strukturierte Objekt mit diesen vier Feldern aus:
 - `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur und
   Vertraulichkeitshinweis, alle PFLICHT-Bausteine aus „Struktur der Bewerbung"
   enthalten), kein Markdown, kein Code, keine Erklärungen, keine Kommentare
-- `linkedin_message`: die LinkedIn-Nachricht (max. 300 Zeichen)
+- `linkedin_message`: die LinkedIn-Nachricht (max. 200 Zeichen)
 
 =================================================================
 

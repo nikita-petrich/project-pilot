@@ -81,6 +81,11 @@ class CheckService:
         self._profile = profile
         self._threshold = threshold
 
+    @property
+    def threshold(self) -> int:
+        """The score a match must reach; a card is unreadable without its yardstick."""
+        return self._threshold
+
     async def check_stored(self, listing_id: int) -> CheckResult:
         """Check a listing already in the database (``/check`` with a known URL)."""
         async with session_scope(self._session_factory) as session:

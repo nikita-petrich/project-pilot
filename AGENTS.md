@@ -65,13 +65,17 @@ Beyond the workflow skills below, two skills carry project-pilot's own judgment
 into any Claude surface (Claude Code sessions today, any Claude chat via the account
 architecture next):
 
+- `/match-card` - show the full overview card for a stored listing (facts,
+  verdict, research links), exactly as the Telegram alert renders it.
 - `/check-project` - judge one project listing against Nik's profile, exactly as
   the scan pipeline does (stage-2 rules, then the verdict, then the no-go
   post-check on `missing_requirements`).
 - `/write-application` - draft subject, body and LinkedIn message for a listing.
   Drafts only; sending stays with the human, by design.
 
-Both are **thin wrappers**: they read the canonical sources at runtime
+All three are **thin wrappers**: `match-card` prints what
+`project_pilot_match_card` renders, the other two read the canonical sources at
+runtime
 (`evaluation/prompts/match.v7.md`, `application/prompts/application.md`,
 `profile/`) instead of copying their rules, so a skill and the pipeline cannot
 drift apart. Change a judgment rule in the prompt file, not in the skill.

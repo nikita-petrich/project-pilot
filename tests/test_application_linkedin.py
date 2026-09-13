@@ -1,8 +1,9 @@
 """Tests for fitting an over-long LinkedIn note into the connection-note limit."""
 
 from project_pilot.application.linkedin import fit_linkedin_message
+from project_pilot.application.schemas import LINKEDIN_LIMIT
 
-_LIMIT = 300
+_LIMIT = LINKEDIN_LIMIT
 _CTA = (
     "Kostenloses Erstgespräch: https://calendar.notion.so/meet/petrichnikita/"
     "erstgespraech-30-min — oder rufen Sie mich direkt an: +49 1567 9088678."
@@ -29,7 +30,23 @@ def test_overlong_message_drops_the_middle_and_keeps_link_and_phone() -> None:
     assert len(fitted) <= _LIMIT
     assert fitted.startswith("Guten Tag Frau Meier, zu Ihrer Ausschreibung")
     assert fitted.endswith(_CTA)  # link and phone number intact, nothing cut mid-token
-    assert "…" not in fitted
+    # The "why I fit" sentences are gone: the CTA alone eats ~140 of the 200.
+    assert "RAG-Architekturen" not in fitted
+    assert "LegalTech" not in fitted
+
+
+def test_the_cta_alone_leaves_little_room_for_anything_else() -> None:
+    """The arithmetic of this budget, pinned so a limit change surfaces its cost.
+
+    The booking link and the phone number are mandatory and take 143 characters,
+    so the greeting and the project reference share what is left. Below roughly
+    56 characters of room, ``fit_linkedin_message`` starts trimming the opening.
+    """
+    assert len(_CTA) == 143
+    room = _LIMIT - len(_CTA) - 1
+    short = f"{'x' * room} {_CTA}"
+    assert fit_linkedin_message(short, _LIMIT) == short  # fits whole, nothing trimmed
+    assert "…" not in short
 
 
 def test_falls_back_to_trimming_the_opening_when_two_sentences_still_overflow() -> None:

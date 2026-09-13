@@ -4,9 +4,11 @@ from pydantic import BaseModel, field_validator
 
 from project_pilot.application.linkedin import fit_linkedin_message
 
-# LinkedIn's own cap for a connection-request note; the message must carry the
-# booking link plus the phone alternative, so the full budget is used.
-LINKEDIN_LIMIT = 300
+# Well inside LinkedIn's own 300-character cap for a connection note: a note that
+# reads in one glance beats one that fills the box. The booking link and the phone
+# number alone take about 140 of these, which is why fit_linkedin_message drops the
+# "why I fit" clause from the middle first and never cuts the tail.
+LINKEDIN_LIMIT = 200
 TITLE_LIMIT = 120
 
 

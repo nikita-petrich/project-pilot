@@ -12,6 +12,11 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from project_pilot.enrichment.links import (
+    google_search_url,
+    linkedin_company_url,
+    linkedin_people_url,
+)
 from project_pilot.ingestion.normalize import (
     BERLIN,
     detect_language,
@@ -328,4 +333,61 @@ def from_stored(listing: Listing, now: datetime, *, threshold: int | None = None
         missing_requirements=_eval_list(evaluation, "missing_requirements"),
         risk_flags=_eval_list(evaluation, "risk_flags"),
         threshold=threshold,
+    )
+
+
+# Stated rather than dropped, like the card's own "not stated" lines: an ad with
+# no named contact is a fact worth seeing, not an absent row to puzzle over.
+NO_CONTACT = "K.A."
+
+
+def research_lines(message: MatchMessage) -> list[str]:
+    """The lines the card has no room for: DB coordinates and research links.
+
+    Every one of them is a thing Nik would otherwise look up by hand — the row
+    id he has to name to any tool, when the ad really went up, and the two
+    LinkedIn searches plus the Impressum query he opens before writing.
+    """
+    lines: list[str] = []
+    if message.listing_id is not None:
+        coordinates = [
+            f"listing_id {message.listing_id}",
+            *(part for part in (message.source, message.origin, message.status) if part),
+        ]
+        lines.append(f"🗄 DB: {' · '.join(coordinates)}")
+    if message.threshold is not None:
+        reached = "erreicht" if message.score >= message.threshold else "verfehlt"
+        lines.append(f"📏 Schwelle: {message.threshold} ({reached})")
+    if message.posted_at_label:
+        lines.append(f"🗓 Eingestellt: {message.posted_at_label} (Berlin)")
+    if message.onsite_only:
+        lines.append("🚨 Liest sich als reines Vor-Ort-Projekt — vor dem Senden prüfen.")
+    if message.company:
+        lines.append(f"👥 LinkedIn Firma: {linkedin_company_url(message.company)}")
+        lines.append(
+            f"🔎 Impressum/Kontakt: "
+            f"{google_search_url(f'{message.company} Impressum Kontakt E-Mail')}"
+        )
+    person = (
+        linkedin_people_url(company=message.company, person=message.contact_name)
+        if message.contact_name
+        else NO_CONTACT
+    )
+    lines.append(f"🙋 LinkedIn Person: {person}")
+    return lines
+
+
+def render_card(message: MatchMessage) -> str:
+    """The whole overview: headline, every fact, the verdict, then the research links.
+
+    One definition for three surfaces — the Telegram card shows the first two
+    blocks, the chat prompt names the listing, and the MCP ``match_card`` tool
+    hands this back verbatim so a skill can print it without knowing the layout.
+    """
+    return "\n\n".join(
+        [
+            headline(message),
+            render_match_details(message),
+            "\n".join(research_lines(message)),
+        ]
     )

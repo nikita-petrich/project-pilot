@@ -30,7 +30,7 @@ from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
 from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.models import Listing, ListingOrigin
-from project_pilot.notification.messages import from_stored
+from project_pilot.notification.messages import from_stored, render_card
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -242,6 +242,22 @@ async def ingest_listing(
         return payload
 
 
+async def match_card(deps: McpDeps, listing_id: int) -> dict[str, object]:
+    """The overview card for one stored listing, rendered exactly as the alert shows it.
+
+    Returned as one finished text block rather than as fields, so the surface
+    printing it needs no layout of its own: the Telegram card, the chat prompt
+    and the ``match-card`` skill all show the same thing, and a change to the
+    layout reaches all three at once.
+    """
+    async with session_scope(deps.session_factory) as session:
+        listing = await Repository(session).get_listing_with_evaluations(listing_id)
+        if listing is None:
+            raise ApplicationStateError(f"Project {listing_id} not found")
+        message = from_stored(listing, datetime.now(UTC), threshold=deps.check_service.threshold)
+        return {"listing_id": listing_id, "card": render_card(message)}
+
+
 async def check_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
     return _check_payload(await deps.check_service.check_stored(listing_id))
 
@@ -332,6 +348,14 @@ def build_mcp(deps: McpDeps) -> FastMCP:
         return await ingest_listing(
             deps, text, origin, title=title, url=url, source=source, company=company, note=note
         )
+
+    @mcp.tool
+    async def project_pilot_match_card(listing_id: int) -> dict[str, object]:
+        """The ready-to-read overview card for one stored listing: every fact, the
+        stored verdict with its score and threshold, and the LinkedIn/Impressum
+        research links. Returns one finished text block under `card` - print it as
+        it comes, do not re-format or re-order it. Use it to show a match."""
+        return await match_card(deps, listing_id)
 
     @mcp.tool
     async def project_pilot_check_listing(listing_id: int) -> dict[str, object]:
