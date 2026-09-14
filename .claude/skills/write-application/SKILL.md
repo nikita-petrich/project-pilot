@@ -96,7 +96,10 @@ copyable block:
 - **subject** - one line, no "Betreff:" prefix.
 - **body** - the complete application as plain text, salutation through signature
   and confidentiality note. No markdown, no commentary inside it.
-- **linkedin_message** - max 300 characters.
+- **linkedin_message** - max 200 characters. Print the LinkedIn people search
+  (`linkedin_search` from the draft) as a line **above** it: the note is useless
+  without the profile it goes to, and that search is otherwise a manual step
+  every single time.
 
 Put `body` and `linkedin_message` in fenced code blocks so they copy cleanly
 without formatting artifacts.

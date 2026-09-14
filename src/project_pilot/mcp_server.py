@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.application.service import ApplicationService, DraftView
 from project_pilot.db import session_scope
+from project_pilot.enrichment.links import linkedin_people_url
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.errors import ApplicationStateError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
@@ -145,6 +146,9 @@ def _draft_payload(view: DraftView) -> dict[str, object]:
         "subject": view.subject,
         "body": view.body,
         "linkedin_message": view.linkedin_message,
+        # Where to paste it: a note is useless without the profile it goes to, and
+        # this search is the step Nik would otherwise do by hand every time.
+        "linkedin_search": linkedin_people_url(company=view.company, person=view.contact_name),
         "status": view.status.value,
         "revision_count": view.revision_count,
         "attachments": list(view.attachments),

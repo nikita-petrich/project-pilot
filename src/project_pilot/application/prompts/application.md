@@ -464,9 +464,14 @@ eigene Offenheit benennt:
   with you."
 - Direkt danach IMMER die Einladung zum kostenlosen Erstgespräch (HARTE REGEL) mit
   dem Notion-Calendar-Link, der zur oben bestimmten Bewerbungssprache gehört
-  (Deutsch → `CTA German`, Englisch → `CTA English`), als genau ein fertiger Satz:
-  - Deutsch: „Kostenloses Erstgespräch buchen: <deutscher Buchungslink>"
-  - Englisch: „Book a free intro call: <englischer Buchungslink>"
+  (Deutsch → `CTA German`, Englisch → `CTA English`), **und dahinter die
+  Telefon-Alternative** mit der `Phone`-Nummer aus dem Profil — beides zusammen als
+  genau ein fertiger Satz. Wer lieber anruft als einen Termin zu buchen, soll das
+  ohne Umweg über die Signatur können:
+  - Deutsch: „Kostenloses Erstgespräch buchen: <deutscher Buchungslink> — oder
+    rufen Sie mich einfach an unter <Phone>."
+  - Englisch: „Book a free intro call: <englischer Buchungslink> — or simply give
+    me a call at <Phone>."
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.

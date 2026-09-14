@@ -127,6 +127,32 @@ def test_check_payload_mirrors_matchverdict_fields() -> None:
     assert "reasons" not in payload  # only present when a message was built
 
 
+def test_the_draft_payload_says_where_to_paste_the_linkedin_note() -> None:
+    # A note without the profile it belongs to means looking the person up by
+    # hand every time, which is exactly the step worth removing.
+    view = DraftView(
+        application_id=7,
+        listing_id=1,
+        title="AI Developer",
+        url="https://example.com/p/1",
+        company="Weissenberg Business Consulting GmbH",
+        contact_name="Sebastian Koch",
+        recipient=None,
+        subject="s",
+        body="b",
+        linkedin_message="l",
+        status=ApplicationStatus.AWAITING_EMAIL,
+        revision_count=0,
+        attachments=(),
+        missing_attachments=(),
+    )
+    search = _draft_payload(view)["linkedin_search"]
+    assert isinstance(search, str)
+    assert search.startswith("https://www.linkedin.com/search/results/people/")
+    assert "Sebastian+Koch" in search
+    assert "Weissenberg" in search
+
+
 def test_draft_payload_carries_send_status() -> None:
     view = DraftView(
         application_id=1,
