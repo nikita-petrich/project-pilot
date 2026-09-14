@@ -145,3 +145,15 @@ def test_the_order_researches_the_contact_before_it_drafts() -> None:
 def test_an_unstored_listing_is_not_sent_researching_a_row_that_does_not_exist() -> None:
     # A test-match has no listing_id, so there is nothing to enrich against.
     assert "enrich-company" not in session_prompt(_message(listing_id=None))
+
+
+def test_the_order_asks_for_one_table_and_copyable_blocks() -> None:
+    # Card research lines and contact data used to arrive as two lists; subject,
+    # letter and note as prose that copied with formatting artifacts.
+    prompt = session_prompt(_message())
+    assert "nur den Block card" in prompt
+    assert "Tabelle overview genau so" in prompt
+    assert "eine Tabelle" in prompt
+    assert "jeweils als eigenen Codeblock" in prompt
+    assert "direkt unter der LinkedIn-Nachricht der Link zur LinkedIn-Personensuche" in prompt
+    assert "Codeblock" in session_prompt(_message(listing_id=None))

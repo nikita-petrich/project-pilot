@@ -387,9 +387,10 @@ def research_lines(message: MatchMessage) -> list[str]:
 def render_card(message: MatchMessage) -> str:
     """The whole overview: headline, every fact, the verdict, then the research links.
 
-    One definition for three surfaces — the Telegram card shows the first two
-    blocks, the chat prompt names the listing, and the MCP ``match_card`` tool
-    hands this back verbatim so a skill can print it without knowing the layout.
+    The Telegram card shows the first two blocks; this whole text rides in the
+    chat prompt of an unstored listing, which has no row to fetch a card for. A
+    stored listing's chat gets the same blocks over MCP, with the research lines
+    as a table (``notification/overview.py``).
     """
     return "\n\n".join(
         [

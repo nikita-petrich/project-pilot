@@ -97,19 +97,19 @@ in the listing text):
 
 ## 4. Output
 
-Show the draft's four fields, same names as the pipeline's structured output,
-each as a separate copyable block:
+Show the draft's fields, same names as the pipeline's structured output. Subject,
+body and LinkedIn message go **each in its own fenced code block**, so the chat's
+copy button takes exactly that text and nothing else:
 
 - **project_title** - one line, role plus defining focus.
-- **subject** - one line, no "Betreff:" prefix.
+- **subject** - one line, no "Betreff:" prefix, in a code block.
 - **body** - the complete application as plain text, salutation through
-  signature and confidentiality note. No markdown, no commentary inside it.
-- **linkedin_message** - max 300 characters, booking link included. Print the
-  LinkedIn people search (`linkedin_search` from the draft) as a line **above**
-  it: a connection note is useless without the profile it goes to, and that
-  search is otherwise a manual step every single time.
-
-Put `body` and `linkedin_message` in fenced code blocks so they copy cleanly
-without formatting artifacts.
+  signature and confidentiality note, in a code block. No markdown, no
+  commentary inside it.
+- **linkedin_message** - max 300 characters, booking link included, in a code
+  block. Print the LinkedIn people search (`linkedin_search` from the draft)
+  **directly below** it, as a markdown link named after the contact person: a
+  connection note is useless without the profile it goes to, and that search is
+  otherwise a manual step every single time.
 
 Below the output, one short line offering a revision. Nothing about sending.

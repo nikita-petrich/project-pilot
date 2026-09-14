@@ -27,7 +27,9 @@ drifting into two different cards.
 
 1. `project_pilot_match_card(listing_id)`.
 2. Print the `card` field exactly as returned - one block, no preamble, no
-   summary of it afterwards, no commentary on the score.
+   summary of it afterwards, no commentary on the score - then the `research`
+   table as returned. When contact research follows in the same answer, skip
+   `research`: its rows are part of the enrichment's `overview` table.
 3. Tool missing or erroring: say so in one line and stop. Do not assemble a
    substitute card from other tools; a card that differs from the alert's is
    worse than no card.
@@ -40,8 +42,9 @@ So you do not repeat any of it in your own words:
 - Every listing fact: company, contact, client type, location, remote share,
   contract, workload, duration, start, posted, apply-by, industry, language, skills
 - The stored verdict: score, what fits, matching skills, gaps, risk flags
-- The listing link, the database coordinates, the match threshold, the posting
-  time in Berlin, and the LinkedIn company / LinkedIn person / Impressum searches
+- The listing link; in `research`: the database coordinates, the match threshold,
+  the posting time in Berlin, and the LinkedIn company / LinkedIn person / Impressum
+  searches
 - The company's own page on the board, when the listing named one — often the
   shortest route to a phone number and an address, with nothing to search for
 

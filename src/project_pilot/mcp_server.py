@@ -31,7 +31,13 @@ from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
 from project_pilot.mcp_prompts import PROMPTS, render
 from project_pilot.models import Listing, ListingOrigin
-from project_pilot.notification.messages import from_stored, render_card
+from project_pilot.notification.messages import (
+    MatchMessage,
+    from_stored,
+    headline,
+    render_match_details,
+)
+from project_pilot.notification.overview import overview_table, research_table
 from project_pilot.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -269,17 +275,18 @@ async def ingest_listing(
 async def match_card(deps: McpDeps, listing_id: int) -> dict[str, object]:
     """The overview card for one stored listing, rendered exactly as the alert shows it.
 
-    Returned as one finished text block rather than as fields, so the surface
-    printing it needs no layout of its own: the Telegram card, the chat prompt
-    and the ``match-card`` skill all show the same thing, and a change to the
-    layout reaches all three at once.
+    Returned as finished blocks rather than as fields, so the surface printing
+    them needs no layout of its own. ``card`` is the facts and the verdict;
+    ``research`` is the coordinates and research links as a narrow table — kept
+    apart because the Bewerben flow shows them merged with the contact data
+    instead (``enrich_company``'s ``overview``).
     """
-    async with session_scope(deps.session_factory) as session:
-        listing = await Repository(session).get_listing_with_evaluations(listing_id)
-        if listing is None:
-            raise ApplicationStateError(f"Project {listing_id} not found")
-        message = from_stored(listing, datetime.now(UTC), threshold=deps.check_service.threshold)
-        return {"listing_id": listing_id, "card": render_card(message)}
+    message = await _stored_message(deps, listing_id)
+    return {
+        "listing_id": listing_id,
+        "card": "\n\n".join([headline(message), render_match_details(message)]),
+        "research": research_table(message),
+    }
 
 
 async def check_listing(deps: McpDeps, listing_id: int) -> dict[str, object]:
@@ -322,12 +329,24 @@ async def send_application(deps: McpDeps, application_id: int) -> dict[str, obje
     return _draft_payload(await deps.application_service.send(application_id))
 
 
+async def _stored_message(deps: McpDeps, listing_id: int) -> MatchMessage:
+    async with session_scope(deps.session_factory) as session:
+        listing = await Repository(session).get_listing_with_evaluations(listing_id)
+        if listing is None:
+            raise ApplicationStateError(f"Project {listing_id} not found")
+        return from_stored(listing, datetime.now(UTC), threshold=deps.check_service.threshold)
+
+
 async def enrich_company(deps: McpDeps, listing_id: int) -> dict[str, object]:
     try:
         result = await deps.enricher.enrich_listing(listing_id)
     except EnrichmentError as err:
         raise ApplicationStateError(str(err)) from err
-    return _enrichment_payload(result)
+    payload = _enrichment_payload(result)
+    # One table for contact data, research links and coordinates, so the chat
+    # prints it instead of laying the same facts out anew each time.
+    payload["overview"] = overview_table(await _stored_message(deps, listing_id), result)
+    return payload
 
 
 def build_mcp(deps: McpDeps) -> FastMCP:
@@ -381,8 +400,11 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     async def project_pilot_match_card(listing_id: int) -> dict[str, object]:
         """The ready-to-read overview card for one stored listing: every fact, the
         stored verdict with its score and threshold, and the LinkedIn/Impressum
-        research links. Returns one finished text block under `card` - print it as
-        it comes, do not re-format or re-order it. Use it to show a match."""
+        research links. Returns finished blocks: `card` (facts and verdict) and
+        `research` (coordinates and research links as a table). Print them as they
+        come, do not re-format or re-order them; when contact research follows in
+        the same answer, print only `card` - the research rows are part of the
+        enrichment's `overview` table. Use it to show a match."""
         return await match_card(deps, listing_id)
 
     @mcp.tool
@@ -429,7 +451,9 @@ def build_mcp(deps: McpDeps) -> FastMCP:
     @mcp.tool
     async def project_pilot_enrich_company(listing_id: int) -> dict[str, object]:
         """Find contact data (e-mails, phones, persons) for a listing's company
-        from its own website. Read-only research; sends nothing."""
+        from its own website. Read-only research; sends nothing. `overview` is a
+        finished two-column table of the contact data with their sources plus the
+        listing's research links and coordinates - print it as it comes."""
         return await enrich_company(deps, listing_id)
 
     _register_prompts(mcp)

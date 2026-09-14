@@ -38,26 +38,19 @@ worth opening even when the lookup found nothing.
 
 ## 3. Report
 
-Present what came back, compactly:
+Print the `overview` field **as it comes**: one finished two-column table with
+every contact datum and its source, followed by the listing's research links and
+database coordinates. Do not rebuild it from the other fields, do not add
+columns, and do not paste raw URLs next to it — the table keeps the links behind
+short names precisely so it stays narrow enough to read without scrolling
+sideways.
 
-```
-🏢 <Company>
-🏷 <company_page, when there is one>
-✉️  <address> (<source>) — best first
-📞 <number> (<source>)
-👤 persons / roles
-🙋 <linkedin_search> — the contact person on LinkedIn
-👥 <links.linkedin_company> — the company on LinkedIn
-🔎 <links.google_contact> — Impressum/contact search
-✍️  <linkedin_message> — ready to paste
-```
-
-- The `linkedin_message` is a connection note, so it never stands alone: print
-  `linkedin_search` directly above it. A note without the profile it goes to is
-  half an answer, and finding that profile is otherwise a manual step every
-  single time.
-- Empty result: say so plainly and suggest the research links for a manual
-  look. Do not scrape further on your own or invent contacts.
+- `linkedin_message` is a connection note, so it never stands alone. Inside an
+  application flow, leave it out here: `write-application` shows the draft's own
+  note with the LinkedIn people search directly below it. On its own, print it in
+  a fenced code block with `linkedin_search` as a link directly below.
+- Empty result: the table says `keine gefunden`; point at its research links for
+  a manual look. Do not scrape further on your own or invent contacts.
 - Mention in one line that the lookup is stored (append-only), so repeated
   runs are cheap to compare.
 

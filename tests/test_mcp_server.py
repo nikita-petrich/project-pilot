@@ -203,6 +203,40 @@ class _MissingListing:
         raise EnrichmentError(f"Listing {listing_id} not found")
 
 
+class _FoundContacts:
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment:
+        return ContactEnrichment(
+            company="ACME GmbH",
+            person=None,
+            website="https://acme.example/",
+            links=build_links(company="ACME GmbH", person=None),
+            emails=[ContactDatum("jobs@acme.example", "freelancermap")],
+        )
+
+
+async def test_enriching_a_listing_hands_back_one_finished_table(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The chat laid contact data and research links out differently every time;
+    # the table comes finished, contact data and the card's research rows in one.
+    async with session_factory() as session:
+        listing = _listing()
+        session.add(listing)
+        await session.commit()
+        listing_id = listing.id
+
+    deps = replace(_deps(session_factory), enricher=_FoundContacts())
+    payload = await enrich_company(deps, listing_id)
+
+    overview = payload["overview"]
+    assert isinstance(overview, str)
+    assert overview.startswith("| Angabe | Wert |\n|---|---|\n| Firma | ACME GmbH · Inserat |")
+    assert "| E-Mail | jobs@acme.example · freelancermap |" in overview
+    assert "| Website | [acme.example](https://acme.example/) |" in overview
+    assert f"| DB | {listing_id} · freelancermap · scan · evaluated |" in overview
+    assert "| LinkedIn Person | K.A. |" in overview
+
+
 async def test_enriching_a_listing_that_is_gone_answers_in_the_tool_protocol(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -263,9 +297,14 @@ async def test_match_card_hands_back_the_alert_s_own_card(
     assert isinstance(card, str)
     assert card.startswith("⭐ 80 · Senior Python Developer · ACME GmbH")
     assert "🏢 Company: ACME GmbH" in card
-    assert f"🗄 DB: listing_id {listing_id}" in card
-    assert "📏 Schwelle: 60 (erreicht)" in card  # the yardstick comes from CheckService
-    assert "👥 LinkedIn Firma:" in card
+    # The research lines moved into their own table, so the Bewerben flow can show
+    # them merged with the contact data instead of twice.
+    assert "LinkedIn Firma" not in card
+    research = payload["research"]
+    assert isinstance(research, str)
+    assert f"| DB | {listing_id} · freelancermap · scan · evaluated |" in research
+    assert "| Schwelle | 60 (erreicht) |" in research  # the yardstick comes from CheckService
+    assert "| LinkedIn Firma | [ACME GmbH](https://www.linkedin.com/" in research
 
     with pytest.raises(ApplicationStateError):
         await match_card(deps, listing_id + 999)

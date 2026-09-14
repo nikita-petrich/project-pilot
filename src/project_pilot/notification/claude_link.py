@@ -46,14 +46,17 @@ MAX_URL_CHARS = 4_096
 # is the one manual step between a match and a sendable application.
 TASK_STORED = (
     "AUFTRAG — alles nacheinander, sofort und ohne Rückfrage:\n"
-    "1. Skill match-card für Listing {listing_id} — zeig mir die vollständige "
-    "Übersichtskarte.\n"
-    "2. Skill enrich-company für dasselbe Listing — recherchier die Kontaktdaten und "
-    "zeig sie mir mit Herkunft je Angabe. Schlägt das fehl, sag in genau einer Zeile "
-    "warum und mach trotzdem weiter.\n"
-    "3. Skill write-application für dasselbe Listing — zeig mir Betreff, Anschreiben "
-    "und LinkedIn-Nachricht. Hat die Recherche eine brauchbare Adresse ergeben, hinterleg "
-    "sie als Empfänger am Entwurf und schreib in einer Zeile dazu, welche und woher."
+    "1. Skill match-card für Listing {listing_id} — zeig mir die Übersichtskarte, nur den "
+    "Block card; die Recherche-Links kommen in Schritt 2 mit in die Tabelle.\n"
+    "2. Skill enrich-company für dasselbe Listing — zeig mir die Tabelle overview genau so, "
+    "wie das Tool sie liefert: Kontaktdaten mit Herkunft plus Recherche-Links, eine Tabelle. "
+    "Schlägt das fehl, sag in genau einer Zeile warum, zeig stattdessen die Tabelle research "
+    "aus Schritt 1 und mach trotzdem weiter.\n"
+    "3. Skill write-application für dasselbe Listing — zeig mir Betreff, Anschreiben und "
+    "LinkedIn-Nachricht, jeweils als eigenen Codeblock zum Kopieren; direkt unter der "
+    "LinkedIn-Nachricht der Link zur LinkedIn-Personensuche. Hat die Recherche eine "
+    "brauchbare Adresse ergeben, hinterleg sie als Empfänger am Entwurf und schreib in "
+    "einer Zeile dazu, welche und woher."
 )
 # The unstored twin (a test-match run): there is no row to fetch a card for, so
 # the alert's own text is the only copy of the facts there is.
@@ -61,7 +64,8 @@ TASK_UNSTORED = (
     "AUFTRAG — sofort und ohne Rückfrage:\n"
     "1. Das Listing ist nicht gespeichert (Testlauf): es gibt keine Karte zum Nachladen, "
     "arbeite mit dem Text oben und speichere nichts.\n"
-    "2. Skill write-application — zeig mir Betreff, Anschreiben und LinkedIn-Nachricht."
+    "2. Skill write-application — zeig mir Betreff, Anschreiben und LinkedIn-Nachricht, "
+    "jeweils als eigenen Codeblock zum Kopieren."
 )
 RULES = (
     "REGELN: kein Vorwort, keine Zusammenfassung, keine eigene Bewertung, kein Lob. "
