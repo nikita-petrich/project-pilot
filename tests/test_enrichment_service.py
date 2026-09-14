@@ -80,7 +80,7 @@ async def test_enrich_finds_website_and_extracts_contacts() -> None:
     assert "companies" in result.links.linkedin_company
     assert result.sources  # the pages actually read
     # a ready-to-copy connection note is always produced
-    assert result.linkedin_message.startswith("Hallo Max,")
+    assert result.linkedin_message.startswith("Guten Tag Max Mustermann,")
     assert "Muster GmbH" in result.linkedin_message
 
 

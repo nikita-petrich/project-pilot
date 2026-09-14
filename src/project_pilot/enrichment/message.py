@@ -10,18 +10,12 @@ import re
 # LinkedIn caps a connection-request note at 300 characters.
 LINKEDIN_CONNECT_LIMIT = 300
 
-_TITLES = frozenset({"dr", "prof", "dipl", "ing", "msc", "bsc"})
-_NAME_TOKEN_RE = re.compile(r"[A-Za-zÄÖÜäöüß][\wÄÖÜäöüß'-]*")
 
-
-def _first_name(person: str | None) -> str | None:
+def _full_name(person: str | None) -> str | None:
+    """The contact's name as given, one space between words; ``None`` when absent."""
     if not person:
         return None
-    for token in _NAME_TOKEN_RE.findall(person):
-        name = str(token)
-        if name.lower().strip(".") not in _TITLES:
-            return name
-    return None
+    return " ".join(person.split()) or None
 
 
 def _hook(company: str | None, title: str | None) -> str:
@@ -34,8 +28,12 @@ def _hook(company: str | None, title: str | None) -> str:
     return "ich bin auf Ihre Projektausschreibung aufmerksam geworden"
 
 
-def _assemble(*, first: str | None, hook: str, sender: str | None, offer_du: bool) -> str:
-    greeting = f"Hallo {first}," if first else "Hallo,"
+def _assemble(*, name: str | None, hook: str, sender: str | None, offer_du: bool) -> str:
+    # Formal throughout, like the application itself: "Hallo Talissa," in front of
+    # "Ihr Projekt … mit Ihnen" read as two registers in one sentence. With no
+    # Herr/Frau to go on, the full name is the formal form — never guessed from a
+    # first name.
+    greeting = f"Guten Tag {name}," if name else "Guten Tag,"
     core = "und würde mich gerne mit Ihnen vernetzen, um mich kurz zum Projekt auszutauschen."
     # Offer first-name terms while still addressing formally — the standard, polite
     # German networking move ("gerne per Du").
@@ -56,15 +54,15 @@ def build_connection_message(
 
     With ``offer_du`` the note offers the recipient to switch to the informal "Du".
     """
-    first = _first_name(person)
-    message = _assemble(first=first, hook=_hook(company, title), sender=sender, offer_du=offer_du)
+    name = _full_name(person)
+    message = _assemble(name=name, hook=_hook(company, title), sender=sender, offer_du=offer_du)
     if len(message) <= LINKEDIN_CONNECT_LIMIT or not title:
         return _cap(message)
     # The project title is the only unbounded part — shorten it to fit, don't cut the ask.
     overflow = len(message) - LINKEDIN_CONNECT_LIMIT
     trimmed = title[: max(8, len(title) - overflow - 1)].rstrip() + "…"
     return _cap(
-        _assemble(first=first, hook=_hook(company, trimmed), sender=sender, offer_du=offer_du)
+        _assemble(name=name, hook=_hook(company, trimmed), sender=sender, offer_du=offer_du)
     )
 
 

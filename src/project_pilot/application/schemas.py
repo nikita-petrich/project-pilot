@@ -2,6 +2,7 @@
 
 from pydantic import BaseModel, field_validator
 
+from project_pilot.application.letter import tidy_body
 from project_pilot.application.linkedin import fit_linkedin_message
 
 # LinkedIn's own cap for a connection note. It used to be held at 200 — "a note
@@ -44,6 +45,12 @@ class ApplicationDraft(BaseModel):
     def _single_line_subject(cls, value: str) -> str:
         """A mail header must be one line; also stay inside the DB column (512)."""
         return " ".join(value.split())[:500]
+
+    @field_validator("body")
+    @classmethod
+    def _tidy_body(cls, value: str) -> str:
+        """Letter form the model gets right only most of the time (see ``letter.py``)."""
+        return tidy_body(value)
 
     @field_validator("linkedin_message")
     @classmethod

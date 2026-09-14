@@ -7,16 +7,23 @@ def test_message_personalizes_from_person_company_and_title() -> None:
     msg = build_connection_message(
         person="Max Mustermann", company="Muster GmbH", title="Data Engineer"
     )
-    assert msg.startswith("Hallo Max,")
+    assert msg.startswith("Guten Tag Max Mustermann,")
     assert "Muster GmbH" in msg
     assert "Data Engineer" in msg
     assert "vernetzen" in msg
     assert len(msg) <= LINKEDIN_CONNECT_LIMIT
 
 
-def test_message_strips_titles_from_first_name() -> None:
-    msg = build_connection_message(person="Dr. Anna Schmidt", company="X")
-    assert msg.startswith("Hallo Anna,")
+def test_the_greeting_stays_formal_like_the_rest_of_the_note() -> None:
+    # Seen on a live match: "Hallo Talissa, ich habe Ihr Projekt … mit Ihnen" — a
+    # first-name greeting in front of "Sie". The full name keeps one register, the
+    # same form the application uses when no Herr/Frau is known.
+    msg = build_connection_message(person="Talissa  Blajan", company="Randstad", title="Engineer")
+    assert msg.startswith("Guten Tag Talissa Blajan,")
+    assert "Hallo" not in msg
+    assert build_connection_message(person="Dr. Anna Schmidt", company="X").startswith(
+        "Guten Tag Dr. Anna Schmidt,"
+    )
 
 
 def test_message_signs_with_sender() -> None:
@@ -26,14 +33,14 @@ def test_message_signs_with_sender() -> None:
 
 def test_message_from_company_only() -> None:
     msg = build_connection_message(company="Muster GmbH")
-    assert msg.startswith("Hallo,")
+    assert msg.startswith("Guten Tag,")
     assert "Muster GmbH" in msg
     assert len(msg) <= LINKEDIN_CONNECT_LIMIT
 
 
 def test_message_is_always_produced_even_with_nothing() -> None:
     msg = build_connection_message()
-    assert msg.startswith("Hallo,") and "vernetzen" in msg
+    assert msg.startswith("Guten Tag,") and "vernetzen" in msg
 
 
 def test_message_caps_a_very_long_title_at_the_limit() -> None:

@@ -70,7 +70,9 @@ async def test_enrich_listing_persists_a_contact_lead(
     assert len(leads) == 1
     assert leads[0].company == "Muster GmbH"
     assert leads[0].links["linkedin_company"]  # research links stored as JSON
-    assert leads[0].linkedin_message.startswith("Hallo Max,")  # connection message stored
+    assert leads[0].linkedin_message.startswith(
+        "Guten Tag Max Mustermann,"
+    )  # connection message stored
 
 
 def test_a_trailing_blank_in_the_first_name_does_not_double_the_space() -> None:
