@@ -73,8 +73,9 @@ Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 2. Persists every newly seen listing (lossless). On an empty database the first
    run seeds the full inventory without analysing or notifying.
 3. For each new, fresh listing (within the analysis window), runs the evaluation
-   pipeline: freshness gate, then hard rules from `constraints.yaml` (0 tokens),
-   then an LLM match against `profile.md` producing a structured verdict.
+   pipeline: freshness gate, then hard rules from `profile/private.yaml` (0 tokens),
+   then an LLM match against the profile read from sequenz.io, producing a
+   structured verdict.
 4. For every match at or above `MATCH_THRESHOLD`, sends a Telegram card whose
    **Bewerben** button opens a new Claude chat with that very card already in
    its prompt (a `claude.ai/new?q=…` link — the chat is created the moment you
@@ -123,41 +124,58 @@ docker compose -f compose.dev.yaml up -d   # local Postgres on :5432
 uv run project-pilot init-db               # apply migrations
 ```
 
-Forking this for yourself? Replace `profile/profile.md` (start from
-`profile/profile.example.md`) and the CVs in the Drive folder (`CV_DRIVE_FOLDER_ID`)
-with your own.
+Forking this for yourself? Point `PROFILE_URL` at your own site and replace the
+CVs in the Drive folder (`CV_DRIVE_FOLDER_ID`) with your own.
 
 ### Profile
 
-The two profile files feed the matcher, the hard rules, and the application drafts.
+**The profile is not in this repository.** It is the website's, fetched at boot,
+because a profile maintained in two places is a profile that is wrong in one of
+them — and the wrong one is always the copy nobody looks at. What cannot be
+published stays here.
 
 <details>
-<summary><b><code>profile/profile.md</code></b> — free-text profile, contact block, booking links</summary>
+<summary><b>The website</b> — <code>PROFILE_URL</code>, read fresh at every start</summary>
 
 <br>
 
-Positioning, skills, desired projects, no-gos, reference projects, and the
-application signature. It is **versioned on purpose** — this repo is a public
-portfolio piece, and it holds the same CV and contact block that goes out to
-clients anyway. Real secrets stay in `.env`.
+Two documents are read from `PROFILE_URL`:
 
-Its `Contact & Signature` block holds the values for the e-mail signature (name,
-title, `Phone`, `Email`, `Web`, `LinkedIn`, `GitHub`, plus `Location German` /
-`Location English` and `VAT ID`); the layout itself lives in the prompt, which
-looks these keys up by name — rename one there and here together. It ends with the
-two Notion Calendar booking links (`CTA German` / `CTA English`); the application
-generator picks the one matching the application language for the closing
-sentence, the signature, and the LinkedIn message.
+- `/<locale>.md` — the markdown twin of the profile page: positioning, skills,
+  reference projects, testimonials. Generated on the site from the same content
+  the page renders, so it cannot drift from what a human sees.
+- `/api/profile.json` — the figures prose carries imprecisely: availability,
+  capacity, the on-site ceiling, the rate, the booking links per language, the
+  platform profiles.
+
+project-pilot renders the second into an `Availability & terms` and a
+`Contact & Signature` block, because the application prompt looks values up by
+name (`Phone`, `Email`, `Web`, `LinkedIn`, `GitHub`, `CTA German` / `CTA English`,
+`Location German` / `Location English`, `VAT ID`) and a paragraph is the wrong
+place to look for a VAT id. The two ready-made sentences in the feed — availability
+and rate, per language — are quoted verbatim into the application.
+
+A failed fetch aborts and warns over Telegram. There is **no** fallback to an older
+copy: every verdict stores the `profile_hash` it was judged against, and a silent
+fallback would file today's verdict under yesterday's profile. Each new profile
+state is kept once in `profile_snapshots`, so that hash always names a text that
+still exists.
 
 </details>
 
 <details>
-<summary><b><code>profile/constraints.yaml</code></b> — deterministic rules, 0 tokens</summary>
+<summary><b><code>profile/private.yaml</code></b> — the half that cannot be published</summary>
 
 <br>
 
-`blacklist` terms and an optional `must_have`, both matched against the listing
-text before the LLM (0 tokens), plus `nogo_technologies`.
+The no-go industries (defence, adult) and the context-dependent no-go
+technologies. These are statements about clients rather than about skills, and a
+company homepage is the wrong place for them — so they stay in the repo and are
+appended to the fetched profile before the LLM sees it.
+
+The same file carries the deterministic rules: `blacklist` terms and an optional
+`must_have`, both matched against the listing text before the LLM (0 tokens), plus
+`nogo_technologies`.
 
 The last one is the profile's context-dependent no-gos (Java, PHP, WordPress,
 Django, SAP): they are deliberately **not** matched against the listing text — a
@@ -165,8 +183,9 @@ frontend role against a Java backend or a migration away from PHP stays welcome 
 but against the LLM's own answer. When the model reports one of them under
 `missing_requirements`, i.e. the listing requires the candidate to bring it and the
 profile does not cover it, the verdict is forced to `no_match` whatever the score,
-and the stored reason names the term (`nogo`). Matching is case-insensitive with
-word boundaries, so `java` never fires on "JavaScript".
+and the stored reason names the term (`nogo`). The term lists stay exact lists:
+matching is case-insensitive with word boundaries, so `java` never fires on
+"JavaScript" while `spring` still catches "Spring Boot".
 
 </details>
 
@@ -315,7 +334,7 @@ Only the scraper. Everything else was built source-agnostic and stays that way:
 |---|---|
 | `ingestion/parser.py`, `SEARCH_URLS`, `source_state` watermark | **yes** — freelancermap's HTML and pagination |
 | data model (`listings.source` per row, `source_state` keyed by source) | no |
-| evaluation (`constraints.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
+| evaluation (`private.yaml`, `match.v7.md`, the no-go gate) | no — neither prompt names a board |
 | application drafting, enrichment, sending | no |
 | MCP tools, the Claude chat, the Telegram card, the skills | no |
 
@@ -338,7 +357,7 @@ change how applications are written.
 | **Revise** | Say what you want changed ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft is rewritten in place. Paste or attach a screenshot and it goes to the model as vision input, so a picture of the client's reply or of a listing detail can drive the revision. |
 | **Send** | Only after you have read the draft and said so. `send_application` delivers it through your SMTP server with the CVs attached; a status guard makes a second send impossible, and a failure keeps the draft intact. |
 | **CV attachments** | Every sent e-mail carries both configured CV PDFs (DE and EN); the draft language only decides which one leads. The draft names them in a `📎 Attachments` line beforehand, including any CV that could not be fetched, so a gap is visible before the send rather than after. |
-| **Signature** | Every draft closes with a signature block in the draft's language: the `-- ` separator (RFC 3676), the greeting inside the block, name and title, `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link, then location and VAT ID — values from `profile.md`, layout from the prompt. The confidentiality notice follows as the last block. |
+| **Signature** | Every draft closes with a signature block in the draft's language: the `-- ` separator (RFC 3676), the greeting inside the block, name and title, `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link, then location and VAT ID — values from the website's profile feed, layout from the prompt. The confidentiality notice follows as the last block. |
 
 > [!IMPORTANT]
 > Nothing else in the system can reach outward, which is the point: the model reads
@@ -349,7 +368,7 @@ session: paste a listing, run `check_text`, then draft from it.
 
 ## Finding a contact (enrichment)
 
-Enrichment is optional and **off by default** (`ENRICHMENT_ENABLED=true` to switch
+Enrichment is always on — the apply flow needs a recipient (the text continues
 on). When a match names a company but no reachable e-mail, ask for the contact in
 the session (`enrich_company`) and project-pilot looks the company's contact
 channel up:
@@ -366,7 +385,7 @@ channel up:
 3. **LinkedIn connection message** — every result includes a short, personalized German
    **Vernetzungsnachricht** (≤300 chars, ready to copy) so you can send the connection
    request to the Ansprechpartner yourself. It signs with your name from
-   `profile.md` (Contact & Signature); `OUTREACH_OFFER_DU=true` (the default) offers
+   the profile's Contact & Signature block; `OUTREACH_OFFER_DU=true` (the default) offers
    first-name terms ("Gerne auch per Du.").
 
 The result comes back in the session (e-mails best-first, phone, named people, the
@@ -400,7 +419,7 @@ retry); only company pages are rendered, never LinkedIn or Google.
 
 `check_listing` (a stored listing) and `check_text` (a pasted description or
 recruiter mail) run anything through the same evaluation the scanner uses — hard
-rules from `constraints.yaml` first (0 tokens), then the LLM match against your
+rules from `profile/private.yaml` first (0 tokens), then the LLM match against your
 profile. Both return the verdict in full:
 
 - **Match (score ≥ `MATCH_THRESHOLD`)** — facts, reasons, matching skills, gaps and
@@ -510,7 +529,7 @@ The same posture governs **contact enrichment**: it reads only a company's own p
 website (the legally-required Impressum and its contact pages), with the identifying
 user agent, a per-host `robots.txt` gate, a spacing delay, and no 403 retry. It **does
 not scrape LinkedIn or Google** — those are only ever offered as search links you open
-yourself. Enrichment is off unless you set `ENRICHMENT_ENABLED=true`, and it processes
+yourself. Enrichment reads only company websites, and it processes
 personal contact data (names, e-mails, phone numbers) solely so you can apply to the
 project — use it accordingly and do not store or share the results beyond that purpose.
 

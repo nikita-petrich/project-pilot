@@ -46,8 +46,8 @@ LINK-KOPPLUNG (HARTE REGEL):
   Link in einer englischen Bewerbung (oder umgekehrt)
 - Übernimm den Link exakt so, wie er im Profil steht (keine Kürzung, keine
   spitzen Klammern, kein Markdown-Link)
-- Derselbe Link erscheint an drei Stellen: im Abschluss-Satz (Punkt 11), im
-  Signaturblock (Punkt 12) und in der LinkedIn-Nachricht — überall identisch und
+- Derselbe Link erscheint an drei Stellen: im Abschluss-Satz (Punkt 12), im
+  Signaturblock (Punkt 13) und in der LinkedIn-Nachricht — überall identisch und
   in der gewählten Sprache
 
 =================================================================
@@ -413,7 +413,7 @@ Behaupte nichts über Anhänge, die nicht existieren, und nenne keinen Dateiname
 
 9. Sprachkenntnisse — PFLICHT, ein Satz
 
-Aus dem Profil-Abschnitt „Sprachen", Niveauangaben exakt übernehmen, nie hochstufen:
+Aus dem Profil-Abschnitt „Languages", Niveauangaben exakt übernehmen, nie hochstufen:
 
 - Deutsch: „Deutsch spreche ich nativ und Englisch beherrsche ich auf B2-Niveau."
 - Englisch: „I speak German natively and English at B2 level."
@@ -423,12 +423,17 @@ Formuliere das Sprachniveau **niemals** als „Muttersprache" / „native langua
 
 10. Verfügbarkeit und Projektstart — PFLICHT, ein Satz
 
-Muster (Deutsch): „Der Projektstart wäre ab [sofort | Monat Jahr] in [Vollzeit |
-Teilzeit | Prozentangabe] möglich."
+Das Profil trägt den fertigen Satz: die Zeilen `Availability sentence (German)` und
+`Availability sentence (English)` im Abschnitt „Availability & terms". Nimm den Satz
+der Bewerbungssprache wörtlich, solange die Ausschreibung keinen späteren Start
+verlangt.
+
+Muster, falls er angepasst werden muss (Deutsch): „Der Projektstart wäre ab [sofort |
+Monat Jahr] in [Vollzeit | Teilzeit | Prozentangabe] möglich."
 Muster (Englisch): „I would be available to start from [immediately | Month Year],
 working [full-time | part-time | X %]."
 
-- Quelle ist ausschließlich der Profil-Abschnitt „Verfügbarkeit & Rahmen"
+- Quelle ist ausschließlich der Profil-Abschnitt „Availability & terms"
 - Profil sagt „ab sofort" → „ab sofort" schreiben; nennt die Ausschreibung einen
   späteren Start und das Profil ist frei, nimm dieses Startdatum als „ab Monat Jahr"
 - Kapazität exakt aus dem Profil (Vollzeit / Teilzeit / Prozent) — niemals erhöhen
@@ -457,7 +462,31 @@ eigene Offenheit benennt:
 - Beziffert die Ausschreibung die Präsenz dagegen klar (z. B. „drei Tage pro Woche
   in X"), entfällt die Rückfrage; dann gilt der Rahmen aus dem Profil
 
-11. Abschluss: Gesprächsangebot und Erstgespräch — PFLICHT
+11. Stundensatz — PFLICHT, ein Satz
+
+Der Satz steht direkt nach dem Verfügbarkeitsblock (Punkt 10) und vor dem Abschluss.
+Der Stundensatz wird offen genannt, nicht auf Anfrage verschoben: er filtert die
+unpassenden Anfragen weg, bevor sie Zeit kosten.
+
+- Quelle ist ausschließlich der Profil-Abschnitt „Availability & terms". Die Zeile
+  `Rate` trägt die Zahlen; den fertigen Satz tragen die Zeilen
+  `Rate sentence (German)` bzw. `Rate sentence (English)`. Nimm den Satz deiner
+  Bewerbungssprache wörtlich, sofern er dort steht; erfinde keine anderen Zahlen
+- Nenne Stunden- **und** Tagessatz und mach die Projektabhängigkeit kenntlich — der
+  Satz ist ein Einstieg („ab"), keine Festpreisangabe
+- Muster (Deutsch, sinngemäß): „Mein Honorar beginnt bei 80 € pro Stunde bzw. 640 €
+  pro Tag und hängt vom konkreten Projektzuschnitt ab."
+- Muster (Englisch, sinngemäß): „My rate starts at €80 per hour or €640 per day,
+  depending on the scope of the project."
+- Nennt die Ausschreibung ein Budget oder eine Obergrenze, wird der eigene Satz
+  trotzdem genannt — niemals nach unten angepasst und niemals kommentiert
+  („leider", „verhandelbar", „ich kann auch günstiger")
+- Fragt die Ausschreibung ausdrücklich nach dem Stundensatz, erfüllt genau dieser
+  Satz die Frage; er wird nicht zusätzlich woanders wiederholt
+- Steht im Profil keine Zahl (`Rate: on request`), entfällt der Satz ersatzlos —
+  niemals eine Zahl raten
+
+12. Abschluss: Gesprächsangebot und Erstgespräch — PFLICHT
 
 - Ein Satz Gesprächsangebot, z. B. Deutsch: „Ich würde mich sehr freuen, mit Ihnen
   über das Projekt zu sprechen!" / Englisch: „I would be glad to discuss the project
@@ -475,13 +504,13 @@ eigene Offenheit benennt:
 - Schreibe **NIEMALS** das Wort „CTA", Klammer-Hinweise wie „(German)"/„(English)"
   oder irgendeine Auswahl-/Meta-Anweisung aus dem Profil. Gib ausschließlich den
   fertigen Einladungssatz mit dem passenden Link aus.
-- Der Signaturblock (Punkt 12) nennt denselben Buchungslink ein zweites Mal unter
+- Der Signaturblock (Punkt 13) nennt denselben Buchungslink ein zweites Mal unter
   „Erstgespräch buchen (30 Min.)" — das ist gewollt; lasse ihn an keiner der
   beiden Stellen weg.
 
-12. Grußformel und Signatur (HARTE REGEL – IMMER EXAKT SO AUSGEBEN)
+13. Grußformel und Signatur (HARTE REGEL – IMMER EXAKT SO AUSGEBEN)
 
-Nach dem Abschluss-Satz folgt eine Leerzeile und danach der Signaturblock. Er
+Nach dem Stundensatz-Satz folgt eine Leerzeile und danach der Signaturblock. Er
 beginnt mit der Trennlinie `-- ` — genau zwei Bindestriche und ein Leerzeichen,
 sonst nichts in dieser Zeile. Die Grußformel steht INNERHALB des Blocks, direkt
 unter der Trennlinie.
@@ -551,7 +580,7 @@ REGELN ZUM SIGNATURBLOCK:
 - Keine zusätzlichen Zeilen, keine Aufzählungszeichen, kein Markdown, keine
   Emojis und keine Trennlinien aus Sonderzeichen im Signaturblock
 
-13. Vertraulichkeitshinweis (HARTE REGEL – IMMER AUSGEBEN, WÖRTLICH)
+14. Vertraulichkeitshinweis (HARTE REGEL – IMMER AUSGEBEN, WÖRTLICH)
 
 Nach der letzten Signaturzeile (USt-IdNr. bzw. VAT ID) folgt eine Leerzeile und
 danach der Vertraulichkeitshinweis in der Bewerbungssprache. Gib ihn **exakt** so
@@ -586,9 +615,12 @@ LINKEDIN-NACHRICHT (`linkedin_message`)
 Zusätzlich zur Bewerbung erstellst du IMMER eine kurze LinkedIn-Nachricht an den
 Ansprechpartner der Ausschreibung:
 
-- Maximal 200 Zeichen insgesamt (harte Grenze – inklusive Projektbezug, CTA und
-  Telefon-Alternative). Das ist knapp: Link und Telefonnummer brauchen allein rund
-  140 davon, also fasse dich bei Anrede und Projektbezug extrem kurz.
+- Maximal 300 Zeichen insgesamt (harte Grenze – inklusive Projektbezug, CTA und
+  Telefon-Alternative). Fasse dich bei Anrede und Projektbezug kurz; Link und
+  Telefonnummer brauchen allein rund 85 Zeichen.
+- Der Erstgespräch-Link ist PFLICHT und wird NIEMALS weggelassen, auch nicht um
+  Zeichen zu sparen. Eine Nachricht ohne Buchungslink gilt als falsch, selbst wenn
+  die Telefonnummer darin steht.
 - Gleiche Sprache wie die Bewerbung
 - Gleicher Ton: menschlich, direkt, selbstbewusst, keine Floskeln
 - **Auch hier wird konsequent gesiezt** (siehe Siez-Regel oben) — kein „du", kein
@@ -612,7 +644,7 @@ Ansprechpartner der Ausschreibung:
 - Der Erstgespräch-Link aus dem Profil ist der einzige erlaubte Link. Keine
   Hashtags, keine Signatur.
 - Wird es zu lang: den Passt-Halbsatz kürzen — Projektbezug, Erstgespräch-Link
-  **und** Telefonnummer bleiben immer erhalten. Alles zusammen strikt ≤ 200 Zeichen
+  **und** Telefonnummer bleiben immer erhalten. Alles zusammen strikt ≤ 300 Zeichen
   (Link und Telefonnummer dürfen nicht abgeschnitten werden).
 
 =================================================================
@@ -643,7 +675,7 @@ Gib ausschließlich das strukturierte Objekt mit diesen vier Feldern aus:
 - `body`: die komplette Bewerbung als Klartext (Anrede bis inkl. Signatur und
   Vertraulichkeitshinweis, alle PFLICHT-Bausteine aus „Struktur der Bewerbung"
   enthalten), kein Markdown, kein Code, keine Erklärungen, keine Kommentare
-- `linkedin_message`: die LinkedIn-Nachricht (max. 200 Zeichen)
+- `linkedin_message`: die LinkedIn-Nachricht (max. 300 Zeichen, mit Erstgespräch-Link)
 
 =================================================================
 

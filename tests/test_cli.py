@@ -1,11 +1,15 @@
 """CLI tests: settings application and command guards, no live services."""
 
+import json
 import logging
 
 import pytest
+import respx
 from typer.testing import CliRunner
 
-from project_pilot.cli import app, silence_request_logging
+from project_pilot.cli import _fetch_profile, app, silence_request_logging
+from project_pilot.config import Settings
+from project_pilot.errors import ProfileUnavailableError
 
 runner = CliRunner()
 
@@ -39,10 +43,27 @@ def test_test_match_rejects_url_with_listing_id(monkeypatch: pytest.MonkeyPatch)
     assert "--url only applies to pasted text" in result.output
 
 
-def test_enrich_requires_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("ENRICHMENT_ENABLED", raising=False)
-    result = runner.invoke(app, ["enrich", "ACME GmbH"])
-    assert result.exit_code != 0
+@respx.mock
+async def test_an_unreachable_profile_stops_the_work_and_says_so_on_telegram(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The whole failure mode this replaces: a worker that has quietly stopped
+    # scanning looks exactly like a quiet week, so silence is the one answer that
+    # must not happen. No fallback to an older profile either — see
+    # profile_source.py.
+    monkeypatch.setenv("PROFILE_URL", "https://profile.test")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:AAtest-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+    respx.get("https://profile.test/en.md").respond(503)
+    warning = respx.post("https://api.telegram.org/bot123456:AAtest-token/sendMessage").respond(
+        200, json={"ok": True}
+    )
+
+    with pytest.raises(ProfileUnavailableError):
+        await _fetch_profile(Settings())
+
+    assert warning.called
+    assert "Profil nicht abrufbar" in json.loads(warning.calls.last.request.content)["text"]
 
 
 def test_request_urls_are_kept_out_of_the_log() -> None:

@@ -29,8 +29,8 @@ be restored after a rebuild.
 | the image | GHCR | built per commit, tagged `sha-<short>` plus `latest` |
 | `compose.yaml` | repo (`compose.prod.yaml`) | overwritten on every deploy |
 | `compose.override.yaml` | generated | pins the exact image tag; do not edit |
-| `profile/profile.md` | repo | matching profile and signature block |
-| `profile/constraints.yaml` | repo | deterministic hard rules |
+| the profile | sequenz.io | matching profile and signature block, fetched at boot |
+| `profile/private.yaml` | repo | no-go industries/technologies + deterministic hard rules |
 | the CVs | public Google Drive folder | fetched by name and cached before each send |
 | `.env` | GitHub `prod` environment | rendered from its secrets and written on every deploy |
 | database | `pgdata` volume | survives deploys |
@@ -40,7 +40,7 @@ deploy replaces it. Change the secret instead and re-run the workflow.
 
 ## Updating the profile
 
-Replace `profile/profile.md` and push — there is no second mechanism and nothing to
+Edit the profile on sequenz.io and deploy the site — there is no second mechanism and nothing to
 do on the server; the deploy rebuilds the image:
 
 ```sh

@@ -41,6 +41,16 @@ class EnrichmentError(ProjectPilotError):
     """Contact enrichment could not run (nothing to look up, or search disabled)."""
 
 
+class ProfileUnavailableError(ProjectPilotError):
+    """The profile could not be fetched from the website.
+
+    Fatal on purpose: matching, the no-go guard and every application are written
+    against the profile, so continuing on a stale or partial one would produce
+    verdicts and drafts that silently describe somebody else. There is no
+    fallback to an older copy — the run stops and says so.
+    """
+
+
 def assert_defined[T](value: T | None, msg: str) -> T:
     """Return ``value`` when it is not ``None``, else raise ``ProjectPilotError``.
 

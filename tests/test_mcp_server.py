@@ -1,5 +1,6 @@
 """MCP server: tool payloads, tool registration, and the token guard."""
 
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 
 import httpx
@@ -7,7 +8,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from project_pilot.application.service import ApplicationService, DraftView
-from project_pilot.errors import ApplicationStateError
+from project_pilot.enrichment.links import build_links
+from project_pilot.enrichment.schemas import ContactDatum, ContactEnrichment
+from project_pilot.errors import ApplicationStateError, EnrichmentError
 from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.client import BASE_URL
 from project_pilot.ingestion.normalize import canonicalize_url, compute_url_hash
@@ -18,8 +21,10 @@ from project_pilot.mcp_server import (
     Send,
     _check_payload,
     _draft_payload,
+    _enrichment_payload,
     _listing_summary,
     build_mcp,
+    draft_application,
     enrich_company,
     get_listing,
     ingest_listing,
@@ -88,6 +93,13 @@ class _Threshold:
     threshold = 60
 
 
+class _NoEnricher:
+    """A stand-in for the tools that never enrich; calling it is the test failing."""
+
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment:
+        raise AssertionError("this tool must not run an enrichment lookup")
+
+
 def _deps(session_factory: async_sessionmaker[AsyncSession]) -> McpDeps:
     # The DB tools never run a check, draft or enrichment, so opaque stand-ins
     # are enough — constructing the real services would drag in OpenAI clients.
@@ -95,7 +107,7 @@ def _deps(session_factory: async_sessionmaker[AsyncSession]) -> McpDeps:
         session_factory=session_factory,
         check_service=_Threshold(),  # type: ignore[arg-type]
         application_service=None,  # type: ignore[arg-type]
-        enricher=None,
+        enricher=_NoEnricher(),
     )
 
 
@@ -177,7 +189,7 @@ def _bare_deps() -> McpDeps:
         session_factory=None,  # type: ignore[arg-type]
         check_service=CheckService.__new__(CheckService),
         application_service=ApplicationService.__new__(ApplicationService),
-        enricher=None,
+        enricher=_NoEnricher(),
     )
 
 
@@ -186,11 +198,19 @@ async def test_build_mcp_registers_all_tools() -> None:
     assert tools == EXPECTED_TOOLS
 
 
-async def test_enrich_company_disabled_raises(
+class _MissingListing:
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment:
+        raise EnrichmentError(f"Listing {listing_id} not found")
+
+
+async def test_enriching_a_listing_that_is_gone_answers_in_the_tool_protocol(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    with pytest.raises(ApplicationStateError, match="ENRICHMENT_ENABLED"):
-        await enrich_company(_deps(session_factory), listing_id=1)
+    # The lookup's own error would reach the chat as an unhandled exception; the
+    # chat needs a sentence it can read out instead.
+    deps = replace(_deps(session_factory), enricher=_MissingListing())
+    with pytest.raises(ApplicationStateError, match="not found"):
+        await enrich_company(deps, listing_id=999)
 
 
 async def test_list_matches_returns_feed_newest_first(
@@ -433,3 +453,92 @@ async def test_missing_argument_does_not_leave_a_raw_placeholder() -> None:
     text = str(rendered.messages[0].content)
     assert "{listing}" not in text
     assert "(not given)" in text
+
+
+class _FakeDrafts:
+    """Only the one call draft_application makes."""
+
+    def __init__(self, view: DraftView) -> None:
+        self._view = view
+
+    async def draft_for_listing(self, listing_id: int) -> DraftView:
+        return self._view
+
+
+class _Remover:
+    def __init__(self, *, fails: bool = False) -> None:
+        self.removed: list[int] = []
+        self._fails = fails
+
+    async def remove_card(self, listing_id: int) -> bool:
+        self.removed.append(listing_id)
+        if self._fails:
+            raise RuntimeError("telegram unreachable")
+        return True
+
+
+def _draft_deps(remover: _Remover | None) -> McpDeps:
+    view = DraftView(
+        application_id=7,
+        listing_id=447,
+        title="AI Developer",
+        url=None,
+        contact_name=None,
+        recipient=None,
+        subject="s",
+        body="b",
+        linkedin_message="l",
+        status=ApplicationStatus.AWAITING_EMAIL,
+        revision_count=0,
+    )
+    return McpDeps(
+        session_factory=None,  # type: ignore[arg-type]
+        check_service=CheckService.__new__(CheckService),
+        application_service=_FakeDrafts(view),  # type: ignore[arg-type]
+        enricher=_NoEnricher(),
+        card_remover=remover,
+    )
+
+
+async def test_drafting_retires_the_match_card() -> None:
+    # Telegram reports no press on a URL button, so the Bewerben tap itself is
+    # invisible; the draft it leads to is the first thing we can actually see.
+    remover = _Remover()
+
+    payload = await draft_application(_draft_deps(remover), listing_id=447)
+
+    assert remover.removed == [447]
+    assert payload["application_id"] == 7
+
+
+async def test_a_card_that_will_not_go_away_never_costs_the_draft() -> None:
+    # The feed's tidiness is cosmetic; the draft is the work.
+    payload = await draft_application(_draft_deps(_Remover(fails=True)), listing_id=447)
+    assert payload["application_id"] == 7
+
+
+async def test_drafting_without_telegram_configured_just_drafts() -> None:
+    payload = await draft_application(_draft_deps(None), listing_id=447)
+    assert payload["application_id"] == 7
+
+
+def test_the_enrichment_payload_says_where_the_connection_note_goes() -> None:
+    # The note and the profile it is pasted on belong together; shipping the note
+    # alone leaves the lookup as a manual step every single time.
+    result = ContactEnrichment(
+        company="Weissenberg Business Consulting GmbH",
+        person="Sebastian Koch",
+        website="https://weissenberg-solutions.de/",
+        links=build_links(company="Weissenberg Business Consulting GmbH", person="Sebastian Koch"),
+        linkedin_message="Guten Tag Sebastian Koch, …",
+        emails=[ContactDatum("i.strucken@weissenberg.de", "freelancermap")],
+    )
+
+    payload = _enrichment_payload(result)
+
+    search = payload["linkedin_search"]
+    assert isinstance(search, str)
+    assert search.startswith("https://www.linkedin.com/search/results/people/")
+    assert "Sebastian+Koch" in search
+    assert payload["links"] == asdict(result.links)
+    assert payload["emails"] == [{"value": "i.strucken@weissenberg.de", "source": "freelancermap"}]

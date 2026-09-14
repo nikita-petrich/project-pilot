@@ -58,6 +58,23 @@ one Nik can actually send:
 
 Say in one line which path you took (`via MCP, application_id N`).
 
+### The recipient is part of the job, not a leftover
+
+A draft with no recipient sits on `awaiting_email` and cannot be sent, so
+finding the address is this flow's work and not Nik's. Unless the contact data
+is already in this chat (the `enrich-company` skill ran, or the address stands
+in the listing text):
+
+1. `project_pilot_enrich_company(listing_id)` — read-only research, sends
+   nothing. Failing → say so in one line and carry on drafting; a draft without
+   a recipient still beats no draft.
+2. Set the best address with `project_pilot_set_recipient`, and say in one line
+   which one and where it came from. Each e-mail carries a `source`:
+   - `freelancermap` — the agency published it on their own company page. Take it.
+   - `web` — the Impressum crawl found it. Take it too, but say it is our own
+     find, so Nik can glance at it before the send he has to confirm anyway.
+   Nothing usable → leave the recipient unset and name it as the open point.
+
 ## 3. If the MCP tools are absent or erroring
 
 - **The project-pilot repository is checked out in this session**: follow the
@@ -77,7 +94,10 @@ each as a separate copyable block:
 - **subject** - one line, no "Betreff:" prefix.
 - **body** - the complete application as plain text, salutation through
   signature and confidentiality note. No markdown, no commentary inside it.
-- **linkedin_message** - max 300 characters.
+- **linkedin_message** - max 300 characters, booking link included. Print the
+  LinkedIn people search (`linkedin_search` from the draft) as a line **above**
+  it: a connection note is useless without the profile it goes to, and that
+  search is otherwise a manual step every single time.
 
 Put `body` and `linkedin_message` in fenced code blocks so they copy cleanly
 without formatting artifacts.

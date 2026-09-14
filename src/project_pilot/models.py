@@ -127,6 +127,9 @@ class Listing(Base):
         _pg_enum(ListingStatus, "listing_status"), default=ListingStatus.NEW
     )
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
+    # The Telegram message carrying this listing's card, so the card can be taken
+    # off the feed once the match has been taken up (see notification/telegram.py).
+    card_message_id: Mapped[int | None] = mapped_column(default=None)
 
     raw: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
 
@@ -251,3 +254,20 @@ class SourceState(Base):
     watermark_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None)
     consecutive_failures: Mapped[int] = mapped_column(default=0)
+
+
+class ProfileSnapshot(Base):
+    """One stored copy of a profile, keyed by the hash every verdict carries.
+
+    The profile now lives on the website and changes without a deploy, so
+    ``evaluations.profile_hash`` would otherwise point at a text that no longer
+    exists anywhere. Each new state is written once, the first time it is used, so
+    "what exactly was this judged against?" stays answerable months later.
+    """
+
+    __tablename__ = "profile_snapshots"
+
+    profile_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    text: Mapped[str] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(String(512), default="")
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

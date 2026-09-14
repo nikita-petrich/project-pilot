@@ -141,7 +141,7 @@ App (typer CLI, entry point `project_pilot.cli:app`):
   `uv run project-pilot test-match`
   (`--text`/`--file` for your own description, `--listing-id N` for a stored listing)
 - Dry-run the filter against a listing: `uv run project-pilot test-filter`
-- Find a company's contact data (opt-in `ENRICHMENT_ENABLED`): `uv run project-pilot enrich "<company>"` or `enrich --listing-id <id>`
+- Find a company's contact data: `uv run project-pilot enrich "<company>"` or `enrich --listing-id <id>`
 - Reporting summary: `uv run project-pilot stats`
 
 Database migrations (Alembic, async template): `uv run alembic upgrade head`
@@ -154,8 +154,11 @@ Container image (Feature 11): `docker build -t project-pilot .`
 Deployment: pushing to `main` runs the quality gate, builds the image into GHCR, and
 deploys to the VPS at `/opt/stacks/project-pilot` over SSH
 (`.github/workflows/deploy.yml`, see `docs/deployment.md`). The same gate runs on
-branches and PRs via `.github/workflows/ci.yml`. `profile/profile.md` is versioned and
-rides inside the image, so updating it is a commit; the CVs instead live in a public
+branches and PRs via `.github/workflows/ci.yml`. The profile is **not** in the image: it is read from
+sequenz.io at boot (the markdown twin `/<locale>.md` plus `/api/profile.json`), so
+updating it is a website deploy, not a commit here. Only `profile/private.yaml` —
+the no-go industries and technologies, which do not belong on a company homepage —
+is versioned and rides inside the image; the CVs instead live in a public
 Google Drive folder and are fetched by name before each send (see
 `application/cv_drive.py`), so updating one is a Drive upload, no deploy. The app's
 `.env` is rendered from the secrets and variables of the `prod` GitHub environment and

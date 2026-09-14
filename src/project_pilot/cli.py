@@ -29,7 +29,7 @@ from project_pilot.enrichment.render import PlaywrightFetcher
 from project_pilot.enrichment.schemas import ContactDatum, ContactEnrichment
 from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
 from project_pilot.enrichment.service import EnrichmentService
-from project_pilot.errors import EnrichmentError
+from project_pilot.errors import EnrichmentError, ProfileUnavailableError
 from project_pilot.evaluation.check import CheckService
 from project_pilot.evaluation.llm import (
     LlmMatcher,
@@ -39,9 +39,11 @@ from project_pilot.evaluation.llm import (
 )
 from project_pilot.ingestion.client import PolitenessClient
 from project_pilot.mcp_server import AsgiApp, McpDeps, build_app
+from project_pilot.notification.card import TelegramCardRemover
 from project_pilot.notification.telegram import TelegramNotifier
 from project_pilot.pipeline import Pipeline, RunOutcome
 from project_pilot.profile_loader import Profile, ProfileService
+from project_pilot.profile_source import WebProfileSource
 from project_pilot.reporting import ReportingService, format_report
 from project_pilot.scheduler import SchedulerRunner
 from project_pilot.selftest import SelfTestReport, SelfTestService, format_selftest
@@ -127,7 +129,7 @@ def _enrichment_service(
         if settings.enrichment_search == "duckduckgo"
         else NullSearchProvider()
     )
-    # The sender's own name comes from profile.md (Contact & Signature), the same
+    # The sender's own name comes from the profile (Contact & Signature), the same
     # source the application signature uses — no separate ENV needed.
     service = EnrichmentService(
         fetcher=page_fetcher,
@@ -144,8 +146,48 @@ def _enrichment_service(
     return service, closer
 
 
+def _profile_service(settings: Settings) -> ProfileService:
+    """The profile assembler: public half from the website, private half from the repo."""
+    return ProfileService(
+        Path("profile"),
+        WebProfileSource(base_url=settings.profile_url, locale=settings.profile_locale),
+    )
+
+
+async def _fetch_profile(settings: Settings) -> Profile:
+    """Load the profile, and make a failure loud before it can become a bad verdict.
+
+    There is no fallback to an older copy by design (see profile_source.py): a run
+    that cannot read the profile stops, and says so on the same channel the
+    matches arrive on, because a worker that has quietly stopped scanning looks
+    exactly like a quiet week.
+    """
+    try:
+        return await _profile_service(settings).load()
+    except ProfileUnavailableError as err:
+        logger.error("profile unavailable: %s", err)
+        if settings.has_telegram():
+            await _notifier(settings).notify_warning(
+                f"Profil nicht abrufbar — es wird nichts bewertet und nichts verschickt.\n\n{err}"
+            )
+        raise
+
+
+def _load_profile(settings: Settings) -> Profile:
+    """The sync entry point, for command bodies that build their services first.
+
+    Runs its own short event loop: it is called before the database engine exists,
+    so it cannot collide with the loop that engine will later be bound to.
+    """
+    try:
+        return asyncio.run(_fetch_profile(settings))
+    except ProfileUnavailableError as err:
+        typer.echo(f"profile unavailable: {err}")
+        raise typer.Exit(code=1) from err
+
+
 def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
-    profile = ProfileService(Path("profile")).load()
+    profile = _load_profile(settings)
     credentials = settings.require_llm()
     model = credentials.model
     engine = create_engine(settings.database_url)
@@ -196,7 +238,7 @@ def _build_cv_refresher(settings: Settings, cvs: CvAttachments) -> CvRefresher |
 def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[None]]]:
     """Wire the MCP server over the same services the pipeline uses."""
     token = settings.require_mcp()
-    profile = ProfileService(Path("profile")).load()
+    profile = _load_profile(settings)
     credentials = settings.require_llm()
     model = credentials.model
     engine = create_engine(settings.database_url)
@@ -221,21 +263,28 @@ def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[
         profile=profile,
         threshold=settings.match_threshold,
     )
-    enricher: EnrichmentService | None = None
-    enrichment_closer: Callable[[], Awaitable[None]] | None = None
-    if settings.has_enrichment():
-        enricher, enrichment_closer = _enrichment_service(settings, profile)
+    # The chat gets the same lookup the CLI gets: the listing-aware one, which
+    # knows the named contact, the e-mail already in the ad text and the board's
+    # own company page — and records the lead it found.
+    enricher, enrichment_closer = _enrichment_service(settings, profile)
+    listing_enricher = ListingEnrichmentService(session_factory=session_factory, service=enricher)
 
     deps = McpDeps(
         session_factory=session_factory,
         check_service=checker,
         application_service=service,
-        enricher=enricher,
+        enricher=listing_enricher,
+        # Without Telegram configured there is no card to retire; drafting simply
+        # leaves the feed alone rather than failing.
+        card_remover=(
+            TelegramCardRemover(session_factory=session_factory, notifier=_notifier(settings))
+            if settings.has_telegram()
+            else None
+        ),
     )
 
     async def closer() -> None:
-        if enrichment_closer is not None:
-            await enrichment_closer()
+        await enrichment_closer()
         await engine.dispose()
 
     return build_app(deps, token=token), closer
@@ -290,7 +339,7 @@ async def _run_selftest(
     settings: Settings, *, text: str | None, listing_id: int | None, url: str = ""
 ) -> SelfTestReport:
     """Wire the real checker and the push channel, then run one listing through both."""
-    profile = ProfileService(Path("profile")).load()
+    profile = await _fetch_profile(settings)
     credentials = settings.require_llm()
     model = credentials.model
     engine = create_engine(settings.database_url)
@@ -319,7 +368,7 @@ async def _run_enrich(
     person: str | None,
     url: str | None,
 ) -> ContactEnrichment:
-    service, closer = _enrichment_service(settings, ProfileService(Path("profile")).load())
+    service, closer = _enrichment_service(settings, await _fetch_profile(settings))
     engine = None
     try:
         if listing_id is not None:
@@ -453,10 +502,6 @@ def enrich(
 ) -> None:
     """Find a company's contact data (Impressum/website) plus LinkedIn/Google links."""
     settings = _load_settings()
-    if not settings.has_enrichment():
-        # The opt-in contract: no outbound search/fetch calls unless enabled.
-        typer.echo("enrich is disabled: set ENRICHMENT_ENABLED=true to allow web lookups")
-        raise typer.Exit(code=1)
     try:
         result = asyncio.run(
             _run_enrich(settings, company=company, listing_id=listing_id, person=person, url=url)

@@ -142,7 +142,12 @@ class Settings(BaseSettings):
     # session instead (the documented fallback, see notification/claude_link.py).
     claude_session_url: str = "https://claude.ai/new"
 
-    enrichment_enabled: bool = False
+    # Where the profile comes from. The site is the source of truth: the markdown
+    # twin (/<locale>.md) plus the figures feed (/api/profile.json). Only a
+    # different deployment of the same site belongs here.
+    profile_url: str = "https://sequenz.io"
+    profile_locale: str = "en"
+
     enrichment_search: str = "duckduckgo"
     enrichment_max_pages: int = 6
     enrichment_render: bool = False
@@ -276,13 +281,14 @@ class Settings(BaseSettings):
             raise ConfigError("TELEGRAM_CHAT_ID must be set (the chat the bot sends to)")
         return self.telegram_bot_token, self.telegram_chat_id
 
+    def has_telegram(self) -> bool:
+        """Both halves present, so a card can be sent — and taken back off the feed."""
+        return bool(self.telegram_bot_token and self.telegram_chat_id)
+
     def require_mcp(self) -> str:
         if not self.mcp_token:
             raise ConfigError("MCP_TOKEN must be set (bearer token for the MCP server)")
         return self.mcp_token
-
-    def has_enrichment(self) -> bool:
-        return self.enrichment_enabled
 
     def has_smtp(self) -> bool:
         return bool(self.smtp_host and self.smtp_user and self.smtp_password)

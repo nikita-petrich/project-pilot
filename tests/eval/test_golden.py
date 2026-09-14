@@ -37,6 +37,7 @@ from project_pilot.evaluation.llm import (
     structured_client,
 )
 from project_pilot.profile_loader import ProfileService
+from project_pilot.profile_source import WebProfileSource
 
 
 def _configured_key() -> str:
@@ -77,10 +78,16 @@ def _cases() -> list[GoldenCase]:
 
 
 async def test_golden_set_accuracy() -> None:
-    profile = ProfileService(Path("profile")).load()
+    # The live profile, exactly as the worker reads it: the eval is worthless if it
+    # judges against a copy the worker would never see.
+    settings = load_settings()
+    profile = await ProfileService(
+        Path("profile"),
+        WebProfileSource(base_url=settings.profile_url, locale=settings.profile_locale),
+    ).load()
     # Built from the real settings, so the eval judges exactly the provider, key and
     # model the worker would use — the whole point of the gate.
-    credentials = load_settings().require_llm()
+    credentials = settings.require_llm()
     matcher = LlmMatcher(
         structured_client(credentials),
         model=credentials.model,

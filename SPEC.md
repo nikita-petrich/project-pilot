@@ -46,14 +46,14 @@ No Redis, no DB — versioned files in the repo, loaded into an in-memory object
 
 ```
 profile/
-├── profile.md          # free-text profile (goes into the LLM prompt): skills, experience,
+└── private.yaml        # the half that cannot be published (see README): no-go industries and
 │                       # desired projects, no-gos in prose
-└── constraints.yaml    # hard, deterministic rules (stage 2, no LLM):
+                     # technologies, plus the hard, deterministic rules (stage 2, no LLM):
                         # blacklist terms, must_have (e.g. remote), languages,
                         # nogo_technologies (stage 3 guard, see below)
 ```
 
-A `ProfileService` loads both at startup, validates `constraints.yaml` via Pydantic, and computes `profile_hash` (SHA-256) — the hash is **stored on every evaluation**, so reporting can later tell which profile version produced which verdict. Changing the profile = edit file, commit, restart container.
+A `ProfileService` fetches the public half from the website at startup (`/<locale>.md` plus `/api/profile.json`), appends the private half, validates `private.yaml` via Pydantic, and computes `profile_hash` (SHA-256) over the result — the hash is **stored on every evaluation**, and the text behind it is kept once in `profile_snapshots`, so reporting can later tell which profile version produced which verdict. Changing the public profile = edit the website and deploy it; a failed fetch aborts and warns, never falls back.
 
 ## 3. Core Domain Rules (the "nothing gets lost" semantics)
 
@@ -73,8 +73,8 @@ Two separate guarantees:
 ```
 Stage 0  Dedupe (url_hash)                     → known: only update last_seen_at
 Stage 1  Freshness gate                        → skipped_stale + reason JSON
-Stage 2  Hard rules (constraints.yaml)         → verdict no_match, reason: {rule, matched_term}   (0 tokens)
-Stage 3  LLM match against profile.md          → structured output (Pydantic model):
+Stage 2  Hard rules (private.yaml)             → verdict no_match, reason: {rule, matched_term}   (0 tokens)
+Stage 3  LLM match against the profile         → structured output (Pydantic model):
          { verdict: match|no_match, score: 0..100, reasons: list[str],
            matching_skills: list[str], missing_requirements: list[str], risk_flags: list[str] }
          + stored: model, prompt_version, profile_hash, tokens_in/out, latency_ms
@@ -117,8 +117,7 @@ project-pilot/
 ├── .python-version             # 3.13
 ├── .env.example
 ├── profile/
-│   ├── profile.md              # Nik fills in content
-│   └── constraints.yaml        # Nik fills in content
+│   └── private.yaml            # the unpublishable half; the rest comes from sequenz.io
 ├── docs/
 │   ├── compliance.md           # robots.txt/ToS snapshot from Feature 1
 │   └── adr/
@@ -139,7 +138,7 @@ project-pilot/
 │   │   └── watermark.py        # pagination stop criterion
 │   ├── evaluation/
 │   │   ├── schemas.py          # Pydantic: MatchVerdict, RuleResult
-│   │   ├── rules.py            # stage 2 (constraints.yaml), word boundaries incl. c#/c++/.net
+│   │   ├── rules.py            # stage 2 (private.yaml), word boundaries incl. c#/c++/.net
 │   │   ├── llm.py              # stage 3: OpenAI .parse() against MatchVerdict
 │   │   ├── nogo.py             # stage 3b: required-no-go guard over missing_requirements
 │   │   └── prompts/match.v1.md
@@ -175,7 +174,7 @@ Multi-platform later: one fetcher per source as an adapter (already cut that way
 
 ## 9. Open Items for Nik
 
-1. Fill in `profile/profile.md` + `constraints.yaml` (skills, desired projects, no-gos, hard rules).
+1. Publish the profile on the website and fill in `profile/private.yaml` (no-gos, hard rules).
 2. Assemble 1–3 search URLs on the project board and set them as `SEARCH_URLS`.
 3. Create the Telegram bot via @BotFather, token + chat ID into `.env`.
 4. Adjust `MATCH_THRESHOLD` after the first days based on the stored verdicts.

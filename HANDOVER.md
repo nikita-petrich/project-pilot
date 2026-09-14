@@ -76,8 +76,9 @@ synthetic fixtures (`tests/fixtures/`).
 
 Before the first live run:
 
-1. **Fill the profile.** Edit `profile/profile.md` (free-text profile) and
-   `profile/constraints.yaml` (blacklist / must-have). These drive the matcher and
+1. **Fill the profile.** The public half lives on sequenz.io (`/<locale>.md` +
+   `/api/profile.json`); the unpublishable half is `profile/private.yaml`
+   (no-gos, blacklist / must-have). These drive the matcher and
    the hard rules.
 2. **Verify the source live** (on a networked machine). Read `robots.txt` and the
    Terms of Service; confirm the board paths are allowed and automated access is

@@ -45,9 +45,16 @@ Present what came back, compactly:
 ✉️  <address> (<source>) — best first
 📞 <number> (<source>)
 👤 persons / roles
-🔗 research links worth opening
+🙋 <linkedin_search> — the contact person on LinkedIn
+👥 <links.linkedin_company> — the company on LinkedIn
+🔎 <links.google_contact> — Impressum/contact search
+✍️  <linkedin_message> — ready to paste
 ```
 
+- The `linkedin_message` is a connection note, so it never stands alone: print
+  `linkedin_search` directly above it. A note without the profile it goes to is
+  half an answer, and finding that profile is otherwise a manual step every
+  single time.
 - Empty result: say so plainly and suggest the research links for a manual
   look. Do not scrape further on your own or invent contacts.
 - Mention in one line that the lookup is stored (append-only), so repeated
@@ -59,6 +66,9 @@ If the user wants to use a found address for an application, point to
 `set_recipient` via the send flow (`send-application`). This skill only finds
 and reports - it never sets recipients and never sends.
 
-If the MCP tools are absent or the enrichment feature is disabled
-(`ENRICHMENT_ENABLED` off), say exactly that instead of improvising a web
-search.
+Running inside an application flow is the exception that proves the rule: when
+`write-application` calls this research itself, that skill sets the recipient
+from what came back. It still never sends.
+
+If the MCP tools are absent or the lookup errors, say exactly that instead of
+improvising a web search.

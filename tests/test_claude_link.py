@@ -109,7 +109,10 @@ def test_a_stored_listing_cannot_grow_the_link_however_verbose_its_verdict() -> 
         reasons=["x" * 900, "y" * 900, "z" * 900],
     )
     assert session_link(huge) == session_link(_message())
-    assert len(session_link(huge)) < 1_000
+    # Comfortably clear of the ceiling: the fixed order is allowed to grow a step
+    # (it gained the contact research), but never to approach the budget, which
+    # only the unstored path — carrying its card inline — may come near.
+    assert len(session_link(huge)) < MAX_URL_CHARS // 2
 
 
 def test_an_oversized_unstored_card_drops_the_facts_rather_than_the_button() -> None:
@@ -126,3 +129,19 @@ def test_an_oversized_unstored_card_drops_the_facts_rather_than_the_button() -> 
     assert prompt.startswith("⭐ 87 · Senior Python Developer · ACME GmbH")
     assert "Skill write-application" in prompt
     assert "Skill-0" not in prompt
+
+
+def test_the_order_researches_the_contact_before_it_drafts() -> None:
+    # Without this step the draft lands on "awaiting_email" and the recipient has
+    # to be looked up by hand — the one manual step between a match and a
+    # sendable application.
+    order = session_prompt(_message())
+    assert (
+        order.index("match-card") < order.index("enrich-company") < order.index("write-application")
+    )
+    assert "Empfänger" in order
+
+
+def test_an_unstored_listing_is_not_sent_researching_a_row_that_does_not_exist() -> None:
+    # A test-match has no listing_id, so there is nothing to enrich against.
+    assert "enrich-company" not in session_prompt(_message(listing_id=None))

@@ -162,6 +162,14 @@ class Pipeline:
                 return RunOutcome(status=RunStatus.SUCCESS, error="skipped: in cooldown")
 
             run_id = (await repo.start_run()).id
+            # Before anything is judged: keep the profile this run will stamp on
+            # every verdict, so the hash never outlives the text it stands for.
+            if await repo.ensure_profile_snapshot(
+                profile_hash=self._profile.profile_hash,
+                text=self._profile.text,
+                source_url=self._profile.source_url,
+            ):
+                logger.info("new profile state recorded: %s", self._profile.profile_hash[:12])
             try:
                 await self._execute(repo, search_urls, now, outcome, state.watermark_at)
             except SourceBlockedError as err:
@@ -530,7 +538,7 @@ class Pipeline:
                 if message_id is None:
                     failed += 1
                     continue
-                await repo.mark_notified([listing], now)
+                await repo.mark_notified([listing], now, card_message_id=message_id)
                 await session.commit()
                 outcome.notified += 1
                 logger.info("match sent: %s (message %s)", listing.external_url, message_id)

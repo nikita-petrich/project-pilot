@@ -36,15 +36,24 @@ NEW_CHAT_URL = "https://claude.ai/new"
 # card inline, and because 4,096 is the length every client is known to honour.
 MAX_URL_CHARS = 4_096
 
-# Both skills, in order, so one tap yields the overview *and* the draft. Naming
-# them beats describing the work: the account carries them, and the card's layout
-# and the writing rules live behind them rather than in this string.
+# All three skills, in order, so one tap yields the overview, the contact data
+# *and* the draft. Naming them beats describing the work: the account carries
+# them, and the card's layout and the writing rules live behind them rather than
+# in this string.
+#
+# The research step earns its place by what it removes: without it the draft
+# lands on "awaiting_email" and the recipient has to be looked up by hand, which
+# is the one manual step between a match and a sendable application.
 TASK_STORED = (
-    "AUFTRAG — beides nacheinander, sofort und ohne Rückfrage:\n"
+    "AUFTRAG — alles nacheinander, sofort und ohne Rückfrage:\n"
     "1. Skill match-card für Listing {listing_id} — zeig mir die vollständige "
     "Übersichtskarte.\n"
-    "2. Skill write-application für dasselbe Listing — zeig mir Betreff, Anschreiben "
-    "und LinkedIn-Nachricht."
+    "2. Skill enrich-company für dasselbe Listing — recherchier die Kontaktdaten und "
+    "zeig sie mir mit Herkunft je Angabe. Schlägt das fehl, sag in genau einer Zeile "
+    "warum und mach trotzdem weiter.\n"
+    "3. Skill write-application für dasselbe Listing — zeig mir Betreff, Anschreiben "
+    "und LinkedIn-Nachricht. Hat die Recherche eine brauchbare Adresse ergeben, hinterleg "
+    "sie als Empfänger am Entwurf und schreib in einer Zeile dazu, welche und woher."
 )
 # The unstored twin (a test-match run): there is no row to fetch a card for, so
 # the alert's own text is the only copy of the facts there is.

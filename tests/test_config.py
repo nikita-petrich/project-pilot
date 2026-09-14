@@ -175,21 +175,28 @@ def test_require_smtp_honors_from_and_port(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_enrichment_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    for var in ("ENRICHMENT_ENABLED", "ENRICHMENT_SEARCH", "ENRICHMENT_MAX_PAGES"):
+    # There is no on/off switch any more: the apply flow needs a recipient, and
+    # looking one up by hand is the step the lookup exists to remove.
+    for var in ("ENRICHMENT_SEARCH", "ENRICHMENT_MAX_PAGES"):
         monkeypatch.delenv(var, raising=False)
     settings = Settings()
-    assert settings.enrichment_enabled is False
-    assert settings.has_enrichment() is False
     assert settings.enrichment_search == "duckduckgo"
     assert settings.enrichment_max_pages == 6
 
 
-def test_enrichment_enabled_and_search_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ENRICHMENT_ENABLED", "true")
+def test_search_provider_is_normalized(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENRICHMENT_SEARCH", "NONE")
+    assert Settings().enrichment_search == "none"
+
+
+def test_profile_defaults_to_the_live_website(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The profile is the site's, not the repo's; only a different deployment of
+    # the same site belongs in these two.
+    for var in ("PROFILE_URL", "PROFILE_LOCALE"):
+        monkeypatch.delenv(var, raising=False)
     settings = Settings()
-    assert settings.has_enrichment() is True
-    assert settings.enrichment_search == "none"
+    assert settings.profile_url == "https://sequenz.io"
+    assert settings.profile_locale == "en"
 
 
 def test_unknown_search_provider_rejected(monkeypatch: pytest.MonkeyPatch) -> None:

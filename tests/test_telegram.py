@@ -21,6 +21,7 @@ from project_pilot.notification.telegram import (
 BOT_TOKEN = "123456:AAtest-token"
 CHAT_ID = "987654321"
 SEND_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+DELETE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage"
 SENT = {"ok": True, "result": {"message_id": 5150}}
 CHAT_URL = "https://claude.ai/new"
 
@@ -178,3 +179,24 @@ async def test_notify_returns_none_when_telegram_names_no_message_id() -> None:
     """A send whose id is unknown counts as failed, so it is retried next run."""
     respx.post(SEND_URL).respond(200, json={"ok": True, "result": {}})
     assert await _notifier().notify(_message()) is None
+
+
+@respx.mock
+async def test_a_taken_up_card_is_deleted_from_the_feed() -> None:
+    # Applying retires the card the same way declining does; only the trigger
+    # differs, because Telegram reports no press on a URL button.
+    route = respx.post(DELETE_URL).respond(200, json={"ok": True, "result": True})
+
+    assert await _notifier().delete_card(5150) is True
+    assert json.loads(route.calls.last.request.content)["message_id"] == 5150
+
+
+@respx.mock
+async def test_a_card_that_will_not_delete_is_not_an_error() -> None:
+    # Telegram refuses a message older than 48 hours, and a declined card is
+    # already gone. Neither may cost the draft that asked for the removal.
+    respx.post(DELETE_URL).respond(
+        400, json={"ok": False, "description": "message to delete not found"}
+    )
+
+    assert await _notifier().delete_card(5150) is False

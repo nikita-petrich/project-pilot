@@ -1,0 +1,76 @@
+# The half of the profile that cannot be published.
+#
+# Everything a client may read lives on sequenz.io and is fetched at runtime (see
+# profile_source.py). What stands here is the part that has no business on a
+# company homepage: which industries are refused outright, and which technologies
+# are refused when they would be the candidate's own job. Announcing "no defence,
+# no adult industry" to every visitor is a statement about clients, not about
+# skills, and the technology list reads as a list of gaps to anyone who does not
+# know it is a preference.
+#
+# The term lists stay exact lists on purpose. Matching is case-insensitive and on
+# word boundaries, so `java` never fires on "JavaScript" while `spring` still
+# covers "Spring Boot" — a fuzzier rule would cost one of those two.
+
+# Hard, deterministic rules (stage 2) — applied BEFORE the LLM, cost 0 tokens.
+blacklist: []          # empty list (not null!) => no hard-blocked terms
+  # Intentionally empty. The no-gos below are all CONTEXT-DEPENDENT: a "migrate
+  # away from WordPress/PHP" project, a frontend-only role with an X backend, or
+  # an integration from a modern stack are all desirable. A 0-token literal match
+  # cannot tell those apart, so the judgement is left to the LLM and to
+  # `nogo_technologies`. Add a term here only for a TRULY unconditional exclusion
+  # that no context could rescue.
+
+must_have: []          # optional: terms of which at least one must appear
+
+languages: [de, en]    # listing languages that are accepted
+
+# Context-dependent no-go technologies. NOT matched against the listing text — a
+# frontend role against a Java backend, or a migration away from PHP, stays
+# welcome. They are enforced on the LLM's own answer: when the model reports one
+# of these under `missing_requirements` (the listing requires the candidate to
+# bring it and the profile does not cover it), the verdict is forced to no_match,
+# whatever the score. See evaluation/nogo.py.
+nogo_technologies:
+  - java
+  - spring          # also matches "Spring Boot", "Spring Framework"
+  - jakarta ee
+  - java ee
+  - jsf
+  - php
+  - laravel
+  - symfony
+  - wordpress
+  - typo3
+  - django
+  - sap
+  - abap
+
+# Appended verbatim to the fetched profile text, so the LLM judges against the
+# whole picture while the website shows only the public half.
+no_gos: |
+  ## No-gos
+
+  ### Industries (unconditional — no context rescues these)
+
+  No project in these sectors, regardless of role, stack, rate, or how interesting
+  the technology is. Treat as an immediate no-match, whether the client is the
+  sector itself or a direct supplier/service provider to it.
+
+  - **Defense / military / weapons** — armed forces, defense contractors, weapons and
+    ammunition, military intelligence and surveillance, dual-use projects with a
+    clearly military purpose
+  - **Adult industry** — pornography, erotica, sex work platforms, adult dating and
+    cam sites, adult toy/content commerce
+
+  ### Technologies (context decides)
+
+  Migrating *away* from a technology, a role at a different layer (e.g. frontend
+  against an X backend), or integration from a modern stack are all fine. Match on
+  the role, not on the bare keyword.
+
+  - **Java** — not as my own development language (frontend against a Java backend is fine)
+  - **PHP** (incl. Laravel/Symfony) — except migrating away from it
+  - **WordPress** — except replacing/migrating it to a modern stack
+  - **Django** — except migrating away from it (Python backend welcome with FastAPI/Flask)
+  - **SAP** (ABAP / SAP custom development) — except plain integration from a modern stack

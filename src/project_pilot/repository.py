@@ -14,6 +14,7 @@ from project_pilot.models import (
     Evaluation,
     EvaluationStage,
     Listing,
+    ProfileSnapshot,
     Run,
     RunStatus,
     SourceState,
@@ -170,10 +171,51 @@ class Repository:
         rows = await self._session.scalars(stmt)
         return rows.unique().all()
 
-    async def mark_notified(self, listings: Iterable[Listing], when: datetime) -> None:
+    async def mark_notified(
+        self, listings: Iterable[Listing], when: datetime, *, card_message_id: int | None = None
+    ) -> None:
+        """Record the successful push, and which message carries the card.
+
+        ``card_message_id`` is what lets the card be taken off the feed later; a
+        suppressed match (marked handled without a push) simply passes none.
+        """
         for listing in listings:
             listing.notified_at = when
+            if card_message_id is not None:
+                listing.card_message_id = card_message_id
         await self._session.flush()
+
+    async def take_card_message_id(self, listing_id: int) -> int | None:
+        """Hand out the listing's card message id **once**, clearing it.
+
+        Clearing is the point: deleting a Telegram message is not idempotent from
+        the caller's side, so a second attempt would ask the API to remove a
+        message that is already gone and log a failure for nothing.
+        """
+        listing = await self._session.get(Listing, listing_id)
+        if listing is None or listing.card_message_id is None:
+            return None
+        message_id = listing.card_message_id
+        listing.card_message_id = None
+        await self._session.flush()
+        return message_id
+
+    async def ensure_profile_snapshot(
+        self, *, profile_hash: str, text: str, source_url: str = ""
+    ) -> bool:
+        """Store this profile state if it is new; True when a row was written.
+
+        Called wherever a ``profile_hash`` is about to be stamped on a row. Cheap
+        to repeat — a primary-key lookup — and the alternative is a hash in the
+        evaluations table pointing at a text nobody kept.
+        """
+        if await self._session.get(ProfileSnapshot, profile_hash) is not None:
+            return False
+        self._session.add(
+            ProfileSnapshot(profile_hash=profile_hash, text=text, source_url=source_url)
+        )
+        await self._session.flush()
+        return True
 
     async def get_listing(self, listing_id: int) -> Listing | None:
         return await self._session.get(Listing, listing_id)

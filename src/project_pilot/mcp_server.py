@@ -15,7 +15,7 @@ sends either way.
 import hmac
 import logging
 from collections.abc import Awaitable, Callable, MutableMapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -26,7 +26,7 @@ from project_pilot.application.service import ApplicationService, DraftView
 from project_pilot.db import session_scope
 from project_pilot.enrichment.links import linkedin_people_url
 from project_pilot.enrichment.schemas import ContactEnrichment
-from project_pilot.errors import ApplicationStateError, assert_defined
+from project_pilot.errors import ApplicationStateError, EnrichmentError, assert_defined
 from project_pilot.evaluation.check import CheckResult, CheckService
 from project_pilot.ingestion.manual import build_manual_listing
 from project_pilot.mcp_prompts import PROMPTS, render
@@ -43,15 +43,22 @@ AsgiApp = Callable[[Scope, Receive, Send], Awaitable[None]]
 
 
 class Enricher(Protocol):
-    async def enrich(
-        self,
-        *,
-        company: str | None,
-        person: str | None = None,
-        title: str | None = None,
-        known_url: str | None = None,
-        known_email: str | None = None,
-    ) -> ContactEnrichment: ...
+    """The listing-aware lookup, so a chat gets exactly what the CLI gets.
+
+    Deliberately not the bare ``EnrichmentService``: that one knows nothing about
+    a stored listing, so calling it here meant re-deriving the subject badly —
+    without the named contact, without the e-mail already in the ad text, and
+    without the board's own company page, which is the single best source there
+    is. It also stored no ``contact_leads`` row, so a chat's research vanished.
+    """
+
+    async def enrich_listing(self, listing_id: int) -> ContactEnrichment: ...
+
+
+class CardRemover(Protocol):
+    """Takes a listing's Telegram match card off the feed; False if there was none."""
+
+    async def remove_card(self, listing_id: int) -> bool: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +68,8 @@ class McpDeps:
     session_factory: async_sessionmaker[AsyncSession]
     check_service: CheckService
     application_service: ApplicationService
-    enricher: Enricher | None
+    enricher: Enricher
+    card_remover: CardRemover | None = None
 
 
 def _listing_summary(listing: Listing) -> dict[str, object]:
@@ -172,6 +180,11 @@ def _enrichment_payload(result: ContactEnrichment) -> dict[str, object]:
         "persons": [datum.as_json() for datum in result.persons],
         "company_page": result.company_page,
         "linkedin_message": result.linkedin_message,
+        # Where the note goes. A connection note without the profile to paste it
+        # on is half an answer, and this search is the step that would otherwise
+        # be done by hand every single time.
+        "linkedin_search": result.links.linkedin_people,
+        "links": asdict(result.links),
         "sources": result.sources,
     }
 
@@ -278,7 +291,21 @@ async def check_text(deps: McpDeps, text: str) -> dict[str, object]:
 
 
 async def draft_application(deps: McpDeps, listing_id: int) -> dict[str, object]:
-    return _draft_payload(await deps.application_service.draft_for_listing(listing_id))
+    """Draft for one listing, and retire its match card.
+
+    Drafting is the first unambiguous act of applying, which is why the card is
+    removed here rather than on the Bewerben tap: Telegram reports no tap on a URL
+    button (see :mod:`project_pilot.notification.telegram`). Removal is
+    best-effort — a card that will not go away is cosmetic, and must never cost
+    the draft.
+    """
+    payload = _draft_payload(await deps.application_service.draft_for_listing(listing_id))
+    if deps.card_remover is not None:
+        try:
+            await deps.card_remover.remove_card(listing_id)
+        except Exception as err:  # never let the feed's tidiness break the draft
+            logger.info("match card for listing %s not removed: %s", listing_id, err)
+    return payload
 
 
 async def revise_application(
@@ -296,21 +323,11 @@ async def send_application(deps: McpDeps, application_id: int) -> dict[str, obje
 
 
 async def enrich_company(deps: McpDeps, listing_id: int) -> dict[str, object]:
-    if deps.enricher is None:
-        raise ApplicationStateError("Contact enrichment is disabled (ENRICHMENT_ENABLED)")
-    async with session_scope(deps.session_factory) as session:
-        listing = await Repository(session).get_listing(listing_id)
-        if listing is None:
-            raise ApplicationStateError(f"Project {listing_id} not found")
-        company = _raw_company(listing)
-        title = listing.title
-    result = await deps.enricher.enrich(company=company, title=title)
+    try:
+        result = await deps.enricher.enrich_listing(listing_id)
+    except EnrichmentError as err:
+        raise ApplicationStateError(str(err)) from err
     return _enrichment_payload(result)
-
-
-def _raw_company(listing: Listing) -> str | None:
-    value = listing.raw.get("company")
-    return value if isinstance(value, str) and value.strip() else None
 
 
 def build_mcp(deps: McpDeps) -> FastMCP:

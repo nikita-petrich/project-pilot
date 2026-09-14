@@ -1,4 +1,4 @@
-"""Stage 2 deterministic rule engine over constraints.yaml."""
+"""Stage 2 deterministic rule engine over the profile's private half (private.yaml)."""
 
 import re
 from dataclasses import dataclass

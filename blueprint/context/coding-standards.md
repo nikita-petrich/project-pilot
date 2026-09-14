@@ -10,7 +10,7 @@
 - Python 3.13, complete type annotations everywhere; `mypy --strict` is the gate before every `/check`
 - No `Any` — `object`/generic TypeVars + narrowing; `cast()` only at system boundaries (parsed LLM output, raw data) and always directly behind a Pydantic validation
 - Null safety via `assert_defined[T](value: T | None, msg: str) -> T` in `errors.py` (PEP-695 generic): raises a domain error with a meaningful message instead of scattered `# type: ignore` or bare `assert`
-- Pydantic v2 models are the source of truth for config, constraints.yaml, and LLM verdicts; derive types from them, no parallel definitions
+- Pydantic v2 models are the source of truth for config, the profile's private half, the website's profile feed, and LLM verdicts; derive types from them, no parallel definitions
 - Modern syntax: `X | None` instead of `Optional[X]`, `list[str]` instead of `List[str]`, `StrEnum` for domain enums
 
 ## Async & Architecture

@@ -6,12 +6,21 @@ depend on a model deciding a run is "worth telling you about", which is how a
 Claude-side push lost notifications before — and the platform still offers no
 guaranteed push for a cloud session, so the alert stays in code.
 
-Send-only, deliberately. There is no polling loop, no webhook and no inbound
+Outbound-only, deliberately. There is no polling loop, no webhook and no inbound
 port here. The card is a decision surface and nothing more: two of its three
 buttons are plain links — the original listing, and a new Claude chat with
 the card already in its prompt (``claude_link.py``) — and only **Ablehnen**
 needs a process to hear the press (``telegram_bot.py``, which does exactly that
 and nothing else).
+
+**Why Bewerben cannot be heard.** Telegram sends an update for a callback button
+and none at all for a URL button, and a callback cannot open an arbitrary URL in
+answer. A tap on Bewerben is therefore invisible to us, and making it audible
+would cost the one tap that is the whole point of the card. So the card is not
+removed on the tap but on its consequence: the chat that opens drafts the
+application, and that draft takes the card off the feed over ``delete_card``
+(:mod:`project_pilot.mcp_server`). A tap that leads nowhere leaves the card
+standing, which is the right outcome.
 
 The target is the private chat between Nik and the bot. A bot may delete its
 own messages there, which is what makes a declined match vanish from the feed.
@@ -78,11 +87,13 @@ def match_keyboard(
 
     Bewerben and the listing are URL buttons: a tap opens a new Claude chat
     (this very card in its prompt) or the original ad, with no process in
-    between. Ablehnen is the one callback; it carries the listing id so a press
-    is unambiguous in the log, but the bot never looks the id up (deleting the
-    card is the whole job), so an unstored listing (test-match) still gets a
-    working Ablehnen with an empty id. A card without a real link (an ingested
-    text) gets no link button.
+    between. That costs the press itself — Telegram reports no URL tap — so the
+    card leaves the feed when the chat drafts the application, not when the
+    button is touched (see the module docstring). Ablehnen is the one callback;
+    it carries the listing id so a press is unambiguous in the log, but the bot
+    never looks the id up (deleting the card is the whole job), so an unstored
+    listing (test-match) still gets a working Ablehnen with an empty id. A card
+    without a real link (an ingested text) gets no link button.
     """
     listing_id = message.listing_id if message.listing_id is not None else ""
     top: list[dict[str, object]] = [
@@ -139,6 +150,20 @@ class TelegramNotifier:
             )
         except httpx.HTTPError as err:
             logger.warning("telegram warning send failed: %s", err)
+            return False
+        return True
+
+    async def delete_card(self, message_id: int) -> bool:
+        """Take one card off the feed; False if Telegram refused.
+
+        Best-effort by design: a card that cannot be deleted (already gone, or
+        older than Telegram's 48-hour window for bot deletions) is a cosmetic
+        problem, never a reason to fail the work that triggered the removal.
+        """
+        try:
+            await self._post("deleteMessage", {"message_id": message_id})
+        except httpx.HTTPError as err:
+            logger.info("telegram card %s not deleted: %s", message_id, err)
             return False
         return True
 

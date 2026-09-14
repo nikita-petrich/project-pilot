@@ -216,7 +216,7 @@ class ApplicationService:
                 contact_name=contact_name,
                 company=_raw_str(listing.raw or {}, "company"),
             )
-            await repo.add_application(application)
+            await self._persist(repo, application)
             return self._view(application)
 
     async def draft_from_parsed(self, parsed: ParsedListing) -> DraftView:
@@ -239,7 +239,7 @@ class ApplicationService:
                 contact_name=contact_name,
                 company=_raw_str(parsed.raw, "company"),
             )
-            await repo.add_application(application)
+            await self._persist(repo, application)
             return self._view(application)
 
     async def draft_from_text(
@@ -273,7 +273,7 @@ class ApplicationService:
                 recipient=extract_email(text),
                 contact_name=contact_name,
             )
-            await repo.add_application(application)
+            await self._persist(repo, application)
             return self._view(application)
 
     async def revise(
@@ -456,6 +456,19 @@ class ApplicationService:
             tokens_in=generated.tokens_in,
             tokens_out=generated.tokens_out,
         )
+
+    async def _persist(self, repo: Repository, application: Application) -> None:
+        """Store the draft, and the profile state it was written against.
+
+        The profile lives on the website now and changes without a deploy, so the
+        ``profile_hash`` on this row would otherwise name a text that is gone.
+        """
+        await repo.ensure_profile_snapshot(
+            profile_hash=self._profile.profile_hash,
+            text=self._profile.text,
+            source_url=self._profile.source_url,
+        )
+        await repo.add_application(application)
 
     async def _editable(self, repo: Repository, application_id: int) -> Application:
         application = await repo.get_application(application_id)

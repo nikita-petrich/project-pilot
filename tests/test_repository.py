@@ -4,7 +4,14 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from project_pilot.models import Evaluation, EvaluationStage, Listing, RunStatus, Verdict
+from project_pilot.models import (
+    Evaluation,
+    EvaluationStage,
+    Listing,
+    ProfileSnapshot,
+    RunStatus,
+    Verdict,
+)
 from project_pilot.repository import Repository
 
 
@@ -125,3 +132,28 @@ async def test_unnotified_matches_recency_bound(session: AsyncSession) -> None:
 
     bounded = await repo.get_unnotified_matches(min_score=60, not_before=now - timedelta(days=2))
     assert {listing.url_hash for listing in bounded} == {"recent"}
+
+
+async def test_a_profile_state_is_kept_once(session: AsyncSession) -> None:
+    # The profile lives on the website now and changes without a deploy, so the
+    # hash stamped on a verdict would otherwise name a text that is gone.
+    repo = Repository(session)
+
+    assert await repo.ensure_profile_snapshot(
+        profile_hash="a" * 64, text="# Me", source_url="https://sequenz.io/en.md"
+    )
+    assert not await repo.ensure_profile_snapshot(profile_hash="a" * 64, text="# Me")
+
+    stored = await session.get(ProfileSnapshot, "a" * 64)
+    assert stored is not None
+    assert stored.text == "# Me"
+    assert stored.source_url == "https://sequenz.io/en.md"
+
+
+async def test_a_changed_profile_is_kept_alongside_the_old_one(session: AsyncSession) -> None:
+    repo = Repository(session)
+    await repo.ensure_profile_snapshot(profile_hash="a" * 64, text="old")
+    await repo.ensure_profile_snapshot(profile_hash="b" * 64, text="new")
+
+    assert (await session.get(ProfileSnapshot, "a" * 64)) is not None
+    assert (await session.get(ProfileSnapshot, "b" * 64)) is not None

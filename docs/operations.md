@@ -11,7 +11,7 @@ Actions builds, the server pulls). This page is what to do once it runs.
 ## Prerequisites
 
 - Docker with Compose v2.
-- A filled-in `profile/profile.md` and `profile/constraints.yaml`. Both are versioned
+- A reachable profile on sequenz.io, plus `profile/private.yaml` in the repo. The latter is versioned
   and baked into the image, so editing them means commit + deploy (or, when building
   on the host, rebuild + restart).
 - A `.env` file (copy `.env.example`) with the real values: `CONTACT_MAIL`,
@@ -107,7 +107,7 @@ matches are being missed. Restart the app after changing `.env`.
   redeploy —
   the server's `.env` is rewritten from GitHub on every deploy, so editing it on the
   server does not survive.
-- **Profile changes**: edit `profile/profile.md`, then commit and push — the deploy
+- **Profile changes**: edit the profile on sequenz.io and deploy the site; the worker picks it up on its next start. For the private half, edit `profile/private.yaml`, then commit and push — the deploy
   rebuilds the image. When building on the host instead:
   `docker compose build && docker compose up -d`.
 - **CV changes**: replace the PDF of the same name in the public Google Drive folder

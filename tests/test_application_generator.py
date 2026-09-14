@@ -2,7 +2,6 @@
 
 import re
 from collections.abc import Sequence
-from pathlib import Path
 
 import pytest
 
@@ -19,6 +18,7 @@ from project_pilot.application.generator import (
 from project_pilot.application.schemas import ApplicationDraft
 from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError, LlmSchemaError
+from project_pilot.profile_source import ProfileFeed, derived_sections
 
 
 def _draft() -> ApplicationDraft:
@@ -159,25 +159,50 @@ def test_prompt_carries_the_signature_template_in_both_languages() -> None:
         assert any(line.startswith(vat) for line in lines)
 
 
-def _signature_keys(profile_path: Path) -> set[str]:
+def _signature_keys(text: str) -> set[str]:
     """The ``Label:`` keys offered by a profile's "Contact & Signature" block."""
-    _, _, block = profile_path.read_text(encoding="utf-8").partition("## Contact & Signature")
-    assert block, f"{profile_path} has no 'Contact & Signature' section"
+    _, _, block = text.partition("## Contact & Signature")
+    assert block, "rendered profile has no 'Contact & Signature' section"
     return set(re.findall(r"^([A-Za-z][A-Za-z .\-]*?):\s", block, re.MULTILINE))
 
 
-# The contract between the prompt and every profile file: the prompt fills these by
-# looking the label up in the profile, and only prose connects the two ends.
+# The contract between the prompt and the profile: the prompt fills these by
+# looking the label up in the profile, and only prose connects the two ends. The
+# block is no longer a file but is rendered from the website's figures feed
+# (profile_source.derived_sections), so this pins the renderer instead.
 SIGNATURE_KEYS = ("Phone", "Email", "Web", "LinkedIn", "GitHub", "VAT ID")
 LANGUAGE_KEYS = ("Location German", "Location English", "CTA German", "CTA English")
 
-
-@pytest.mark.parametrize(
-    "profile", [Path("profile/profile.md"), Path("profile/profile.example.md")]
+_FEED = ProfileFeed.model_validate(
+    {
+        "name": "Nikita Petrich",
+        "role": "Senior Full-Stack & AI Engineer",
+        "availability": {
+            "from": "immediately",
+            "capacity_percent": 100,
+            "onsite_max_percent": 30,
+            "employee_leasing": True,
+        },
+        "rate": {"currency": "EUR", "basis": "from", "hourly": 80, "daily": 640},
+        "contact": {
+            "email": "n.petrich@sequenz.io",
+            "phone": "+49 15679088678",
+            "web": "https://sequenz.io",
+            "booking": {"de": "https://cal.example/de", "en": "https://cal.example/en"},
+        },
+        "location": {"de": "München, Deutschland", "en": "Munich, Germany"},
+        "vat_id": "DE368159064",
+        "profiles": [
+            {"label": "LinkedIn", "href": "https://linkedin.com/in/nikita-petrich"},
+            {"label": "GitHub", "href": "https://github.com/nikita-petrich"},
+        ],
+    }
 )
-def test_every_profile_defines_the_keys_the_signature_needs(profile: Path) -> None:
+
+
+def test_the_rendered_profile_defines_the_keys_the_signature_needs() -> None:
     """A renamed label would otherwise drop its signature line without any error."""
-    assert set(SIGNATURE_KEYS + LANGUAGE_KEYS) <= _signature_keys(profile)
+    assert set(SIGNATURE_KEYS + LANGUAGE_KEYS) <= _signature_keys(derived_sections(_FEED))
 
 
 def test_prompt_looks_up_the_signature_keys_by_name() -> None:
@@ -231,3 +256,18 @@ def test_draft_client_refuses_a_provider_it_has_no_adapter_for() -> None:
 
     with pytest.raises(ConfigError, match="google"):
         draft_client(credentials)
+
+
+def test_the_prompt_only_names_profile_sections_that_exist() -> None:
+    """The drift this catches shipped once: the prompt sourced availability from a
+    section called "Verfügbarkeit & Rahmen" that no profile ever had, so the rule
+    quietly had no source at all."""
+    prompt = load_application_prompt()
+    rendered = derived_sections(_FEED)
+    for section in re.findall(r'Profil-Abschnitt „([^"]+)"', prompt):
+        assert f"## {section}" in rendered or section in ("Languages", "Contact & Signature"), (
+            f'prompt reads a profile section „{section}" that nothing renders'
+        )
+    # The two lines the availability and rate rules now quote verbatim.
+    for line in ("Availability sentence (German)", "Rate sentence (English)"):
+        assert line in prompt and line in rendered
