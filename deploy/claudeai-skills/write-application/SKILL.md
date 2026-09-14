@@ -68,8 +68,10 @@ in the listing text):
 1. `project_pilot_enrich_company(listing_id)` — read-only research, sends
    nothing. Failing → say so in one line and carry on drafting; a draft without
    a recipient still beats no draft.
-2. Set the best address with `project_pilot_set_recipient`, and say in one line
-   which one and where it came from. Each e-mail carries a `source`:
+2. Set the **first** address of the list with `project_pilot_set_recipient`, and
+   say in one line which one and where it came from. The list is ordered: the
+   contact person's own address if one was found, otherwise the company page's.
+   Each e-mail carries a `source`:
    - `freelancermap` — the agency published it on their own company page. Take it.
    - `web` — the Impressum crawl found it. Take it too, but say it is our own
      find, so Nik can glance at it before the send he has to confirm anyway.

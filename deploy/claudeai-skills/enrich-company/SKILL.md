@@ -28,9 +28,10 @@ Each entry under `emails`, `phones` and `persons` is an object, not a string:
 **Always show the source.** An address is only as good as where it came from,
 and that is the one thing the user cannot see for themselves.
 
-The list is already in the right order — the company page first, then an
-address carrying the named contact's name, then the role mailbox. Do not
-re-sort it, and do not present a `web` find as if the company had given it.
+The list is already in the right order — the contact person's own address first
+(wherever it was found), then the company page, then everything else the crawl
+found. Do not re-sort it, and do not present a `web` find as if the company had
+given it.
 
 `company_page` is the page those stated contacts came from. Show it: it is
 worth opening even when the lookup found nothing.

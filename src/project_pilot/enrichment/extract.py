@@ -83,6 +83,14 @@ def _person_tokens(person: str) -> list[str]:
     return [token for token in re.split(r"[\s.]+", person.lower()) if len(token) > 2]
 
 
+def belongs_to(email: str, person: str | None) -> bool:
+    """Whether the address carries the named person's name in its local part."""
+    if not person:
+        return False
+    local = email.split("@", 1)[0].lower()
+    return any(token in local for token in _person_tokens(person))
+
+
 def rank_emails(emails: list[str], person: str | None) -> list[str]:
     """Order addresses best-first: person-name match, then role mailbox, then rest.
 

@@ -12,17 +12,39 @@ def _pairs(data: list[ContactDatum]) -> list[tuple[str, str]]:
     return [(datum.value, datum.source) for datum in data]
 
 
-def test_the_ad_names_someone_and_the_company_page_answers() -> None:
-    # Top of the chain: what the agent put on their own page wins outright, even
-    # over an address that carries the named person's name.
+def test_the_contact_persons_own_address_comes_first_wherever_it_was_found() -> None:
+    # The application is addressed to the person the ad names, so their own address
+    # beats the company page — even when only the crawl found it.
     resolved = resolve_emails(
-        stated=[_STATED], found=[_PERSONAL, _IMPRESSUM], person="Ines Strucken"
+        stated=[_STATED], found=[_IMPRESSUM, _PERSONAL], person="Ines Strucken"
     )
-    assert _pairs(resolved)[0] == (_STATED, "freelancermap")
+    assert _pairs(resolved) == [
+        (_PERSONAL, "web"),
+        (_STATED, "freelancermap"),
+        (_IMPRESSUM, "web"),
+    ]
+
+
+def test_without_the_contact_persons_address_the_company_page_answers() -> None:
+    # The Randstad case: the ad names Talissa Blajan, the only address belongs to a
+    # colleague on the company page. It goes there; the agency forwards internally.
+    resolved = resolve_emails(
+        stated=["laura.rossmeier@randstaddigital.com"],
+        found=["info@randstaddigital.com"],
+        person="Talissa Blajan",
+    )
+    assert _pairs(resolved) == [
+        ("laura.rossmeier@randstaddigital.com", "freelancermap"),
+        ("info@randstaddigital.com", "web"),
+    ]
+
+
+def test_a_personal_address_on_the_company_page_keeps_its_stated_label() -> None:
+    resolved = resolve_emails(stated=[_PERSONAL], found=[_PERSONAL], person="Ines Strucken")
+    assert _pairs(resolved) == [(_PERSONAL, "freelancermap")]
 
 
 def test_the_ad_names_someone_and_the_company_page_is_silent() -> None:
-    # Second tier: the address carrying the person's name beats the role mailbox.
     resolved = resolve_emails(stated=[], found=[_IMPRESSUM, _PERSONAL], person="Ines Strucken")
     assert _pairs(resolved) == [(_PERSONAL, "web"), (_IMPRESSUM, "web")]
 

@@ -13,13 +13,16 @@
   *Talissa Blajan*; die einzige auffindbare Adresse steht auf der Firmenseite und
   gehört *Laura Roßmeier*. Der Chat meldete das als Problem und schlug vor, die
   Anrede auf Laura zu ändern.
-- **Regel:** Das ist bei Vermittlern der Normalfall, kein Fehler. Die **Anrede geht an
-  die Ansprechperson aus dem Inserat**, **verschickt wird an die beste gefundene
-  Adresse** — die Vermittlerfirma leitet intern an die Ansprechperson weiter. Kein
-  offener Punkt, kein Vorschlag, die Anrede umzustellen. Die Empfängerzeile sagt beides.
-- **Umgesetzt:** Anrede aus dem Inserat — `application.md` (Anrede-Regel, Block
-  `## Ansprechpartner`). Empfängerwahl und Hinweis — Skill `write-application`
-  (Account- und Repo-Variante).
+- **Regel:** Die **Anrede geht immer an die Ansprechperson aus dem Inserat.** Empfänger:
+  1. **die eigene Adresse der Ansprechperson**, wo auch immer sie gefunden wurde;
+  2. sonst **die Adresse von der Firmenseite** — die Vermittlerfirma leitet intern an
+     die Ansprechperson weiter;
+  3. erst danach, was die Recherche sonst findet.
+  Fall 2 ist bei Vermittlern normal: kein offener Punkt, kein Vorschlag, die Anrede
+  umzustellen. Die Empfängerzeile sagt, welcher Fall vorliegt.
+- **Umgesetzt:** Reihenfolge — `enrichment/chain.py` (`resolve_emails`). Anrede aus dem
+  Inserat — `application.md` (Anrede-Regel, Block `## Ansprechpartner`). Empfänger
+  setzen und Hinweis — Skill `write-application` (Account- und Repo-Variante).
 
 ### L2 · Firmenseite ohne Kontakt-Links
 
