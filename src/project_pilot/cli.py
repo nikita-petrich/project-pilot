@@ -146,6 +146,10 @@ def _enrichment_service(
     return service, closer
 
 
+# How long an unattended process waits between attempts while the website is down.
+PROFILE_RETRY_SECONDS = 60.0
+
+
 def _profile_service(settings: Settings) -> ProfileService:
     """The profile assembler: public half from the website, private half from the repo."""
     return ProfileService(
@@ -155,44 +159,73 @@ def _profile_service(settings: Settings) -> ProfileService:
 
 
 async def _fetch_profile(settings: Settings) -> Profile:
-    """Load the profile, and make a failure loud before it can become a bad verdict.
+    """One attempt at the profile, for the commands a human is watching.
 
-    There is no fallback to an older copy by design (see profile_source.py): a run
-    that cannot read the profile stops, and says so on the same channel the
-    matches arrive on, because a worker that has quietly stopped scanning looks
-    exactly like a quiet week.
+    There is no fallback to an older copy by design (see profile_source.py). A
+    failure raises and the command exits with the reason on the terminal — the
+    person who typed it is already looking there, so it goes nowhere else.
     """
-    try:
-        return await _profile_service(settings).load()
-    except ProfileUnavailableError as err:
-        logger.error("profile unavailable: %s", err)
-        if settings.has_telegram():
-            await _notifier(settings).notify_warning(
-                f"Profil nicht abrufbar — es wird nichts bewertet und nichts verschickt.\n\n{err}"
+    return await _profile_service(settings).load()
+
+
+async def _wait_for_profile(
+    settings: Settings,
+    *,
+    retry_seconds: float = PROFILE_RETRY_SECONDS,
+    sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> Profile:
+    """The profile for an unattended process: warn once, wait, never restart-loop.
+
+    Exiting on a website outage looked safe and was not: the container restarts,
+    fails again, and every boot sent the same Telegram warning — a message every
+    few seconds for as long as the site was down. So the daemon and the MCP server
+    stay up instead, do no work without a profile, retry every
+    ``retry_seconds``, and say two things only: that the profile is gone, once,
+    and that it is back, once.
+    """
+    warned = False
+    while True:
+        try:
+            profile = await _fetch_profile(settings)
+        except ProfileUnavailableError as err:
+            logger.error("profile unavailable, retrying in %.0fs: %s", retry_seconds, err)
+            if not warned:
+                await _operator_message(
+                    settings,
+                    "Profil nicht abrufbar — es wird nichts bewertet und nichts verschickt. "
+                    "Neuer Versuch jede Minute; eine Nachricht, sobald es wieder da ist."
+                    f"\n\n{err}",
+                )
+                warned = True
+            await sleep(retry_seconds)
+            continue
+        if warned:
+            await _operator_message(
+                settings, "✅ Profil wieder erreichbar — es wird wieder bewertet."
             )
-        raise
+        return profile
+
+
+async def _operator_message(settings: Settings, text: str) -> None:
+    """Best-effort operator notice; without Telegram configured the log is the channel."""
+    if settings.has_telegram():
+        await _notifier(settings).notify_warning(text)
 
 
 def _load_profile(settings: Settings) -> Profile:
     """The sync entry point, for the one builder that runs before any event loop.
 
     Only ``_build_mcp_app`` may call this: ``mcp`` builds its app synchronously and
-    hands it to uvicorn afterwards, so no loop is running yet. Everything that is
-    already inside ``asyncio.run`` — the daemon, ``run-once`` — must ``await
-    _fetch_profile`` instead; ``asyncio.run`` refuses to nest, and did, putting the
-    worker into a restart loop on the first deploy.
+    hands it to uvicorn afterwards, so no loop is running yet. Everything already
+    inside ``asyncio.run`` must await instead; ``asyncio.run`` refuses to nest, and
+    did, putting the worker into a restart loop on the first deploy.
     """
-    try:
-        return asyncio.run(_fetch_profile(settings))
-    except ProfileUnavailableError as err:
-        typer.echo(f"profile unavailable: {err}")
-        raise typer.Exit(code=1) from err
+    return asyncio.run(_wait_for_profile(settings))
 
 
 async def _build_pipeline(
-    settings: Settings,
+    settings: Settings, profile: Profile
 ) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
-    profile = await _fetch_profile(settings)
     credentials = settings.require_llm()
     model = credentials.model
     engine = create_engine(settings.database_url)
@@ -296,7 +329,7 @@ def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[
 
 
 async def _run_once(settings: Settings) -> RunOutcome:
-    pipeline, closer = await _build_pipeline(settings)
+    pipeline, closer = await _build_pipeline(settings, await _fetch_profile(settings))
     try:
         return await pipeline.run_once()
     finally:
@@ -304,7 +337,7 @@ async def _run_once(settings: Settings) -> RunOutcome:
 
 
 async def _run_daemon(settings: Settings) -> None:
-    pipeline, closer = await _build_pipeline(settings)
+    pipeline, closer = await _build_pipeline(settings, await _wait_for_profile(settings))
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
     try:
         # Preflight before any work: a wrong LLM_MODEL, a rotated key or an empty
@@ -435,7 +468,11 @@ def init_db() -> None:
 def run_once() -> None:
     """Run a single scan. Cron-friendly: non-zero exit on a failed run."""
     settings = _load_settings()
-    outcome = asyncio.run(_run_once(settings))
+    try:
+        outcome = asyncio.run(_run_once(settings))
+    except ProfileUnavailableError as err:
+        typer.echo(f"profile unavailable: {err}")
+        raise typer.Exit(code=1) from err
     typer.echo(
         f"run {outcome.status.value}: fetched={outcome.fetched} new={outcome.new} "
         f"evaluated={outcome.evaluated} matched={outcome.matched} "
@@ -514,6 +551,9 @@ def enrich(
     except EnrichmentError as err:
         typer.echo(f"enrich failed: {err}")
         raise typer.Exit(code=1) from err
+    except ProfileUnavailableError as err:
+        typer.echo(f"profile unavailable: {err}")
+        raise typer.Exit(code=1) from err
     typer.echo(_format_enrichment(result))
 
 
@@ -563,7 +603,13 @@ def test_match(
     if text is not None and listing_id is not None:
         typer.echo("use either --text/--file or --listing-id, not both")
         raise typer.Exit(code=1)
-    report = asyncio.run(_run_selftest(settings, text=text, listing_id=listing_id, url=url or ""))
+    try:
+        report = asyncio.run(
+            _run_selftest(settings, text=text, listing_id=listing_id, url=url or "")
+        )
+    except ProfileUnavailableError as err:
+        typer.echo(f"profile unavailable: {err}")
+        raise typer.Exit(code=1) from err
     typer.echo(format_selftest(report))
     if not report.ok:
         raise typer.Exit(code=1)
