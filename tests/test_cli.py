@@ -7,9 +7,10 @@ import pytest
 import respx
 from typer.testing import CliRunner
 
-from project_pilot.cli import _fetch_profile, app, silence_request_logging
+from project_pilot.cli import _build_pipeline, _fetch_profile, app, silence_request_logging
 from project_pilot.config import Settings
 from project_pilot.errors import ProfileUnavailableError
+from project_pilot.profile_loader import Profile, ProfileConstraints
 
 runner = CliRunner()
 
@@ -74,3 +75,28 @@ def test_request_urls_are_kept_out_of_the_log() -> None:
     silence_request_logging()
     for name in ("httpx", "httpx2", "httpcore"):
         assert logging.getLogger(name).level == logging.WARNING
+
+
+async def test_the_pipeline_builds_inside_a_running_event_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The daemon and run-once build the pipeline from *inside* asyncio.run. Loading
+    # the profile with a nested asyncio.run there raised "cannot be called from a
+    # running event loop" and put the deployed worker into a restart loop, while
+    # every unit test stayed green because none built the pipeline in a loop.
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("LLM_MODEL", "gpt-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123456:AAtest-token")
+    monkeypatch.setenv("TELEGRAM_CHAT_ID", "987654321")
+
+    async def fake_profile(settings: Settings) -> Profile:
+        return Profile(text="# Me", constraints=ProfileConstraints(), profile_hash="h" * 64)
+
+    monkeypatch.setattr("project_pilot.cli._fetch_profile", fake_profile)
+
+    pipeline, closer = await _build_pipeline(Settings())
+    try:
+        assert pipeline is not None
+    finally:
+        await closer()

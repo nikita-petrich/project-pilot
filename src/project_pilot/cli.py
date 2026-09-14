@@ -174,10 +174,13 @@ async def _fetch_profile(settings: Settings) -> Profile:
 
 
 def _load_profile(settings: Settings) -> Profile:
-    """The sync entry point, for command bodies that build their services first.
+    """The sync entry point, for the one builder that runs before any event loop.
 
-    Runs its own short event loop: it is called before the database engine exists,
-    so it cannot collide with the loop that engine will later be bound to.
+    Only ``_build_mcp_app`` may call this: ``mcp`` builds its app synchronously and
+    hands it to uvicorn afterwards, so no loop is running yet. Everything that is
+    already inside ``asyncio.run`` — the daemon, ``run-once`` — must ``await
+    _fetch_profile`` instead; ``asyncio.run`` refuses to nest, and did, putting the
+    worker into a restart loop on the first deploy.
     """
     try:
         return asyncio.run(_fetch_profile(settings))
@@ -186,8 +189,10 @@ def _load_profile(settings: Settings) -> Profile:
         raise typer.Exit(code=1) from err
 
 
-def _build_pipeline(settings: Settings) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
-    profile = _load_profile(settings)
+async def _build_pipeline(
+    settings: Settings,
+) -> tuple[Pipeline, Callable[[], Awaitable[None]]]:
+    profile = await _fetch_profile(settings)
     credentials = settings.require_llm()
     model = credentials.model
     engine = create_engine(settings.database_url)
@@ -291,7 +296,7 @@ def _build_mcp_app(settings: Settings) -> tuple[AsgiApp, Callable[[], Awaitable[
 
 
 async def _run_once(settings: Settings) -> RunOutcome:
-    pipeline, closer = _build_pipeline(settings)
+    pipeline, closer = await _build_pipeline(settings)
     try:
         return await pipeline.run_once()
     finally:
@@ -299,7 +304,7 @@ async def _run_once(settings: Settings) -> RunOutcome:
 
 
 async def _run_daemon(settings: Settings) -> None:
-    pipeline, closer = _build_pipeline(settings)
+    pipeline, closer = await _build_pipeline(settings)
     runner = SchedulerRunner(pipeline.run_once, interval_minutes=settings.scan_interval_min)
     try:
         # Preflight before any work: a wrong LLM_MODEL, a rotated key or an empty
