@@ -202,8 +202,11 @@ so updating a CV is replacing the file in Drive — no commit, no redeploy.
 
 `CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
 `cv/CV-English.pdf`; their basenames are both the Drive lookup keys and what the
-recipient sees. If Drive is unreachable the last cached copy is used; a CV that can
-be fetched from neither is skipped and named in the draft's `📎 Attachments` line.
+recipient sees. A **send** needs both CVs fetched from Drive at that moment: if
+either cannot be loaded, nothing is sent, the draft stays ready, and the error says
+which CV failed — every application says both are attached, and an older cached copy
+does not count. Drafts and revisions only describe the attachments; they use the
+cache and name a missing CV in the `📎 Attachments` line.
 Set `CV_DRIVE_FOLDER_ID` empty to use plain local files instead. Keep them a few MB
 at most — base64 adds about a third on the wire.
 

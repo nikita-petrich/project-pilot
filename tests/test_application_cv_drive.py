@@ -51,10 +51,11 @@ async def test_refresh_downloads_each_cv_by_name(tmp_path: Path) -> None:
         return_value=httpx.Response(200, content=_EN_PDF)
     )
 
-    await DriveCvRefresher(folder_id=_FOLDER_ID, targets=[de, en]).refresh()
+    fetched = await DriveCvRefresher(folder_id=_FOLDER_ID, targets=[de, en]).refresh()
 
     assert de.read_bytes() == _DE_PDF
     assert en.read_bytes() == _EN_PDF
+    assert fetched == [de, en]
 
 
 @respx.mock
@@ -63,9 +64,12 @@ async def test_refresh_keeps_cache_when_folder_is_unreachable(tmp_path: Path) ->
     de.write_bytes(b"%PDF-cached")
     respx.get(_LISTING_URL).mock(return_value=httpx.Response(503))
 
-    await DriveCvRefresher(folder_id=_FOLDER_ID, targets=[de]).refresh()
+    fetched = await DriveCvRefresher(folder_id=_FOLDER_ID, targets=[de]).refresh()
 
     assert de.read_bytes() == b"%PDF-cached"
+    # The cached copy is kept, but it is not reported as fetched: a send must not
+    # mistake yesterday's file for one Drive just delivered.
+    assert fetched == []
 
 
 @respx.mock

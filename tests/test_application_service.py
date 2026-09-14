@@ -3,6 +3,7 @@
 import asyncio
 from collections.abc import Sequence
 from email.message import EmailMessage
+from pathlib import Path
 
 import pytest
 from sqlalchemy import select
@@ -27,6 +28,7 @@ from project_pilot.ingestion.parser import ParsedListing
 from project_pilot.models import Application, ApplicationStatus, Listing, PostedPrecision
 from project_pilot.models import RemoteStatus as Remote
 from project_pilot.profile_loader import Profile, ProfileConstraints
+from project_pilot.repository import Repository
 
 
 def test_is_email_accepts_only_bare_addresses() -> None:
@@ -623,11 +625,12 @@ class _CountingRefresher:
         self._cvs = cvs
         self.calls = 0
 
-    async def refresh(self) -> None:
+    async def refresh(self) -> list[Path]:
         self.calls += 1
-        for path in (self._cvs.de_pdf, self._cvs.en_pdf):
-            if path is not None:
-                path.write_bytes(b"%PDF")
+        written = [path for path in (self._cvs.de_pdf, self._cvs.en_pdf) if path is not None]
+        for path in written:
+            path.write_bytes(b"%PDF")
+        return written
 
 
 async def test_a_revision_after_a_deploy_does_not_report_the_cvs_missing(
@@ -660,3 +663,63 @@ async def test_a_revision_after_a_deploy_does_not_report_the_cvs_missing(
     calls = refresher.calls
     await service.revise(view.application_id, "noch kürzer")
     assert refresher.calls == calls  # present on disk: no second download
+
+
+class _DriveDown:
+    """Drive unreachable: nothing fetched, the cache left as it was."""
+
+    async def refresh(self) -> list[Path]:
+        return []
+
+
+async def test_a_send_without_fresh_cvs_from_drive_sends_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: object,
+) -> None:
+    # Every application says both CVs are attached. If Drive cannot deliver them at
+    # the moment of sending, that sentence would be untrue — so nothing goes out,
+    # even with an older copy sitting in the cache.
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    send = _FakeSend()
+    generator, _ = _generator([_draft(), _draft()])
+    service = ApplicationService(
+        session_factory=session_factory,
+        generator=generator,
+        profile=_profile(),
+        mailer=_mailer(send),
+        cv_attachments=_cvs(tmp_path),  # a cached copy from earlier is on disk
+        cv_refresher=_DriveDown(),
+    )
+    view = await service.draft_for_listing(listing_id)
+
+    with pytest.raises(ApplicationStateError, match="Google Drive"):
+        await service.send(view.application_id)
+
+    assert send.sent == []
+    async with session_factory() as session:
+        stored = await Repository(session).get_application(view.application_id)
+        assert stored is not None
+        assert stored.status is ApplicationStatus.READY  # retryable, not stuck in "sending"
+
+
+async def test_a_send_with_both_cvs_fresh_from_drive_attaches_them(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: object,
+) -> None:
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    send = _FakeSend()
+    cvs = _cvs(tmp_path)
+    generator, _ = _generator([_draft(), _draft()])
+    service = ApplicationService(
+        session_factory=session_factory,
+        generator=generator,
+        profile=_profile(),
+        mailer=_mailer(send),
+        cv_attachments=cvs,
+        cv_refresher=_CountingRefresher(cvs),
+    )
+    view = await service.draft_for_listing(listing_id)
+    await service.send(view.application_id)
+
+    files = {part.get_filename() for part in send.sent[0].iter_attachments()}
+    assert files == {"CV-English.pdf", "CV-German.pdf"}

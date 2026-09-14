@@ -185,12 +185,38 @@ class ApplicationService:
     async def _ensure_cvs(self) -> None:
         """Refresh the local CV cache from Drive before it is read (best-effort, never raises).
 
-        Called at draft creation so the draft's attachment lines reflect reality, and
-        again before a send so the delivered CV is the current one; a Drive outage
-        simply leaves the last cached CV in place.
+        Called at draft creation so the draft's attachment lines reflect reality; a
+        Drive outage leaves the last cached CV in place there. A send does not use this
+        — it requires a fresh download (``_require_fresh_cvs``).
         """
         if self._cv_refresher is not None:
             await self._cv_refresher.refresh()
+
+    async def _require_fresh_cvs(self) -> None:
+        """Fetch every configured CV from Drive now, or refuse the send.
+
+        Every application says both CVs are attached. A send that went out with a CV
+        Drive could not deliver — or with a cached copy from some earlier day — would
+        make that sentence untrue in front of a client. So nothing short of a fresh
+        download of each CV counts; without a Drive folder configured, the files must
+        at least be on disk.
+        """
+        cvs = self._cv_attachments
+        if cvs is None:
+            return
+        configured = [path for path in (cvs.de_pdf, cvs.en_pdf) if path is not None]
+        if self._cv_refresher is not None:
+            fetched = set(await self._cv_refresher.refresh())
+            unavailable = [path for path in configured if path not in fetched]
+        else:
+            unavailable = cvs.missing(None)
+        if unavailable:
+            names = ", ".join(path.name for path in unavailable)
+            logger.error("send refused: CV not loaded from Google Drive: %s", names)
+            raise ApplicationStateError(
+                f"CV could not be loaded from Google Drive ({names}) - nothing was sent. "
+                "The draft is unchanged; try the send again in a moment."
+            )
 
     async def _ensure_cvs_cached(self) -> None:
         """Fetch the CVs only when the cache lacks one, for views that merely report them.
@@ -340,6 +366,8 @@ class ApplicationService:
             raise ApplicationStateError(
                 "SMTP is not configured (set SMTP_HOST/SMTP_USER/SMTP_PASSWORD)"
             )
+        # Before the draft is claimed, so a failure leaves it READY for a plain retry.
+        await self._require_fresh_cvs()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             application = await self._editable(repo, application_id)
@@ -359,21 +387,11 @@ class ApplicationService:
                     "check your Sent folder before retrying."
                 )
 
-        # Pull the current CVs from Drive right before the send (falling back on the
-        # last cached copy if Drive is unreachable), so the delivered PDF is fresh.
-        await self._ensure_cvs()
-        # Both configured CV PDFs ride along (DE and EN); the draft's language only
-        # decides which one leads.
+        # Both configured CV PDFs ride along (DE and EN), fetched from Drive a moment
+        # ago by _require_fresh_cvs; the draft's language only decides which one leads.
         cvs = self._cv_attachments
         language = detect_language(body)
         attachments = cvs.for_language(language) if cvs is not None else []
-        missing = cvs.missing(language) if cvs is not None else []
-        if missing:
-            logger.warning(
-                "sending %d without %s (file not found)",
-                application_id,
-                ", ".join(path.name for path in missing),
-            )
 
         # The SMTP call happens outside any unit of work so a slow/failing server
         # never holds a transaction; the outcome is recorded in a follow-up one.

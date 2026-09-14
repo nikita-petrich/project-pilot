@@ -55,6 +55,11 @@ draft is persisted, revisable, and the only one Nik can actually send:
 2. `project_pilot_draft_application(listing_id)`.
 3. Changes → `project_pilot_revise_application(application_id, instruction)`.
 4. Recipient → `project_pilot_set_recipient(application_id, email)`.
+   The address may belong to someone other than the contact named in the listing
+   (an agency's shared or a colleague's mailbox). That is expected: keep the
+   salutation to the listing's contact, send to the best address found, say so in
+   one line, and do not raise it as an open point — the agency forwards internally.
+   See pattern L1 in `blueprint/context/learnings.md`.
 
 So a pasted mail, a PDF or a transcribed screenshot goes down the same path as a
 scanned listing - ingest first, then draft. Draft here in the chat instead

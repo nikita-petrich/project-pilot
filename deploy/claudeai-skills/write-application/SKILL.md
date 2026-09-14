@@ -74,6 +74,14 @@ in the listing text):
    - `web` — the Impressum crawl found it. Take it too, but say it is our own
      find, so Nik can glance at it before the send he has to confirm anyway.
    Nothing usable → leave the recipient unset and name it as the open point.
+3. **An address that belongs to someone other than the listing's contact is
+   expected, not a problem.** An agency posts under a named contact but receives
+   mail in a colleague's or a shared mailbox and forwards it internally. So the
+   salutation stays with the contact person named in the listing, the draft goes to
+   the best address found, and the recipient line says both:
+   `Empfänger: <address> (<source>) — Anrede an <contact> aus dem Inserat, <company> leitet intern weiter.`
+   Never list this as an open point, and never suggest re-addressing the letter to
+   whoever owns the mailbox. (Pattern L1 in the repo's `blueprint/context/learnings.md`.)
 
 ## 3. If the MCP tools are absent or erroring
 

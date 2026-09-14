@@ -8,11 +8,13 @@ send — so swapping a CV in Drive is the whole update, no deploy.
 Drive offers no credential-free way to list a public folder through its API, so
 the listing comes from the folder's ``embeddedfolderview`` page — the same list
 Drive renders for an embedded folder. It is not a documented API; if Google ever
-changes its shape the parse below finds nothing and the refresh becomes a no-op
-that keeps the last cached file. The whole refresh is best-effort and never
-raises: a Drive hiccup must never block a draft or a send, which fall back on the
-last good cached CV. The download is the ordinary ``uc?export=download`` endpoint,
-whose 303 to ``drive.usercontent.google.com`` httpx follows.
+changes its shape the parse below finds nothing and no CV is fetched. The refresh
+never raises; it reports which CVs it actually fetched, and the caller decides what
+that means. A draft only describes the attachments, so it carries on with whatever
+is cached. A send does not: the CVs must come from Drive at that moment, or nothing
+goes out — the letter says both are attached, and a stale or absent copy would make
+that untrue. The download is the ordinary ``uc?export=download`` endpoint, whose 303
+to ``drive.usercontent.google.com`` httpx follows.
 """
 
 import asyncio
@@ -60,9 +62,11 @@ def parse_folder_listing(html: str) -> dict[str, str]:
 
 
 class CvRefresher(Protocol):
-    """Refreshes the local CV cache from its source (best-effort, never raises)."""
+    """Refreshes the local CV cache from its source; never raises."""
 
-    async def refresh(self) -> None: ...
+    async def refresh(self) -> list[Path]:
+        """The CV files fetched fresh by this call — an empty list when none were."""
+        ...
 
 
 class DriveCvRefresher:
@@ -79,20 +83,26 @@ class DriveCvRefresher:
         self._targets = tuple(targets)
         self._timeout = timeout
 
-    async def refresh(self) -> None:
-        """Refresh every configured CV file from the Drive folder, in place."""
+    async def refresh(self) -> list[Path]:
+        """Refresh every configured CV file from the Drive folder, in place.
+
+        Returns the targets written by this call. Anything missing from the result was
+        not fetched — the caller decides whether a cached copy may stand in for it.
+        """
+        fetched: list[Path] = []
         if not self._targets:
-            return
+            return fetched
         try:
             async with httpx.AsyncClient(timeout=self._timeout, follow_redirects=True) as client:
                 listing = await self._listing(client)
                 if not listing:
-                    return
+                    return fetched
                 for target in self._targets:
-                    await self._refresh_one(client, listing, target)
+                    if await self._refresh_one(client, listing, target):
+                        fetched.append(target)
         except httpx.HTTPError as err:
-            # Best-effort: a Drive outage must never block a draft or a send.
-            logger.warning("CV refresh from Drive failed, keeping the cache: %s", err)
+            logger.warning("CV refresh from Drive failed: %s", err)
+        return fetched
 
     async def _listing(self, client: httpx.AsyncClient) -> dict[str, str]:
         response = await client.get(_LISTING_URL.format(folder_id=self._folder_id))
@@ -104,14 +114,14 @@ class DriveCvRefresher:
 
     async def _refresh_one(
         self, client: httpx.AsyncClient, listing: dict[str, str], target: Path
-    ) -> None:
+    ) -> bool:
         file_id = listing.get(target.name)
         if file_id is None:
             logger.warning("CV %s is not in the Drive folder; keeping the cache", target.name)
-            return
+            return False
         data = await self._download(client, file_id)
         if data is None:
-            return
+            return False
         try:
             await asyncio.to_thread(_write_atomic, target, data)
         except OSError as err:
@@ -119,6 +129,8 @@ class DriveCvRefresher:
             # outage: the draft reports the CV as missing rather than the apply
             # flow dying on it.
             logger.warning("CV cache %s is not writable, keeping the cache: %s", target, err)
+            return False
+        return True
 
     async def _download(self, client: httpx.AsyncClient, file_id: str) -> bytes | None:
         response = await client.get(_DOWNLOAD_URL.format(file_id=file_id))

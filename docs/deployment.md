@@ -58,10 +58,10 @@ folder so the match stays unambiguous.
 `CV_DRIVE_FOLDER_ID` is that folder; `CV_DE_PATH`/`CV_EN_PATH` (defaults
 `cv/CV-German.pdf`, `cv/CV-English.pdf`) are the local cache paths, and each basename
 is both the Drive lookup key and the name the recipient sees. Both CVs are attached to
-every application; the draft language only decides the order. If Drive is unreachable
-the last cached copy is used, and a CV that can be fetched from neither is skipped and
-named in the draft's `📎 Attachments` line — so a gap is visible before the send, never
-after. Set `CV_DRIVE_FOLDER_ID` empty to fall back to plain local files. The deploy
+every application; the draft language only decides the order. A send requires both to
+be fetched from Drive at that moment — if one cannot be loaded, nothing is sent and the
+draft stays ready for a retry; a cached copy from earlier does not count. Drafts name a
+missing CV in their `📎 Attachments` line. Set `CV_DRIVE_FOLDER_ID` empty to fall back to plain local files. The deploy
 target must be able to reach `drive.google.com`.
 
 **Keep CVs small.** They are e-mail attachments, and base64 encoding adds about a

@@ -42,6 +42,7 @@ New here? `blueprint/README.md` explains the whole workflow.
 - `blueprint/context/coding-standards.md` - conventions to follow
 - `blueprint/context/ai-interaction.md` - how to work with the user on this project
 - `blueprint/context/current-feature.md` - the one feature or fix being built right now
+- `blueprint/context/learnings.md` - patterns from real runs and the rule each one led to; check it before changing contact, drafting, sending or deploy behaviour, and add an entry when a new case turns up
 
 ## Workflow
 
