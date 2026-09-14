@@ -64,11 +64,19 @@ docker compose pull
 docker compose up -d --remove-orphans
 docker image prune -f >/dev/null 2>&1 || true
 
-# The entrypoint applies migrations before starting the daemon, and the healthcheck
-# only passes once a scan has actually succeeded — so this waits out the first scan.
+# The entrypoint applies migrations before starting the daemon. "healthy" alone
+# proves nothing about the image just deployed: the healthcheck asks whether the
+# *database* saw a successful scan recently, and the database outlives the deploy, so
+# the previous image's last run keeps a brand-new container green for up to three
+# scan intervals. A container that crashes at boot and restarts every few seconds
+# looked healthy that way — which is how a worker once sat in a restart loop behind a
+# green deploy. So two further conditions: the container must not have restarted since
+# `up -d` (every crash increments the counter, and a recreated container starts at 0),
+# and it must stay running and healthy across several consecutive polls.
 printf 'waiting for the app container to become healthy'
 verdict=still_starting
 attempt=0
+stable=0
 while [ "$attempt" -lt 60 ]; do
     container="$(docker compose ps -q app)"
     if [ -z "$container" ]; then
@@ -77,11 +85,19 @@ while [ "$attempt" -lt 60 ]; do
     fi
     state="$(docker inspect -f '{{.State.Status}}' "$container")"
     health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container")"
+    restarts="$(docker inspect -f '{{.RestartCount}}' "$container")"
+    if [ "$restarts" -gt 0 ]; then
+        verdict="FATAL: app container restarted ${restarts} time(s) since the deploy — it is crashing at boot."
+        break
+    fi
     case "$state:$health" in
         running:healthy)
-            echo
-            echo "app is healthy on ${IMAGE}"
-            exit 0
+            stable=$((stable + 1))
+            if [ "$stable" -ge 3 ]; then
+                echo
+                echo "app is healthy on ${IMAGE}"
+                exit 0
+            fi
             ;;
         running:none)
             echo
@@ -95,6 +111,9 @@ while [ "$attempt" -lt 60 ]; do
         exited:* | dead:* | restarting:*)
             verdict="FATAL: app container is $state."
             break
+            ;;
+        *)
+            stable=0
             ;;
     esac
     printf '.'
