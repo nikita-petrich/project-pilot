@@ -5,6 +5,7 @@ No I/O — every function takes text/HTML and returns plain data, so the heurist
 tested without touching the network.
 """
 
+import json
 import re
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit
@@ -285,3 +286,53 @@ def scan_html(html: str) -> PageContacts:
     phones = extract_phones("\n".join(_TEL_RE.findall(html)) + "\n" + text)
     persons = extract_persons(text)
     return PageContacts(emails=emails, phones=phones, persons=persons)
+
+
+# --- the record a board page renders from ------------------------------------
+
+# A board's company page is rendered from a JSON record shipped inside the HTML.
+# Some pages turn that record into mailto:/tel: links, some do not; on those the
+# phone, the e-mail and the website exist only as ``"email":"…"`` pairs. The same
+# keys also label form fields in the page's translation table ("email":"E-Mail"),
+# so a value counts only when it has the shape of what it claims to be.
+_JSON_FIELD_RE = re.compile(r'"(email|phone|website)"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+def _embedded_values(html: str, key: str) -> list[str]:
+    values: list[str] = []
+    for match in _JSON_FIELD_RE.finditer(html):
+        if match.group(1) != key:
+            continue
+        try:
+            value = json.loads(match.group(2))
+        except ValueError:
+            continue
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    return values
+
+
+def embedded_contacts(html: str) -> PageContacts:
+    """E-mails and phones from the JSON record a board page is rendered from."""
+    emails = extract_emails("\n".join(_embedded_values(html, "email")))
+    phones = extract_phones("\n".join(_embedded_values(html, "phone")))
+    return PageContacts(emails=emails, phones=phones, persons=[])
+
+
+def embedded_site(html: str, base_url: str) -> str | None:
+    """The company's own website from that record, as a bare origin, or ``None``."""
+    base_host = urlsplit(base_url).netloc.lower().removeprefix("www.")
+    for value in _embedded_values(html, "website"):
+        candidate = value if "//" in value else f"https://{value}"
+        parts = urlsplit(candidate)
+        host = parts.netloc.lower().removeprefix("www.")
+        if (
+            parts.scheme not in ("http", "https")
+            or "." not in host
+            or " " in host
+            or host == base_host
+            or any(skip in host for skip in DIRECTORY_HOSTS)
+        ):
+            continue
+        return parts._replace(path="/", query="", fragment="").geturl()
+    return None

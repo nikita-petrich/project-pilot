@@ -199,3 +199,28 @@ async def test_an_unreachable_company_page_costs_only_that_source() -> None:
     assert {datum.source for datum in result.emails} == {"web"}
     # The URL is still reported: it is where a human would look next.
     assert result.company_page == _BOARD_PAGE_URL
+
+
+_RECORD_PAGE_URL = "https://www.freelancermap.de/firma/563-muster-digital-ag"
+_RECORD_PAGE = (
+    '<html><body><h1>Muster Digital AG</h1><script type="application/json">'
+    '{"translations":{"email":"E-Mail","phone":"Telefon"},'
+    '"company":{"phone":"089 123 45-0","email":"laura.muster@muster-gmbh.de",'
+    '"website":"www.muster-gmbh.de"}}</script></body></html>'
+)
+
+
+async def test_a_board_page_that_only_ships_its_record_still_answers() -> None:
+    # The real case behind this test: an agency page with no contact links at all,
+    # whose e-mail, phone and website lived in embedded JSON. The lookup came back
+    # empty and fell through to a search that found nothing either.
+    search = _FakeSearch([SearchResult(url="https://falsch.example/", title="wrong company")])
+    fetcher = _FakeFetcher({_RECORD_PAGE_URL: _RECORD_PAGE, **_pages()})
+    service = EnrichmentService(fetcher=fetcher, search=search)
+
+    result = await service.enrich(company="Muster Digital AG", company_page=_RECORD_PAGE_URL)
+
+    assert search.queries == []  # the record said where the company lives
+    assert result.website == "https://www.muster-gmbh.de/"
+    assert result.emails[0] == ContactDatum("laura.muster@muster-gmbh.de", "freelancermap")
+    assert result.phones[0] == ContactDatum("089 123 45-0", "freelancermap")

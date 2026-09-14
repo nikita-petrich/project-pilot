@@ -190,6 +190,16 @@ def extract_contact_person(text: str) -> str | None:
     return None if looks_like_company(name) else name
 
 
+def join_name(*parts: str | None) -> str | None:
+    """A person's name from its parts, with exactly one space between words.
+
+    The board delivers ``firstName`` with a trailing blank now and then, and a plain
+    join turned that into "Talissa  Blajan" — on the card, in the salutation, and
+    inside the LinkedIn search, which then looked for a name nobody has.
+    """
+    return " ".join(" ".join(part for part in parts if part).split()) or None
+
+
 def resolve_contact_name(
     first_name: str | None, last_name: str | None, company: str | None, text: str
 ) -> str | None:
@@ -198,7 +208,7 @@ def resolve_contact_name(
     freelancermap's structured contact holds the real person on direct posts but the
     agency name on brokered ones; company-like values fall back to the text label.
     """
-    structured = " ".join(part for part in (first_name, last_name) if part) or None
+    structured = join_name(first_name, last_name)
     if structured and not looks_like_company(structured) and structured != company:
         return structured
     return extract_contact_person(text)

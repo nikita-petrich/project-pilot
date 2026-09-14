@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  Synthetic fixture: a board company page that ships its data as an embedded JSON
+  record instead of mailto:/tel: links — the shape of a real freelancermap page seen
+  on 2026-09-14 (an agency's page, 3.1 MB, with the company record near the top and
+  a translation table that reuses the same keys as form labels). Values invented.
+-->
+<html lang="de">
+  <head><title>Muster Digital AG</title></head>
+  <body>
+    <a href="/">freelancermap</a>
+    <a href="https://www.facebook.com/freelancermap">Facebook</a>
+    <script id="app-data" type="application/json">
+      {"translations":{"ustId":"Ust-ID","phone":"Telefon","email":"E-Mail","website":"Website"},
+       "user":{"firstName":"Laura","lastName":"Muster","city":"München","website":"https:\/\/www.muster-digital.com"},
+       "company":{"name":"Muster Digital AG","phone":"089 123 45-0","email":"laura.muster@muster-digital.com","website":"www.muster-digital.de"}}
+    </script>
+    <main><h1>Muster Digital AG</h1><p>Wir beschleunigen Ihre digitale Transformation.</p></main>
+  </body>
+</html>

@@ -18,6 +18,7 @@ from project_pilot.errors import EnrichmentError
 from project_pilot.ingestion.normalize import (
     company_page_url,
     extract_contact_person,
+    join_name,
     looks_like_company,
 )
 from project_pilot.models import ContactLead
@@ -38,8 +39,7 @@ def derive_contact(
     taken from the description's "Ansprechpartner" label instead.
     """
     company = _str(raw.get("company"))
-    name_parts = (_str(raw.get("firstName")), _str(raw.get("lastName")))
-    structured = " ".join(part for part in name_parts if part)
+    structured = join_name(_str(raw.get("firstName")), _str(raw.get("lastName")))
     if structured and not looks_like_company(structured) and structured != company:
         person: str | None = structured
     else:

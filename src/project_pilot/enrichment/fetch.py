@@ -13,6 +13,7 @@ under a byte budget so an oversized response cannot exhaust memory.
 """
 
 import asyncio
+import logging
 import socket
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ import httpx
 
 from project_pilot.enrichment.robots import RobotsGate
 from project_pilot.errors import EnrichmentError, SourceBlockedError
+
+logger = logging.getLogger(__name__)
 
 type Sleeper = Callable[[float], Awaitable[None]]
 # Resolve a host to the IP addresses it points at. Injectable so tests never hit
@@ -211,18 +214,24 @@ class WebFetcher:
 
 
 async def _read_capped(response: httpx.Response, url: str) -> str:
-    """Stream the body, aborting once it exceeds the byte budget, then decode it.
+    """Stream the body up to the byte budget, keep that prefix, then decode it.
 
-    Streaming caps peak memory: an oversized (or hostile) response is rejected as
-    soon as it crosses the limit instead of after the whole body is buffered.
+    Streaming caps peak memory: nothing past the budget is ever buffered. What is
+    past it is dropped rather than failing the page. A contact scan needs the
+    beginning, not the end — a board company page that runs to 3 MB because it
+    ships a translation table carries the company record in its first 80 KB, and
+    rejecting the whole page threw that record away.
     """
     chunks: list[bytes] = []
     total = 0
     async for chunk in response.aiter_bytes():
-        total += len(chunk)
-        if total > _MAX_RESPONSE_BYTES:
-            raise EnrichmentError(f"response too large (> {_MAX_RESPONSE_BYTES} bytes): {url}")
+        room = _MAX_RESPONSE_BYTES - total
+        if len(chunk) >= room:
+            chunks.append(chunk[:room])
+            logger.info("reading only the first %d bytes of %s", _MAX_RESPONSE_BYTES, url)
+            break
         chunks.append(chunk)
+        total += len(chunk)
     encoding = response.charset_encoding or "utf-8"
     try:
         return b"".join(chunks).decode(encoding, errors="replace")

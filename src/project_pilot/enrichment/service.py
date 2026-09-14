@@ -12,6 +12,9 @@ from urllib.parse import urlsplit, urlunsplit
 from project_pilot.enrichment.chain import resolve_emails, resolve_persons, resolve_phones
 from project_pilot.enrichment.extract import (
     DIRECTORY_HOSTS,
+    PageContacts,
+    embedded_contacts,
+    embedded_site,
     find_contact_links,
     outbound_site,
     scan_html,
@@ -24,6 +27,20 @@ from project_pilot.enrichment.search import SearchProvider
 from project_pilot.errors import EnrichmentError
 
 logger = logging.getLogger(__name__)
+
+
+def _board_contacts(html: str) -> PageContacts:
+    """What a board company page states: its links, and the record behind them.
+
+    Both count as stated — the agency entered them on its own page either way. The
+    record matters because not every page renders it into links.
+    """
+    links, record = scan_html(html), embedded_contacts(html)
+    return PageContacts(
+        emails=[*links.emails, *record.emails],
+        phones=[*links.phones, *record.phones],
+        persons=links.persons,
+    )
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -79,9 +96,9 @@ class EnrichmentService:
             raise EnrichmentError("nothing to enrich: no company, person, or title given")
 
         board = await self._fetch(company_page) if company_page else None
-        stated = scan_html(board.text) if board is not None else None
+        stated = _board_contacts(board.text) if board is not None else None
         if board is not None and not known_url:
-            known_url = outbound_site(board.text, board.url)
+            known_url = outbound_site(board.text, board.url) or embedded_site(board.text, board.url)
 
         website = self._origin(known_url) if known_url else await self._find_website(company)
         pages = await self._gather_pages(website) if website else []

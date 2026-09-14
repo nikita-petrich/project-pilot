@@ -163,17 +163,21 @@ async def test_fetch_rejects_non_text_content() -> None:
 
 
 @respx.mock
-async def test_fetch_rejects_oversized_response() -> None:
+async def test_an_oversized_page_is_read_up_to_the_budget_not_rejected() -> None:
+    # A real agency page ran to 3.1 MB on a translation table and carried its company
+    # record in the first 80 KB; rejecting the whole page threw the record away.
+    # Memory stays bounded either way: nothing past the budget is kept.
     respx.get("https://firma.de/robots.txt").mock(return_value=httpx.Response(404))
     respx.get("https://firma.de/riesig").mock(
-        return_value=httpx.Response(200, text="x" * 2_000_001)
+        return_value=httpx.Response(200, text="info@firma.de " + "x" * 3_000_000)
     )
     fetcher = _fetcher()
     try:
-        with pytest.raises(EnrichmentError, match="too large"):
-            await fetcher.fetch("https://firma.de/riesig")
+        page = await fetcher.fetch("https://firma.de/riesig")
     finally:
         await fetcher.aclose()
+    assert page.text.startswith("info@firma.de")
+    assert len(page.text.encode()) == 2_000_000
 
 
 @respx.mock

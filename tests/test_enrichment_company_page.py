@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from project_pilot.enrichment.extract import outbound_site, scan_html
+from project_pilot.enrichment.extract import (
+    embedded_contacts,
+    embedded_site,
+    outbound_site,
+    scan_html,
+)
 from project_pilot.ingestion.normalize import company_page_url
 
 _PAGE = (Path(__file__).parent / "fixtures" / "freelancermap_company_page.html").read_text()
@@ -57,3 +62,35 @@ def test_a_page_that_links_nowhere_useful_yields_no_site() -> None:
         '<a href="mailto:a@b.de">Mail</a></body></html>'
     )
     assert outbound_site(html, _BOARD_URL) is None
+
+
+_RECORD_PAGE = (
+    Path(__file__).parent / "fixtures" / "freelancermap_company_page_record.html"
+).read_text()
+_RECORD_URL = "https://www.freelancermap.de/firma/563-muster-digital-ag"
+
+
+def test_a_page_without_contact_links_still_states_its_record() -> None:
+    # Found on a real agency page: no mailto:, no tel:, no outbound link — the phone,
+    # the e-mail and the website existed only in the JSON the page renders from.
+    assert scan_html(_RECORD_PAGE).emails == []
+    record = embedded_contacts(_RECORD_PAGE)
+    assert record.emails == ["laura.muster@muster-digital.com"]
+    assert record.phones == ["089 123 45-0"]
+
+
+def test_form_labels_that_reuse_the_same_keys_are_not_contacts() -> None:
+    # "email":"E-Mail" and "phone":"Telefon" sit in the same page; only values with
+    # the shape of an address or a number count.
+    record = embedded_contacts('{"email":"E-Mail","phone":"Telefon","website":"Website"}')
+    assert record.emails == [] and record.phones == []
+    assert embedded_site('{"website":"Website"}', _RECORD_URL) is None
+
+
+def test_the_records_website_becomes_the_company_origin() -> None:
+    assert outbound_site(_RECORD_PAGE, _RECORD_URL) is None  # the facebook link is skipped
+    assert embedded_site(_RECORD_PAGE, _RECORD_URL) == "https://www.muster-digital.com/"
+
+
+def test_a_website_on_the_board_itself_is_not_the_companys() -> None:
+    assert embedded_site('{"website":"https:\\/\\/www.freelancermap.de\\/x"}', _RECORD_URL) is None
