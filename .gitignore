@@ -41,3 +41,7 @@ build/
 
 # CVs are pulled from Google Drive at runtime into this cache (see application/cv_drive.py)
 cv/*.pdf
+
+# Remotion media project (media/)
+media/node_modules/
+media/out/

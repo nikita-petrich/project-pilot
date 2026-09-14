@@ -1,4 +1,28 @@
-# project-pilot
+<p align="center">
+  <img src="docs/assets/banner.png" alt="project-pilot — new freelance projects, judged in minutes" width="100%">
+</p>
+
+<p align="center">
+  <a href="https://github.com/nikita-petrich/project-pilot/actions/workflows/ci.yml"><img src="https://github.com/nikita-petrich/project-pilot/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <img src="https://img.shields.io/badge/python-3.13-2DD4BF?logo=python&logoColor=white" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/mypy-strict-2DD4BF" alt="mypy strict">
+  <img src="https://img.shields.io/badge/lint-ruff-2DD4BF?logo=ruff&logoColor=white" alt="ruff">
+  <img src="https://img.shields.io/badge/PostgreSQL-16-2DD4BF?logo=postgresql&logoColor=white" alt="PostgreSQL 16">
+  <img src="https://img.shields.io/badge/MCP-server-2DD4BF" alt="MCP server">
+  <img src="https://img.shields.io/badge/alerts-Telegram-2DD4BF?logo=telegram&logoColor=white" alt="Telegram">
+</p>
+
+<p align="center">
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="#notification-and-claude-setup">Claude & Telegram</a> ·
+  <a href="#applying-from-a-match-session">Applying</a> ·
+  <a href="#deploying">Deploying</a> ·
+  <a href="#development">Development</a>
+</p>
+
+---
 
 A personal, single-user worker that watches freelancermap.de for new project
 listings, persists every listing losslessly in PostgreSQL, evaluates fresh ones
@@ -7,12 +31,40 @@ matches within minutes: each match opens its own Claude chat in your account,
 and a Telegram card with three buttons delivers it to phone and laptop. Backend
 only, no web UI — the Claude app is the entire interaction surface.
 
+|  |  |
+|---|---|
+| **Nothing is missed** | A watermark closes every gap after downtime; every listing ever seen lands in the database. |
+| **Judged, not keyword-matched** | Hard rules first (0 tokens), then a structured LLM verdict with a stored reason for match *and* no-match. |
+| **Minutes, not a daily digest** | Scans every 15 minutes and sends a Telegram card seconds after the verdict. |
+| **Worked in Claude** | One tap opens a Claude chat with the card; checks, drafts and the send run through project-pilot's own MCP tools. |
+
 Built as a modern, strictly-typed Python codebase (Python 3.13, asyncio,
 Pydantic v2, SQLAlchemy 2.0, `mypy --strict`). The binding detail specification is
 [`SPEC.md`](SPEC.md); the design is summarized in
 [`blueprint/context/project-overview.md`](blueprint/context/project-overview.md).
 
 ## How it works
+
+<p align="center">
+  <img src="docs/assets/pipeline.gif" alt="Five listings come in; hard rules and the LLM drop four; the match goes out as a Telegram card whose Bewerben button opens a Claude chat" width="100%">
+</p>
+
+```mermaid
+flowchart LR
+  board["freelancermap.de<br/>search URLs"] -->|every 15 min| scan["Scraper<br/>watermark pagination"]
+  scan --> db[("PostgreSQL<br/>every listing")]
+  scan --> fresh{"fresh?"}
+  fresh -->|no| stale["skipped_stale"]
+  fresh -->|yes| rules{"hard rules<br/>0 tokens"}
+  rules -->|blocked| nomatch["no_match + reason"]
+  rules -->|pass| llm{"LLM match<br/>MatchVerdict"}
+  llm -->|below threshold| nomatch
+  llm -->|match| card["Telegram card"]
+  card -->|Bewerben| chat["Claude chat"]
+  chat <-->|MCP tools| mcp["MCP server"]
+  mcp --> db
+  other["mail · n8n · other boards"] -->|ingest_listing| mcp
+```
 
 Every `SCAN_INTERVAL_MIN` minutes (default 15) the worker:
 
@@ -51,7 +103,9 @@ also ships. **Ablehnen** on the card deletes it, **Projektbeschreibung öffnen**
 opens the original ad. Operator warnings (source cooldown, LLM health, repeated
 failures) arrive as plain Telegram messages.
 
-## Requirements
+## Quick start
+
+**Requirements**
 
 - Python 3.13 and [uv](https://docs.astral.sh/uv/)
 - PostgreSQL 16 (locally via `compose.dev.yaml`, or your own instance)
@@ -60,52 +114,91 @@ failures) arrive as plain Telegram messages.
   ([`docs/claude-setup.md`](docs/claude-setup.md))
 - Docker with Compose for the containerized home-server deployment
 
-## Setup
+**Setup**
 
 ```sh
-uv sync                              # install dependencies (creates .venv)
-cp .env.example .env                 # then fill in the values (see below)
+uv sync                                    # install dependencies (creates .venv)
+cp .env.example .env                       # then fill in the values (see below)
 docker compose -f compose.dev.yaml up -d   # local Postgres on :5432
-uv run project-pilot init-db         # apply migrations
+uv run project-pilot init-db               # apply migrations
 ```
 
 Forking this for yourself? Replace `profile/profile.md` (start from
-`profile/profile.example.md`) and the PDFs in `cv/` with your own.
+`profile/profile.example.md`) and the CVs in the Drive folder (`CV_DRIVE_FOLDER_ID`)
+with your own.
 
-The two profile files feed the matcher, the hard rules, and the application drafts:
+### Profile
 
-- `profile/profile.md` free-text profile: positioning, skills, desired projects,
-  no-gos, reference projects, and the application signature. It is **versioned
-  on purpose** — this repo is a public portfolio piece, and it holds the same CV
-  and contact block that goes out to clients anyway. Real secrets stay in `.env`.
-  Its `Contact & Signature` block holds the values for the e-mail signature (name,
-  title, `Phone`, `Email`, `Web`, `LinkedIn`, `GitHub`, plus `Location German` /
-  `Location English` and `VAT ID`); the layout itself lives in the prompt, which
-  looks these keys up by name — rename one there and here together. It ends with the two
-  Notion Calendar booking links (`CTA German` / `CTA English`); the application
-  generator picks the one matching the application language for the closing
-  sentence, the signature, and the LinkedIn message.
-- `profile/constraints.yaml` deterministic rules: `blacklist` terms and an optional
-  `must_have`, both matched against the listing text before the LLM (0 tokens), plus
-  `nogo_technologies`. The last one is the profile's context-dependent no-gos (Java,
-  PHP, WordPress, Django, SAP): they are deliberately **not** matched against the
-  listing text — a frontend role against a Java backend or a migration away from PHP
-  stays welcome — but against the LLM's own answer. When the model reports one of
-  them under `missing_requirements`, i.e. the listing requires the candidate to bring
-  it and the profile does not cover it, the verdict is forced to `no_match` whatever
-  the score, and the stored reason names the term (`nogo`). Matching is
-  case-insensitive with word boundaries, so `java` never fires on "JavaScript".
-- `cv/` the CVs attached to application e-mails — **both ride along on every
-  send**, so the recipient can forward whichever language they need.
-  `CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
-  `cv/CV-English.pdf` — the two PDFs versioned here — so
-  updating a CV is replacing the file and pushing. The file name is what the
-  recipient sees. A configured file that is not on disk is skipped and named in the
-  draft's `📎 Attachments` line, so you can add them one at a time. Keep them a few
-  MB at most — base64 adds about a third on the wire.
+The two profile files feed the matcher, the hard rules, and the application drafts.
+
+<details>
+<summary><b><code>profile/profile.md</code></b> — free-text profile, contact block, booking links</summary>
+
+<br>
+
+Positioning, skills, desired projects, no-gos, reference projects, and the
+application signature. It is **versioned on purpose** — this repo is a public
+portfolio piece, and it holds the same CV and contact block that goes out to
+clients anyway. Real secrets stay in `.env`.
+
+Its `Contact & Signature` block holds the values for the e-mail signature (name,
+title, `Phone`, `Email`, `Web`, `LinkedIn`, `GitHub`, plus `Location German` /
+`Location English` and `VAT ID`); the layout itself lives in the prompt, which
+looks these keys up by name — rename one there and here together. It ends with the
+two Notion Calendar booking links (`CTA German` / `CTA English`); the application
+generator picks the one matching the application language for the closing
+sentence, the signature, and the LinkedIn message.
+
+</details>
+
+<details>
+<summary><b><code>profile/constraints.yaml</code></b> — deterministic rules, 0 tokens</summary>
+
+<br>
+
+`blacklist` terms and an optional `must_have`, both matched against the listing
+text before the LLM (0 tokens), plus `nogo_technologies`.
+
+The last one is the profile's context-dependent no-gos (Java, PHP, WordPress,
+Django, SAP): they are deliberately **not** matched against the listing text — a
+frontend role against a Java backend or a migration away from PHP stays welcome —
+but against the LLM's own answer. When the model reports one of them under
+`missing_requirements`, i.e. the listing requires the candidate to bring it and the
+profile does not cover it, the verdict is forced to `no_match` whatever the score,
+and the stored reason names the term (`nogo`). Matching is case-insensitive with
+word boundaries, so `java` never fires on "JavaScript".
+
+</details>
+
+<details>
+<summary><b>CVs</b> — pulled from Google Drive, attached to every send</summary>
+
+<br>
+
+**Both CVs ride along on every send**, so the recipient can forward whichever
+language they need; the draft language only decides which one leads. They live in
+a public Google Drive folder (`CV_DRIVE_FOLDER_ID`) and are fetched by file name
+into a local cache before each draft and each send (`application/cv_drive.py`),
+so updating a CV is replacing the file in Drive — no commit, no redeploy.
+
+`CV_DE_PATH` and `CV_EN_PATH` default to `cv/CV-German.pdf` and
+`cv/CV-English.pdf`; their basenames are both the Drive lookup keys and what the
+recipient sees. If Drive is unreachable the last cached copy is used; a CV that can
+be fetched from neither is skipped and named in the draft's `📎 Attachments` line.
+Set `CV_DRIVE_FOLDER_ID` empty to use plain local files instead. Keep them a few MB
+at most — base64 adds about a third on the wire.
+
+</details>
+
+### Environment
 
 Set the environment values in `.env` (never commit real secrets; `.env` is
 gitignored and `.env.example` is the template):
+
+<details>
+<summary><b>All variables</b></summary>
+
+<br>
 
 | Variable | Purpose |
 |---|---|
@@ -126,6 +219,9 @@ gitignored and `.env.example` is the template):
 | `LOG_LEVEL` | default `info` |
 | `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | your mail server, used to send application e-mails (port 465 implies TLS, otherwise STARTTLS) |
 | `SMTP_FROM` / `SMTP_STARTTLS` | optional sender override (defaults to `SMTP_USER`) and STARTTLS toggle |
+| `CV_DRIVE_FOLDER_ID` / `CV_DE_PATH` / `CV_EN_PATH` | the public Drive folder the CVs come from and their file names (see CVs above) |
+
+</details>
 
 ## Commands
 
@@ -145,6 +241,8 @@ uv run project-pilot enrich --listing-id <id>   # enrich a stored listing, recor
 
 ## Notification and Claude setup
 
+<img src="docs/assets/logo.png" alt="" width="96" align="right">
+
 Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
 
 1. **The Claude chat**, one per match, opened by the card's **Bewerben**
@@ -162,13 +260,16 @@ Three pieces, all in [`docs/claude-setup.md`](docs/claude-setup.md):
    model judging a run worth reporting: the official docs offer no guaranteed
    push for a cloud session, so the alert stays in code where it can be
    retried. The proxy's site config for the public MCP endpoint is in
-   [`deploy/proxy-site/`](deploy/proxy-site).
+   [`deploy/proxy-site/`](deploy/proxy-site). The bot's name, descriptions and
+   profile photo are set by [`media/telegram-profile.sh`](media/README.md).
 3. **The workflow prompts**, exposed by the MCP server itself
    (`mcp_prompts.py`), so one definition serves every surface: Claude Code
    lists them as `/mcp__project-pilot__check_project`, and n8n calls them the
    same way. The account skills in
    [`deploy/claudeai-skills/`](deploy/claudeai-skills) are thin wrappers over
    the same tools for surfaces that don't show MCP prompts.
+
+### MCP tools
 
 Ten tools are exposed, and any Claude chat that has the connector can use them:
 
@@ -230,29 +331,18 @@ personalized application. The single prompt file
 prompt (style rules, reference projects, skills, signature); edit it directly to
 change how applications are written.
 
-- **Full draft** — subject, the complete e-mail, and a LinkedIn connection
-  message, returned in one piece and never truncated.
-- **Recipient** — auto-extracted from the listing when an e-mail address is visible
-  anywhere in it; otherwise name it in the chat, or ask for the contact to be
-  looked up (see below).
-- **Revise** — say what you want changed ("kürzer", "auf Englisch", "betone
-  RAG-Erfahrung") and the draft is rewritten in place. Paste or attach a screenshot
-  and it goes to the model as vision input, so a picture of the client's reply or
-  of a listing detail can drive the revision.
-- **Send** — only after you have read the draft and said so. `send_application`
-  delivers it through your SMTP server with the CVs attached; a status guard makes a
-  second send impossible, and a failure keeps the draft intact. Nothing else in the
-  system can reach outward, which is the point: the model reads untrusted listing
-  text, so it never holds the outbound channel on its own.
-- **CV attachments** — every sent e-mail carries both configured CV PDFs (DE and
-  EN); the draft language only decides which one leads. The draft names them in a
-  `📎 Attachments` line beforehand, including any configured file that is missing,
-  so a gap is visible before the send rather than after.
-- **Signature** — every draft closes with a signature block in the draft's language:
-  the `-- ` separator (RFC 3676), the greeting inside the block, name and title,
-  `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link,
-  then location and VAT ID — values from `profile.md`, layout from the prompt. The
-  confidentiality notice follows as the last block.
+| Step | What happens |
+|---|---|
+| **Full draft** | Subject, the complete e-mail, and a LinkedIn connection message, returned in one piece and never truncated. |
+| **Recipient** | Auto-extracted from the listing when an e-mail address is visible anywhere in it; otherwise name it in the chat, or ask for the contact to be looked up (see below). |
+| **Revise** | Say what you want changed ("kürzer", "auf Englisch", "betone RAG-Erfahrung") and the draft is rewritten in place. Paste or attach a screenshot and it goes to the model as vision input, so a picture of the client's reply or of a listing detail can drive the revision. |
+| **Send** | Only after you have read the draft and said so. `send_application` delivers it through your SMTP server with the CVs attached; a status guard makes a second send impossible, and a failure keeps the draft intact. |
+| **CV attachments** | Every sent e-mail carries both configured CV PDFs (DE and EN); the draft language only decides which one leads. The draft names them in a `📎 Attachments` line beforehand, including any CV that could not be fetched, so a gap is visible before the send rather than after. |
+| **Signature** | Every draft closes with a signature block in the draft's language: the `-- ` separator (RFC 3676), the greeting inside the block, name and title, `Tel./Phone`, `E-Mail`, `Web`, `LinkedIn`, `GitHub`, the 30-minute booking link, then location and VAT ID — values from `profile.md`, layout from the prompt. The confidentiality notice follows as the last block. |
+
+> [!IMPORTANT]
+> Nothing else in the system can reach outward, which is the point: the model reads
+> untrusted listing text, so it never holds the outbound channel on its own.
 
 The same flow works from any Claude chat with the connector, not just from a match
 session: paste a listing, run `check_text`, then draft from it.
@@ -288,9 +378,14 @@ uv run project-pilot enrich "Muster GmbH" --person "Max Mustermann"
 uv run project-pilot enrich --listing-id 42     # uses the listing's company + records a lead
 ```
 
-**JS-rendered sites (optional).** Some sites inject their contact data via JavaScript,
-which the default httpx fetcher can't see. Set `ENRICHMENT_RENDER=true` to fetch company
-pages with a headless Chromium instead — install the extra once:
+<details>
+<summary><b>JS-rendered sites (optional)</b></summary>
+
+<br>
+
+Some sites inject their contact data via JavaScript, which the default httpx fetcher
+can't see. Set `ENRICHMENT_RENDER=true` to fetch company pages with a headless
+Chromium instead — install the extra once:
 
 ```sh
 uv sync --extra render && uv run playwright install chromium
@@ -298,6 +393,8 @@ uv sync --extra render && uv run playwright install chromium
 
 Rendering keeps the same manners (identifying user agent, robots gate, delay, no 403
 retry); only company pages are rendered, never LinkedIn or Google.
+
+</details>
 
 ## Checking a listing on demand
 
@@ -331,9 +428,18 @@ configuration of its own — the app's `.env` is rendered from the secrets of th
 `prod` environment and written on every deploy. Setup, secrets, and rollback are in
 [`docs/deployment.md`](docs/deployment.md).
 
-The deploy refuses to start if `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-or `MCP_TOKEN` is missing, and fails before touching the server: a worker that
-finds matches it cannot deliver is worse than one that does not run.
+```mermaid
+flowchart LR
+  push["git push main"] --> gate["CI gate<br/>ruff · mypy · pytest"]
+  gate --> image["Docker image<br/>GHCR"]
+  image --> vps["VPS<br/>docker compose up -d"]
+  secrets["prod secrets"] -->|rendered .env| vps
+```
+
+> [!NOTE]
+> The deploy refuses to start if `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` or
+> `MCP_TOKEN` is missing, and fails before touching the server: a worker that finds
+> matches it cannot deliver is worse than one that does not run.
 
 To build and run on the host instead, from a checkout:
 
@@ -355,26 +461,15 @@ matches are missed. Restart the worker after changing `.env`.
 
 ## Troubleshooting
 
-- **Cooldown**: a 403 or captcha sets a 6-hour cooldown in `source_state`; the
-  worker skips scans until it expires and opens one warning session.
-- **`SelectorMismatchError`**: freelancermap changed its markup. Update the
-  selector constants at the top of `src/project_pilot/ingestion/parser.py`,
-  refresh the fixtures, and re-run.
-- **Repeated failures**: three consecutive failed runs send one warning.
-- **Container unhealthy**: no successful run within three times the interval;
-  check `docker compose logs app`.
-- **Everything looks healthy but no matches arrive**: the LLM is the one dependency
-  whose failure still produces successful runs (every listing falls back to
-  `llm_error`). The daemon preflights `LLM_MODEL` on start and sends a warning
-  naming the cause — wrong model, rejected key, or an account out of credit —
-  then announces recovery once it works again. See `docs/operations.md`.
-- **No card for a match**: delivery failed. `docker compose logs app` shows
-  `telegram send failed`; the listing keeps `notified_at` empty and the next scan
-  retries it — with the same session, whose URL was already stored.
-- **Bewerben opens a session that shows no card**: the listing was so large
-  that the card left the link (`MAX_URL_CHARS` in `claude_link.py`); the prompt
-  then asks the session to render it from the database instead. Everything
-  else works the same.
+| Symptom | What to do |
+|---|---|
+| **Cooldown** | A 403 or captcha sets a 6-hour cooldown in `source_state`; the worker skips scans until it expires and sends one warning. |
+| **`SelectorMismatchError`** | freelancermap changed its markup. Update the selector constants at the top of `src/project_pilot/ingestion/parser.py`, refresh the fixtures, and re-run. |
+| **Repeated failures** | Three consecutive failed runs send one warning. |
+| **Container unhealthy** | No successful run within three times the interval; check `docker compose logs app`. |
+| **Healthy, but no matches arrive** | The LLM is the one dependency whose failure still produces successful runs (every listing falls back to `llm_error`). The daemon preflights `LLM_MODEL` on start and sends a warning naming the cause — wrong model, rejected key, or an account out of credit — then announces recovery once it works again. See `docs/operations.md`. |
+| **No card for a match** | Delivery failed. `docker compose logs app` shows `telegram send failed`; the listing keeps `notified_at` empty and the next scan retries it — with the same session, whose URL was already stored. |
+| **Bewerben opens a session that shows no card** | The listing was so large that the card left the link (`MAX_URL_CHARS` in `claude_link.py`); the prompt then asks the session to render it from the database instead. Everything else works the same. |
 
 ## Development
 
@@ -388,6 +483,10 @@ uv run pytest -m eval       # judgment eval against the golden set (real LLM cal
 
 Tests never make live network requests; freelancermap pages and external APIs are
 served from fixtures or mocked. Test files live next to the code under `tests/`.
+
+The logo, banner, animation and Telegram avatar are
+[Remotion](https://www.remotion.dev) compositions in [`media/`](media/README.md):
+`cd media && npm install && npm run render` rebuilds everything in `docs/assets/`.
 
 ## Compliance and legal
 
@@ -431,9 +530,14 @@ src/project_pilot/
   pipeline.py scheduler.py reporting.py cli.py
 alembic/        async migrations
 deploy/         render-env.py, remote-deploy.sh, proxy/ (Caddy for the MCP host)
-docs/           claude-setup.md, deployment.md, operations.md, compliance.md, adr/
+docs/           claude-setup.md, deployment.md, operations.md, compliance.md, adr/, assets/
+media/          Remotion project: logo, banner, README animation, Telegram avatar
 tests/          unit + integration, fixtures/, eval/ (golden set)
 ```
 
-Built with the [AI Coding Blueprint](blueprint/README.md); agent instructions live
-in [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md).
+---
+
+<p align="center">
+  <img src="docs/assets/logo.png" alt="" width="48"><br>
+  <sub>Built with the <a href="blueprint/README.md">AI Coding Blueprint</a> · agent instructions in <a href="AGENTS.md">AGENTS.md</a> and <a href="CLAUDE.md">CLAUDE.md</a></sub>
+</p>

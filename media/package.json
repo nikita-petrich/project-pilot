@@ -1,0 +1,27 @@
+{
+  "name": "project-pilot-media",
+  "private": true,
+  "description": "Logo, banner, README animation and Telegram avatar for project-pilot, rendered with Remotion",
+  "type": "module",
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render:logo": "remotion still src/index.ts Logo ../docs/assets/logo.png",
+    "render:banner": "remotion still src/index.ts Banner ../docs/assets/banner.png",
+    "render:avatar": "remotion still src/index.ts Avatar ../docs/assets/telegram-avatar.jpg --image-format=jpeg --jpeg-quality=95",
+    "render:avatar-loop": "remotion render src/index.ts AvatarLoop ../docs/assets/telegram-avatar.mp4 --codec=h264 --crf=26 --muted",
+    "render:pipeline": "remotion render src/index.ts Pipeline ../docs/assets/pipeline.gif --codec=gif --every-nth-frame=2 --scale=0.8",
+    "render": "npm run render:logo && npm run render:banner && npm run render:avatar && npm run render:avatar-loop && npm run render:pipeline",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.524",
+    "@remotion/google-fonts": "4.0.524",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "remotion": "4.0.524"
+  },
+  "devDependencies": {
+    "@types/react": "19.1.8",
+    "typescript": "5.8.3"
+  }
+}
