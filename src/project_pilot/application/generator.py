@@ -145,8 +145,13 @@ class ApplicationGenerator:
             f"## Candidate profile\n{profile_text}\n\n"
             f"{_fenced_listing(listing_text)}"
             f"{_contact_section(contact_name)}\n\n"
-            f"## Current draft\nSubject: {current.subject}\n\n{current.body}\n\n"
-            f"LinkedIn: {current.linkedin_message}\n\n"
+            # Each field under its own heading. The body and the LinkedIn note used to
+            # follow each other as one block ("…{body}\n\nLinkedIn: {note}"), and the
+            # model read the note as the body's last paragraph and kept it there — so
+            # a revised e-mail went out with the connection note under its signature.
+            f"## Current draft\n### subject\n{current.subject}\n\n"
+            f"### body\n{current.body}\n\n"
+            f"### linkedin_message\n{current.linkedin_message}\n\n"
             f"## Revision instruction\n{instruction}"
         )
         return await self._complete(user, images)

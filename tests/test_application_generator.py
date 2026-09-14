@@ -113,6 +113,25 @@ async def test_revise_prompt_includes_current_draft_and_instruction() -> None:
     assert "Bitte kürzer und auf Englisch" in prompt
 
 
+async def test_revision_keeps_the_linkedin_note_out_of_the_body_section() -> None:
+    # The note used to follow the body as "…\n\nLinkedIn: …" in one block; a real
+    # revision copied it into the e-mail. Each field now has its own heading.
+    client = _FakeClient([DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)])
+    await _generator(client).revise(
+        profile_text="p",
+        listing_text="l",
+        current=ApplicationDraft(
+            project_title="T", subject="Betreff", body="Brieftext", linkedin_message="Notiz"
+        ),
+        instruction="unverändert",
+    )
+    prompt = client.calls[0]
+    body_section = prompt.split("### body\n", 1)[1].split("\n### ", 1)[0]
+    assert body_section.strip() == "Brieftext"
+    assert "### linkedin_message\nNotiz" in prompt
+    assert "LinkedIn: Notiz" not in prompt
+
+
 async def test_generate_and_revise_forward_images_to_the_client() -> None:
     image = ImageAttachment(name="listing.png", mime_type="image/png", data=b"\x89PNG")
     response = DraftResponse(draft=_draft(), tokens_in=1, tokens_out=1)

@@ -614,3 +614,49 @@ async def test_concurrent_sends_deliver_exactly_once(
     assert len(send.sent) == 1  # the atomic claim let exactly one send through
     assert len(delivered) == 1
     assert len(refused) == 1
+
+
+class _CountingRefresher:
+    """Stands in for Drive: writes the CVs, and counts how often it was asked."""
+
+    def __init__(self, cvs: CvAttachments) -> None:
+        self._cvs = cvs
+        self.calls = 0
+
+    async def refresh(self) -> None:
+        self.calls += 1
+        for path in (self._cvs.de_pdf, self._cvs.en_pdf):
+            if path is not None:
+                path.write_bytes(b"%PDF")
+
+
+async def test_a_revision_after_a_deploy_does_not_report_the_cvs_missing(
+    session_factory: async_sessionmaker[AsyncSession],
+    tmp_path: object,
+) -> None:
+    # The cache lives in the container, so a deploy empties it. A revision straight
+    # after one reported both CVs missing, although a send would have attached them.
+    listing_id = await _store(session_factory, _listing("jobs@firma.de"))
+    cvs = _cvs(tmp_path)
+    refresher = _CountingRefresher(cvs)
+    generator, _ = _generator([_draft(), _draft(), _draft()])
+    service = ApplicationService(
+        session_factory=session_factory,
+        generator=generator,
+        profile=_profile(),
+        mailer=None,
+        cv_attachments=cvs,
+        cv_refresher=refresher,
+    )
+    view = await service.draft_for_listing(listing_id)
+    for path in (cvs.de_pdf, cvs.en_pdf):  # the deploy
+        assert path is not None
+        path.unlink()
+
+    revised = await service.revise(view.application_id, "kürzer")
+
+    assert revised.missing_attachments == ()
+    assert set(revised.attachments) == {"CV-German.pdf", "CV-English.pdf"}
+    calls = refresher.calls
+    await service.revise(view.application_id, "noch kürzer")
+    assert refresher.calls == calls  # present on disk: no second download

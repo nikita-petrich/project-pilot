@@ -1,6 +1,6 @@
 """Mechanical corrections to a generated application body.
 
-The prompt states both rules, and the model follows them — usually. The same prompt
+The prompt states these rules, and the model follows them — usually. The same prompt
 produced "Guten Tag X,\\n\\nich bin …" for one listing and "Ich bin …" for the next,
 and a confidentiality notice as one paragraph once and hard-wrapped mid-sentence the
 next time. Neither is a matter of judgment, so neither is left to chance: they are
@@ -58,6 +58,22 @@ def unwrap_confidentiality_notice(body: str) -> str:
     return body
 
 
+def end_at_confidentiality_notice(body: str) -> str:
+    """Drop anything the model wrote after the notice, which the prompt makes the last block.
+
+    Seen on a real revision: the LinkedIn note reappeared under the notice, inside the
+    e-mail. Whatever follows the notice is never part of the letter, so it is cut —
+    the notice itself, with the letter above it, is kept exactly.
+    """
+    for notice in CONFIDENTIALITY_NOTICES:
+        index = body.find(notice)
+        if index >= 0:
+            return body[: index + len(notice)]
+    return body
+
+
 def tidy_body(body: str) -> str:
-    """Both corrections, in the order they apply to a finished draft."""
-    return unwrap_confidentiality_notice(lowercase_after_salutation(body))
+    """All corrections, in the order they apply to a finished draft."""
+    return end_at_confidentiality_notice(
+        unwrap_confidentiality_notice(lowercase_after_salutation(body))
+    )

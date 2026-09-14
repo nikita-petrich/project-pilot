@@ -67,3 +67,22 @@ def test_the_notice_in_code_is_the_notice_the_prompt_demands() -> None:
     for notice in CONFIDENTIALITY_NOTICES:
         assert notice in prompt, notice[:40]
     assert re.search(r"Der Inhalt dieser E-Mail", prompt)
+
+
+def test_nothing_written_after_the_notice_reaches_the_email() -> None:
+    # Verbatim from a real revision (application 46): the LinkedIn note came back
+    # under the notice, inside the e-mail body.
+    leaked = (
+        f"Text.\n\n{CONFIDENTIALITY_NOTICES[0]}\n\n"
+        "LinkedIn: Guten Tag Talissa Blajan, zu Ihrem Senior-Software-Engineer-Projekt "
+        "passe ich mit TypeScript, Agentic Coding und MCP sehr gut."
+    )
+    tidy = tidy_body(leaked)
+    assert tidy.endswith(CONFIDENTIALITY_NOTICES[0])
+    assert "LinkedIn:" not in tidy
+    assert tidy.startswith("Text.")
+
+
+def test_a_body_without_the_notice_is_left_whole() -> None:
+    body = "Guten Tag,\n\nich bin da.\n\n-- \nViele Grüße"
+    assert tidy_body(body) == body

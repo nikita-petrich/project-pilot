@@ -192,6 +192,18 @@ class ApplicationService:
         if self._cv_refresher is not None:
             await self._cv_refresher.refresh()
 
+    async def _ensure_cvs_cached(self) -> None:
+        """Fetch the CVs only when the cache lacks one, for views that merely report them.
+
+        The cache lives in the container, so every deploy empties it. A revision or a
+        new recipient right after a deploy then reported both CVs as missing — true of
+        the empty cache, false of what a send would attach. Refreshing only when
+        something is absent keeps a string of revisions from downloading the PDFs each
+        time.
+        """
+        if self._cv_attachments is not None and self._cv_attachments.missing(None):
+            await self._ensure_cvs()
+
     async def draft_for_listing(self, listing_id: int) -> DraftView:
         """Generate and persist a draft for a stored listing (Apply button, known URL)."""
         await self._ensure_cvs()
@@ -280,6 +292,7 @@ class ApplicationService:
         self, application_id: int, instruction: str, *, images: Sequence[ImageAttachment] = ()
     ) -> DraftView:
         """Rewrite the draft per Nik's reply; sent/cancelled applications are immutable."""
+        await self._ensure_cvs_cached()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             application = await self._editable(repo, application_id)
@@ -311,6 +324,7 @@ class ApplicationService:
         address = email.strip()
         if not is_email(address):
             raise ApplicationStateError(f"{address!r} is not a valid e-mail address")
+        await self._ensure_cvs_cached()
         async with session_scope(self._session_factory) as session:
             repo = Repository(session)
             application = await self._editable(repo, application_id)
