@@ -8,8 +8,10 @@ import httpx
 import pytest
 from anthropic import omit
 from openai import APIStatusError
+from openai import omit as openai_omit
 
 from project_pilot.application.documents import ImageAttachment
+from project_pilot.application.generator import OpenAiDraftClient, draft_client
 from project_pilot.config import LlmCredentials
 from project_pilot.errors import ConfigError
 from project_pilot.evaluation.llm import (
@@ -24,6 +26,7 @@ from project_pilot.evaluation.llm import (
     build_user_content,
     is_match_notifiable,
     load_prompt,
+    openai_effort,
     parse_failure,
     probe_llm,
     render_listing,
@@ -481,6 +484,21 @@ def test_effort_is_only_sent_when_configured() -> None:
     # request over this one key, so an unset LLM_EFFORT must add nothing at all.
     assert anthropic_effort("") is omit  # the SDK drops the key from the body entirely
     assert anthropic_effort("low") == {"effort": "low"}
+    # The same ENV variable steers OpenAI's reasoning_effort, with the same absence.
+    assert openai_effort("") is openai_omit
+    assert openai_effort("low") == "low"
+
+
+def test_the_configured_effort_reaches_the_openai_adapters() -> None:
+    # Before this, LLM_EFFORT was silently dropped on openai, so a reasoning model
+    # ran at its own default depth no matter what the environment said.
+    credentials = LlmCredentials(provider="openai", api_key="k", model="m", effort="low")
+    matcher = structured_client(credentials)
+    drafter = draft_client(credentials)
+    assert isinstance(matcher, OpenAiStructuredClient)
+    assert isinstance(drafter, OpenAiDraftClient)
+    assert matcher._effort == "low"
+    assert drafter._effort == "low"
 
 
 def test_a_truncated_answer_is_named_as_one() -> None:

@@ -29,11 +29,15 @@ jobs:
     # configuration the worker runs. Without it this job sees only repository-level
     # secrets, and a missing copy there makes it skip green without judging a case.
     environment: prod
+    # All four are environment *secrets* (as the deploy renders them), not variables:
+    # read from the wrong store they are empty, and the job skips green without
+    # judging a single case.
     env:
-      LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+      LLM_PROVIDER: ${{ secrets.LLM_PROVIDER }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-      LLM_MODEL: ${{ vars.LLM_MODEL }}
+      LLM_MODEL: ${{ secrets.LLM_MODEL }}
+      LLM_EFFORT: ${{ secrets.LLM_EFFORT }}
     steps:
       - uses: actions/checkout@v5
 

@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from anthropic import AsyncAnthropic, Omit, omit
 from anthropic.types import OutputConfigParam
 from openai import AsyncOpenAI
+from openai import Omit as OpenAiOmit
+from openai import omit as openai_omit
+from openai.types.shared import ReasoningEffort
 
 from project_pilot.application.documents import ImageAttachment
 from project_pilot.config import LlmCredentials, LlmEffort
@@ -183,6 +186,17 @@ def anthropic_effort(effort: LlmEffort) -> OutputConfigParam | Omit:
     here, so the structured response survives the extra key.
     """
     return {"effort": effort} if effort else omit
+
+
+def openai_effort(effort: LlmEffort) -> ReasoningEffort | OpenAiOmit:
+    """``reasoning_effort`` for the OpenAI SDK, or its own "absent" sentinel.
+
+    Same contract as ``anthropic_effort``: the five configured depths are valid
+    on both APIs, and an unset ``LLM_EFFORT`` drops the key from the body so a
+    model without a reasoning knob never sees it. One ENV variable therefore
+    steers reasoning on whichever provider ``LLM_PROVIDER`` selects.
+    """
+    return effort if effort else openai_omit
 
 
 def parse_failure(stop_reason: str | None) -> str:
@@ -386,12 +400,21 @@ class LlmMatcher:
 
 
 class OpenAiStructuredClient:
-    """Thin adapter over the OpenAI SDK's structured `parse` (network, not unit-tested)."""
+    """Thin adapter over the OpenAI SDK's structured `parse` (network, not unit-tested).
+
+    Like its Anthropic twin it pins no reasoning option of its own: ``effort`` is
+    configuration (``LLM_EFFORT``) and is omitted unless set.
+    """
 
     def __init__(
-        self, api_key: str, *, client: AsyncOpenAI | None = None
+        self,
+        api_key: str,
+        *,
+        client: AsyncOpenAI | None = None,
+        effort: LlmEffort = "",
     ) -> None:  # pragma: no cover
         self._client = client or AsyncOpenAI(api_key=api_key)
+        self._effort = effort
 
     async def ping(self, *, model: str) -> None:  # pragma: no cover
         """Smallest real call there is: proves the model, the key and the credit at once.
@@ -420,6 +443,7 @@ class OpenAiStructuredClient:
             model=model,
             messages=messages,
             response_format=MatchVerdict,
+            reasoning_effort=openai_effort(self._effort),
         )
         message = completion.choices[0].message
         usage = completion.usage
@@ -496,7 +520,7 @@ def structured_client(credentials: LlmCredentials) -> MatchLlmClient:
         case "anthropic":
             return AnthropicStructuredClient(credentials.api_key, effort=credentials.effort)
         case "openai":
-            return OpenAiStructuredClient(credentials.api_key)
+            return OpenAiStructuredClient(credentials.api_key, effort=credentials.effort)
         case other:
             raise ConfigError(f"no stage-3 client for LLM_PROVIDER '{other}'")
 

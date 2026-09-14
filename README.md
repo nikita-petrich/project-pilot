@@ -210,8 +210,8 @@ gitignored and `.env.example` is the template):
 | `PROXY_NETWORK` | VPS only: the Docker network the reverse proxy runs on, so it can reach `project-pilot-mcp` |
 | `LLM_PROVIDER` | `openai` (default) or `anthropic` — which API the matching and the drafts call |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | only the selected provider's key is required |
-| `LLM_MODEL` | model name for that provider, e.g. `claude-opus-5` |
-| `LLM_EFFORT` | optional, Anthropic only: reasoning depth (`low`…`max`); empty means it is not sent at all |
+| `LLM_MODEL` | model name for that provider, e.g. `gpt-5.6-luna` or `claude-opus-5` |
+| `LLM_EFFORT` | optional, both providers: reasoning depth (`low`…`max`); empty means it is not sent at all |
 | `SEARCH_URLS` | comma-separated board search URLs, sorted "newest first" |
 | `SCAN_INTERVAL_MIN` | default 15, validated to be >= 15 |
 | `ANALYSIS_WINDOW_MIN` | default 30 |

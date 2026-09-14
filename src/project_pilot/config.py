@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 SOURCE_NAME = "freelancermap"
 _LOG_LEVELS = frozenset({"debug", "info", "warning", "error", "critical"})
 _SEARCH_PROVIDERS = frozenset({"duckduckgo", "none"})
-# Anthropic's reasoning depths, plus "" for "do not send the parameter".
+# The reasoning depths both providers accept (Anthropic `output_config.effort`, OpenAI
+# `reasoning_effort`), plus "" for "do not send the parameter".
 LlmEffort = Literal["", "low", "medium", "high", "xhigh", "max"]
 _LLM_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 _LLM_PROVIDERS = frozenset({"openai", "anthropic"})
@@ -106,7 +107,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default="", repr=False)
     anthropic_api_key: str = Field(default="", repr=False)
     llm_model: str = ""
-    # Anthropic only (output_config.effort). OpenAI models take no such option here.
+    # Reasoning depth for whichever provider is selected; unset sends nothing.
     llm_effort: LlmEffort = ""
 
     smtp_host: str = ""

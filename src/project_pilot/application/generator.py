@@ -17,6 +17,7 @@ from project_pilot.evaluation.llm import (
     anthropic_effort,
     build_anthropic_content,
     build_user_content,
+    openai_effort,
     parse_failure,
 )
 
@@ -175,12 +176,21 @@ class ApplicationGenerator:
 
 
 class OpenAiDraftClient:
-    """Thin adapter over the OpenAI SDK's structured `parse` (network, not unit-tested)."""
+    """Thin adapter over the OpenAI SDK's structured `parse` (network, not unit-tested).
+
+    Reasoning depth comes from ``LLM_EFFORT`` and is omitted unless set, exactly
+    as in the matcher's adapter.
+    """
 
     def __init__(
-        self, api_key: str, *, client: AsyncOpenAI | None = None
+        self,
+        api_key: str,
+        *,
+        client: AsyncOpenAI | None = None,
+        effort: LlmEffort = "",
     ) -> None:  # pragma: no cover
         self._client = client or AsyncOpenAI(api_key=api_key)
+        self._effort = effort
 
     async def complete(
         self,
@@ -198,6 +208,7 @@ class OpenAiDraftClient:
             model=model,
             messages=messages,
             response_format=ApplicationDraft,
+            reasoning_effort=openai_effort(self._effort),
         )
         message = completion.choices[0].message
         usage = completion.usage
@@ -255,6 +266,6 @@ def draft_client(credentials: LlmCredentials) -> StructuredDraftClient:
         case "anthropic":
             return AnthropicDraftClient(credentials.api_key, effort=credentials.effort)
         case "openai":
-            return OpenAiDraftClient(credentials.api_key)
+            return OpenAiDraftClient(credentials.api_key, effort=credentials.effort)
         case other:
             raise ConfigError(f"no application-draft client for LLM_PROVIDER '{other}'")
