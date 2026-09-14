@@ -54,9 +54,12 @@ TASK_STORED = (
     "aus Schritt 1 und mach trotzdem weiter.\n"
     "3. Skill write-application für dasselbe Listing — zeig mir Betreff, Anschreiben und "
     "LinkedIn-Nachricht, jeweils als eigenen Codeblock zum Kopieren; direkt unter der "
-    "LinkedIn-Nachricht der Link zur LinkedIn-Personensuche. Hat die Recherche eine "
-    "brauchbare Adresse ergeben, hinterleg sie als Empfänger am Entwurf und schreib in "
-    "einer Zeile dazu, welche und woher."
+    "LinkedIn-Nachricht die Zeile linkedin_search_link des Entwurfs, so wie sie kommt. "
+    "Hinterleg die erste Adresse der Recherche als Empfänger am Entwurf und schreib in "
+    "einer Zeile dazu: Empfänger: <Adresse> (<Herkunft>) — Anrede an <Ansprechperson> "
+    "aus dem Inserat, <Firma> leitet intern weiter. Gehört die Adresse jemand anderem "
+    "als der Ansprechperson, ist das bei Vermittlern normal: kein offener Punkt, Anrede "
+    "nicht umstellen."
 )
 # The unstored twin (a test-match run): there is no row to fetch a card for, so
 # the alert's own text is the only copy of the facts there is.

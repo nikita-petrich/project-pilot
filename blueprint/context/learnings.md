@@ -93,7 +93,10 @@
 - **Regel:** Kontaktdaten und Recherche-Links bilden **eine** zweispaltige Tabelle, Links
   hinter kurzen Namen (Person, Host). Betreff, Anschreiben und LinkedIn-Nachricht stehen
   je in einem eigenen Codeblock; der LinkedIn-Personensuchlink steht direkt **unter** der
-  Nachricht und bleibt auch in der Tabelle.
+  Nachricht — als kurzer Link mit Namen (`linkedin_search_link`) — und bleibt auch in der
+  Tabelle. Im ersten Live-Test meldete der Chat L1 trotzdem als offenen Punkt, weil der
+  Account-Skill veraltet war: Regeln, auf die der Ablauf angewiesen ist, stehen deshalb
+  auch im Auftrag, den der Server mitschickt.
 - **Umgesetzt:** Tabelle — `notification/overview.py`, geliefert als `overview` von
   `project_pilot_enrich_company` und `research` von `project_pilot_match_card`. Auftrag —
   `notification/claude_link.py`. Skills `write-application`, `enrich-company`, `match-card`.

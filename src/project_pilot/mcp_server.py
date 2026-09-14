@@ -151,6 +151,13 @@ def _check_payload(result: CheckResult) -> dict[str, object]:
     return payload
 
 
+def linkedin_search_link(company: str | None, contact_name: str | None) -> str:
+    """The people search as a markdown link named after whoever it finds."""
+    url = linkedin_people_url(company=company, person=contact_name)
+    who = contact_name or "Ansprechperson"
+    return f"🙋 [{who} auf LinkedIn suchen]({url})"
+
+
 def _draft_payload(view: DraftView) -> dict[str, object]:
     return {
         "application_id": view.application_id,
@@ -166,6 +173,9 @@ def _draft_payload(view: DraftView) -> dict[str, object]:
         # Where to paste it: a note is useless without the profile it goes to, and
         # this search is the step Nik would otherwise do by hand every time.
         "linkedin_search": linkedin_people_url(company=view.company, person=view.contact_name),
+        # The same search as a short named link, printed under the note: a raw
+        # people-search URL wraps over two lines in the chat.
+        "linkedin_search_link": linkedin_search_link(view.company, view.contact_name),
         "status": view.status.value,
         "revision_count": view.revision_count,
         "attachments": list(view.attachments),

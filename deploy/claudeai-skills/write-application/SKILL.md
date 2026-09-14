@@ -107,8 +107,8 @@ copy button takes exactly that text and nothing else:
   signature and confidentiality note, in a code block. No markdown, no
   commentary inside it.
 - **linkedin_message** - max 300 characters, booking link included, in a code
-  block. Print the LinkedIn people search (`linkedin_search` from the draft)
-  **directly below** it, as a markdown link named after the contact person: a
+  block. Print the draft's `linkedin_search_link` line **directly below** it, as
+  it comes (the people search behind the contact person's name): a
   connection note is useless without the profile it goes to, and that search is
   otherwise a manual step every single time.
 

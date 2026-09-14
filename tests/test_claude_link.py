@@ -155,5 +155,13 @@ def test_the_order_asks_for_one_table_and_copyable_blocks() -> None:
     assert "Tabelle overview genau so" in prompt
     assert "eine Tabelle" in prompt
     assert "jeweils als eigenen Codeblock" in prompt
-    assert "direkt unter der LinkedIn-Nachricht der Link zur LinkedIn-Personensuche" in prompt
+    assert "direkt unter der LinkedIn-Nachricht die Zeile linkedin_search_link" in prompt
+
+
+def test_a_mailbox_of_someone_else_is_not_an_open_point() -> None:
+    # Pattern L1: an agency's shared or colleague's mailbox is expected. The chat
+    # still flagged it until the rule rode in the order itself, not only the skill.
+    prompt = session_prompt(_message())
+    assert "kein offener Punkt, Anrede nicht umstellen" in prompt
+    assert "leitet intern weiter" in prompt
     assert "Codeblock" in session_prompt(_message(listing_id=None))

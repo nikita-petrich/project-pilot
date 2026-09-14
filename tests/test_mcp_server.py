@@ -28,6 +28,7 @@ from project_pilot.mcp_server import (
     enrich_company,
     get_listing,
     ingest_listing,
+    linkedin_search_link,
     list_matches,
     match_card,
     token_guard,
@@ -581,3 +582,12 @@ def test_the_enrichment_payload_says_where_the_connection_note_goes() -> None:
     assert "Sebastian+Koch" in search
     assert payload["links"] == asdict(result.links)
     assert payload["emails"] == [{"value": "i.strucken@weissenberg.de", "source": "freelancermap"}]
+
+
+def test_the_people_search_under_the_note_is_a_short_named_link() -> None:
+    # A raw people-search URL wraps over two lines under the note in the chat.
+    assert linkedin_search_link("Randstad Digital Germany AG", "Talissa Blajan") == (
+        "🙋 [Talissa Blajan auf LinkedIn suchen](https://www.linkedin.com/search/results/"
+        "people/?keywords=Talissa+Blajan+AND+Randstad+Digital+Germany+AG)"
+    )
+    assert linkedin_search_link("ACME GmbH", None).startswith("🙋 [Ansprechperson auf LinkedIn")
