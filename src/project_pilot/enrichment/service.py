@@ -9,7 +9,13 @@ always gets whatever was found plus the LinkedIn/Google research links.
 import logging
 from urllib.parse import urlsplit, urlunsplit
 
-from project_pilot.enrichment.extract import find_contact_links, rank_emails, scan_html
+from project_pilot.enrichment.chain import resolve_emails, resolve_persons, resolve_phones
+from project_pilot.enrichment.extract import (
+    DIRECTORY_HOSTS,
+    find_contact_links,
+    outbound_site,
+    scan_html,
+)
 from project_pilot.enrichment.fetch import FetchedPage, Fetcher
 from project_pilot.enrichment.links import build_links
 from project_pilot.enrichment.message import build_connection_message
@@ -18,29 +24,6 @@ from project_pilot.enrichment.search import SearchProvider
 from project_pilot.errors import EnrichmentError
 
 logger = logging.getLogger(__name__)
-
-# Search hits on these hosts are directories/socials, never the company's own site.
-_SKIP_HOSTS: tuple[str, ...] = (
-    "linkedin.com",
-    "xing.com",
-    "kununu.com",
-    "facebook.com",
-    "instagram.com",
-    "twitter.com",
-    "x.com",
-    "youtube.com",
-    "wikipedia.org",
-    "freelancermap.",
-    "google.",
-    "indeed.",
-    "glassdoor.",
-    "stepstone.",
-    "gelbeseiten.",
-    "northdata.",
-    "companyhouse.",
-    "wlw.de",
-    "dnb.com",
-)
 
 
 def _dedupe(values: list[str]) -> list[str]:
@@ -78,10 +61,27 @@ class EnrichmentService:
         title: str | None = None,
         known_url: str | None = None,
         known_email: str | None = None,
+        company_page: str | None = None,
     ) -> ContactEnrichment:
-        """Look up contact data for ``company``/``person`` and assemble the result."""
+        """Look up contact data for ``company``/``person`` and assemble the result.
+
+        ``company_page`` is the company's own page on the board the listing came
+        from. It is read first: the agent maintains it themselves, so what stands
+        there beats anything the Impressum crawl turns up — and its outbound link
+        is the company's real homepage, which saves the website search.
+
+        Only that page counts as stated. A ``known_email`` lifted out of the ad
+        text, or a ``person`` handed in by the caller, stays marked as ``web``:
+        both are plausible rather than published, and flagging them for a look is
+        the safe direction for a tool that sends real mail.
+        """
         if not any((company, person, title)):
             raise EnrichmentError("nothing to enrich: no company, person, or title given")
+
+        board = await self._fetch(company_page) if company_page else None
+        stated = scan_html(board.text) if board is not None else None
+        if board is not None and not known_url:
+            known_url = outbound_site(board.text, board.url)
 
         website = self._origin(known_url) if known_url else await self._find_website(company)
         pages = await self._gather_pages(website) if website else []
@@ -99,6 +99,7 @@ class EnrichmentService:
             company=company,
             person=person,
             website=website,
+            company_page=board.url if board is not None else company_page,
             links=build_links(company=company, person=person, title=title),
             linkedin_message=build_connection_message(
                 person=person,
@@ -107,10 +108,18 @@ class EnrichmentService:
                 sender=self._sender,
                 offer_du=self._offer_du,
             ),
-            emails=rank_emails(_dedupe(emails), person),
-            phones=_dedupe(phones),
-            persons=_dedupe(persons),
-            sources=[page.url for page in pages],
+            emails=resolve_emails(
+                stated=_dedupe(stated.emails if stated else []),
+                found=_dedupe(emails),
+                person=person,
+            ),
+            phones=resolve_phones(
+                stated=_dedupe(stated.phones if stated else []), found=_dedupe(phones)
+            ),
+            persons=resolve_persons(
+                stated=_dedupe(stated.persons if stated else []), found=_dedupe(persons)
+            ),
+            sources=[page.url for page in ([board] if board is not None else []) + pages],
         )
 
     async def _find_website(self, company: str | None) -> str | None:
@@ -123,7 +132,7 @@ class EnrichmentService:
             return None
         for result in results:
             host = urlsplit(result.url).netloc.lower().removeprefix("www.")
-            if host and not any(skip in host for skip in _SKIP_HOSTS):
+            if host and not any(skip in host for skip in DIRECTORY_HOSTS):
                 return self._origin(result.url)
         return None
 

@@ -267,6 +267,7 @@ async def test_get_listing_returns_the_facts_that_only_live_in_raw(
             "workload": 100,
             "durationText": "6 Monate",
             "expires": "2026-09-30T00:00:00",
+            "companyUrl": "/firma/556-acme-gmbh",
         }
         session.add(listing)
         await session.commit()
@@ -279,6 +280,10 @@ async def test_get_listing_returns_the_facts_that_only_live_in_raw(
     assert detail["workload"] == "100%"
     assert detail["duration"] == "6 Monate"
     assert detail["apply_by"] == "30.09.2026"
+    # The board's own company page, resolved against the listing's URL rather than
+    # assembled from the id and the company name — a rename must not silently
+    # produce a dead link.
+    assert detail["company_page"] == "https://example.com/firma/556-acme-gmbh"
 
 
 async def test_get_listing_leaves_an_unstated_client_type_unknown(

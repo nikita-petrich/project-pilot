@@ -206,6 +206,18 @@ def test_the_card_carries_one_search_per_subject() -> None:
     assert "🔎 Impressum/Kontakt: https://www.google.com/search?q=ACME+GmbH+Impressum" in card
 
 
+def test_the_card_points_at_the_company_page_before_offering_a_search() -> None:
+    # The board hands us this link, and it carries phone and e-mail outright — so
+    # it stands above the Impressum query, which is the fallback for not having it.
+    card = render_card(
+        replace(_card_message(), company_page="https://www.freelancermap.de/firma/556-acme")
+    )
+    assert "🏷 Firmenseite: https://www.freelancermap.de/firma/556-acme" in card
+    assert card.index("🏷 Firmenseite") < card.index("🔎 Impressum/Kontakt")
+    # A listing that names no company page simply has no such line.
+    assert "Firmenseite" not in render_card(_card_message())
+
+
 def test_a_missing_contact_is_stated_rather_than_dropped() -> None:
     # An ad that names nobody is a fact worth seeing at a glance — the same
     # reason the card prints "Company: not stated" instead of hiding the line.

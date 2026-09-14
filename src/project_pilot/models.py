@@ -231,9 +231,13 @@ class ContactLead(Base):
     company: Mapped[str | None] = mapped_column(String(512), default=None)
     person: Mapped[str | None] = mapped_column(String(256), default=None)
     website: Mapped[str | None] = mapped_column(String(1024), default=None)
-    emails: Mapped[list[str]] = mapped_column(JSONB, default=list)
-    phones: Mapped[list[str]] = mapped_column(JSONB, default=list)
-    persons: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    # ``{"value": ..., "source": "freelancermap" | "web"}`` per entry. Rows written
+    # before provenance existed hold plain strings; JSONB takes both, and
+    # ``enrichment.schemas.contact_data`` reads either shape back — so the change
+    # needed no migration.
+    emails: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
+    phones: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
+    persons: Mapped[list[dict[str, str]]] = mapped_column(JSONB, default=list)
     sources: Mapped[list[str]] = mapped_column(JSONB, default=list)
     links: Mapped[dict[str, object]] = mapped_column(JSONB, default=dict)
     linkedin_message: Mapped[str] = mapped_column(Text, default="")

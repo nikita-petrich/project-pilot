@@ -101,6 +101,9 @@ def _listing_facts(listing: Listing, now: datetime) -> dict[str, object]:
     return {
         "company": message.company,
         "contact_name": message.contact_name,
+        # The agent's own page on the board: phone, e-mail and website without a
+        # single search. Read off the listing, so it costs nothing to hand over.
+        "company_page": message.company_page,
         # None means the source did not say — which is not the same as "agency".
         "client_type": client_type,
         "remote": message.remote_label,
@@ -161,9 +164,13 @@ def _enrichment_payload(result: ContactEnrichment) -> dict[str, object]:
         "company": result.company,
         "person": result.person,
         "website": result.website,
-        "emails": result.emails,
-        "phones": result.phones,
-        "persons": result.persons,
+        # Each datum carries where it came from: "freelancermap" means the agent
+        # stated it on their own company page, "web" means the Impressum crawl
+        # found it and it wants a look before anything is sent there.
+        "emails": [datum.as_json() for datum in result.emails],
+        "phones": [datum.as_json() for datum in result.phones],
+        "persons": [datum.as_json() for datum in result.persons],
+        "company_page": result.company_page,
         "linkedin_message": result.linkedin_message,
         "sources": result.sources,
     }

@@ -26,7 +26,7 @@ from project_pilot.db import create_engine, create_session_factory
 from project_pilot.enrichment.fetch import Fetcher, WebFetcher
 from project_pilot.enrichment.listing import ListingEnrichmentService
 from project_pilot.enrichment.render import PlaywrightFetcher
-from project_pilot.enrichment.schemas import ContactEnrichment
+from project_pilot.enrichment.schemas import ContactDatum, ContactEnrichment
 from project_pilot.enrichment.search import DuckDuckGoSearch, NullSearchProvider, SearchProvider
 from project_pilot.enrichment.service import EnrichmentService
 from project_pilot.errors import EnrichmentError
@@ -338,14 +338,21 @@ async def _run_enrich(
             await engine.dispose()
 
 
+def _with_source(data: list[ContactDatum]) -> str:
+    """``value (source)`` per entry — the provenance decides how far to trust it."""
+    return ", ".join(f"{datum.value} ({datum.source})" for datum in data)
+
+
 def _format_enrichment(result: ContactEnrichment) -> str:
     lines = [f"Company: {result.company or '—'}", f"Contact: {result.person or '—'}"]
+    if result.company_page:
+        lines.append(f"Company page: {result.company_page}")
     if result.website:
         lines.append(f"Website: {result.website}")
-    lines.append("E-mails: " + (", ".join(result.emails) if result.emails else "none found"))
-    lines.append("Phones:  " + (", ".join(result.phones) if result.phones else "none found"))
+    lines.append("E-mails: " + (_with_source(result.emails) or "none found"))
+    lines.append("Phones:  " + (_with_source(result.phones) or "none found"))
     if result.persons:
-        lines.append("Named on site: " + ", ".join(result.persons))
+        lines.append("Named on site: " + _with_source(result.persons))
     lines += ["", "LinkedIn connection message (copy):", f"  {result.linkedin_message}"]
     links = result.links
     lines += [

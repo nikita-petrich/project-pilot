@@ -64,6 +64,21 @@ def test_extract_phones_dedupes_by_digits() -> None:
     assert extract_phones("Tel 030 1234567 oder 030 1234567") == ["030 1234567"]
 
 
+def test_extract_phones_treats_the_trunk_zero_and_the_country_code_as_one_number() -> None:
+    # A company page that prints its number once as a tel: link and once as text
+    # gives one number in two spellings; offering both makes the reader choose
+    # between them. The international form is kept, being the unambiguous one.
+    assert extract_phones("+4921154080932 und 0211 54080932") == ["+4921154080932"]
+    assert extract_phones("0211 54080932, auch +49 211 54080932") == ["0211 54080932"]
+
+
+def test_extract_phones_keeps_genuinely_different_numbers_apart() -> None:
+    assert extract_phones("Zentrale 0211 54080000, Durchwahl 0211 54080932") == [
+        "0211 54080000",
+        "0211 54080932",
+    ]
+
+
 def test_extract_persons_reads_impressum_labels() -> None:
     text = "Geschäftsführer: Max Mustermann. Vertreten durch Dr. Anna Schmidt."
     assert extract_persons(text) == ["Max Mustermann", "Dr. Anna Schmidt"]

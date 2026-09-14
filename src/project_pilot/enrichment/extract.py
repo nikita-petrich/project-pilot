@@ -118,8 +118,12 @@ def _normalize_phone(raw: str) -> tuple[str, str] | None:
     if not (plus or digits.startswith("0")):
         return None
     display = re.sub(r"\s+", " ", re.sub(r"[()/]", " ", cleaned)).strip()
-    key = ("+" if plus else "") + digits
-    return display, key
+    # Dedupe on the subscriber tail, not the whole string: a company page that
+    # states its number once as ``+49 211 54080932`` and once as ``0211 54080932``
+    # is giving one number, and listing both makes the reader pick between two
+    # spellings of the same thing. Nine digits is long enough that two genuinely
+    # different numbers do not collide, and short numbers keep all of theirs.
+    return display, digits[-9:]
 
 
 def extract_phones(text: str) -> list[str]:
@@ -169,6 +173,32 @@ class ContactLink:
     priority: int
 
 
+# Hosts that are never a company's own site: directories, job boards and socials.
+# Used both when picking a website out of search results and when following a board
+# company page's outbound link.
+DIRECTORY_HOSTS: tuple[str, ...] = (
+    "linkedin.com",
+    "xing.com",
+    "kununu.com",
+    "facebook.com",
+    "instagram.com",
+    "twitter.com",
+    "x.com",
+    "youtube.com",
+    "wikipedia.org",
+    "freelancermap.",
+    "google.",
+    "indeed.",
+    "glassdoor.",
+    "stepstone.",
+    "gelbeseiten.",
+    "northdata.",
+    "companyhouse.",
+    "wlw.de",
+    "dnb.com",
+)
+
+
 # kind -> (priority, url-or-text needles). Lower priority is fetched first.
 _LINK_KINDS: tuple[tuple[str, int, tuple[str, ...]], ...] = (
     ("impressum", 0, ("impressum", "imprint", "legal-notice", "legal_notice", "legal")),
@@ -207,6 +237,30 @@ def find_contact_links(html: str, base_url: str) -> list[ContactLink]:
         canonical = parts._replace(fragment="").geturl()
         found.setdefault(canonical, ContactLink(kind=kind, url=canonical, priority=priority))
     return sorted(found.values(), key=lambda link: (link.priority, link.url))
+
+
+def outbound_site(html: str, base_url: str) -> str | None:
+    """The first link off this page to a company's own site, as a bare origin.
+
+    A board's company page carries the agent's real homepage, which is a better
+    answer than whatever a search engine ranks first for the company name — and it
+    saves the search entirely. Directories and socials are skipped, as is the board
+    itself; anything else is taken at face value and marked by its source.
+    """
+    base_host = urlsplit(base_url).netloc.lower().removeprefix("www.")
+    soup = BeautifulSoup(html, "lxml")
+    for anchor in soup.find_all("a", href=True):
+        href = str(anchor["href"]).strip()
+        if not href or href.startswith(("mailto:", "tel:", "javascript:", "#")):
+            continue
+        parts = urlsplit(urljoin(base_url, href))
+        host = parts.netloc.lower().removeprefix("www.")
+        if parts.scheme not in ("http", "https") or not host or host == base_host:
+            continue
+        if any(skip in host for skip in DIRECTORY_HOSTS):
+            continue
+        return parts._replace(path="/", query="", fragment="").geturl()
+    return None
 
 
 # --- whole-page scan --------------------------------------------------------

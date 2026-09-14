@@ -16,14 +16,34 @@ append-only `contact_leads` record.
   so the lead is linked to the listing.
 - Neither → ask which company or listing to enrich.
 
-## 2. Report
+## 2. Every datum says where it came from
+
+Each entry under `emails`, `phones` and `persons` is an object, not a string:
+
+| `source` | What it means | How far to trust it |
+|---|---|---|
+| `freelancermap` | the agent stated it on their own company page | a stated contact — use it |
+| `web` | our Impressum/contact crawl found it | plausible, wants a look before anything is sent there |
+
+**Always show the source.** An address is only as good as where it came from,
+and that is the one thing the user cannot see for themselves.
+
+The list is already in the right order — the company page first, then an
+address carrying the named contact's name, then the role mailbox. Do not
+re-sort it, and do not present a `web` find as if the company had given it.
+
+`company_page` is the page those stated contacts came from. Show it: it is
+worth opening even when the lookup found nothing.
+
+## 3. Report
 
 Present what came back, compactly:
 
 ```
 🏢 <Company>
-✉️  e-mails found (best first)
-📞 phones
+🏷 <company_page, when there is one>
+✉️  <address> (<source>) — best first
+📞 <number> (<source>)
 👤 persons / roles
 🔗 research links worth opening
 ```
@@ -33,7 +53,7 @@ Present what came back, compactly:
 - Mention in one line that the lookup is stored (append-only), so repeated
   runs are cheap to compare.
 
-## 3. Hand off, don't act
+## 4. Hand off, don't act
 
 If the user wants to use a found address for an application, point to
 `set_recipient` via the send flow (`send-application`). This skill only finds

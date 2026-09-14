@@ -42,6 +42,8 @@ So you do not repeat any of it in your own words:
 - The stored verdict: score, what fits, matching skills, gaps, risk flags
 - The listing link, the database coordinates, the match threshold, the posting
   time in Berlin, and the LinkedIn company / LinkedIn person / Impressum searches
+- The company's own page on the board, when the listing named one — often the
+  shortest route to a phone number and an address, with nothing to search for
 
 A missing contact person shows as `K.A.` rather than a dropped line - an ad that
 names nobody is itself worth seeing.

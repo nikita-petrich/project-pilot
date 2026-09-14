@@ -19,6 +19,7 @@ from project_pilot.enrichment.links import (
 )
 from project_pilot.ingestion.normalize import (
     BERLIN,
+    company_page_url,
     detect_language,
     is_onsite_only,
     resolve_contact_name,
@@ -47,6 +48,9 @@ class MatchMessage:
     threshold: int | None = None
     company: str | None = None
     contact_name: str | None = None
+    # The company's own page on the board, when the listing named one. It is the
+    # one contact source that needs no searching at all.
+    company_page: str | None = None
     is_endcustomer: bool | None = None
     location: str | None = None
     remote_label: str | None = None
@@ -196,6 +200,7 @@ def to_match_message(
         threshold=threshold,
         company=raw.company,
         contact_name=contact_name,
+        company_page=company_page_url(listing.raw or {}, listing.external_url),
         is_endcustomer=raw.is_endcustomer_project,
         location=listing.location,
         remote_label=remote_label,
@@ -362,6 +367,8 @@ def research_lines(message: MatchMessage) -> list[str]:
         lines.append(f"🗓 Eingestellt: {message.posted_at_label} (Berlin)")
     if message.onsite_only:
         lines.append("🚨 Liest sich als reines Vor-Ort-Projekt — vor dem Senden prüfen.")
+    if message.company_page:
+        lines.append(f"🏷 Firmenseite: {message.company_page}")
     if message.company:
         lines.append(f"👥 LinkedIn Firma: {linkedin_company_url(message.company)}")
         lines.append(

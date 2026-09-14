@@ -15,7 +15,11 @@ from project_pilot.enrichment.extract import extract_emails
 from project_pilot.enrichment.schemas import ContactEnrichment
 from project_pilot.enrichment.service import EnrichmentService
 from project_pilot.errors import EnrichmentError
-from project_pilot.ingestion.normalize import extract_contact_person, looks_like_company
+from project_pilot.ingestion.normalize import (
+    company_page_url,
+    extract_contact_person,
+    looks_like_company,
+)
 from project_pilot.models import ContactLead
 from project_pilot.repository import Repository
 
@@ -62,14 +66,18 @@ class ListingEnrichmentService:
             listing = await Repository(session).get_listing(listing_id)
             if listing is None:
                 raise EnrichmentError(f"Listing {listing_id} not found")
-            company, person, known_email = derive_contact(
-                listing.raw or {}, listing.description or ""
-            )
+            raw = listing.raw or {}
+            company, person, known_email = derive_contact(raw, listing.description or "")
+            company_page = company_page_url(raw, listing.external_url)
             title = listing.title
 
         # The network lookup runs outside any unit of work (no transaction held open).
         result = await self._service.enrich(
-            company=company, person=person, title=title, known_email=known_email
+            company=company,
+            person=person,
+            title=title,
+            known_email=known_email,
+            company_page=company_page,
         )
 
         async with session_scope(self._session_factory) as session:
@@ -79,9 +87,11 @@ class ListingEnrichmentService:
                     company=result.company,
                     person=result.person,
                     website=result.website,
-                    emails=result.emails,
-                    phones=result.phones,
-                    persons=result.persons,
+                    # company_page is not stored: it is a pure function of
+                    # listings.raw, which is already kept losslessly.
+                    emails=[datum.as_json() for datum in result.emails],
+                    phones=[datum.as_json() for datum in result.phones],
+                    persons=[datum.as_json() for datum in result.persons],
                     sources=result.sources,
                     links=asdict(result.links),
                     linkedin_message=result.linkedin_message,

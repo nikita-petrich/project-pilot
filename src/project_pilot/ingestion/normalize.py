@@ -2,6 +2,7 @@
 
 import hashlib
 import re
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
@@ -377,3 +378,23 @@ def parse_posted(
             midnight = datetime(day.year, day.month, day.day, tzinfo=BERLIN)
             return midnight.astimezone(UTC), PostedPrecision.DAY
     return None, PostedPrecision.UNKNOWN
+
+
+def _raw_str(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def company_page_url(raw: Mapping[str, object], base_url: str) -> str | None:
+    """The company's own page on the board, resolved against the listing's URL.
+
+    The source hands us the link; it is **read, never built**. Assembling one from
+    an id and the company name would go stale the moment the company renames
+    itself, and we would quietly fetch a dead URL instead of noticing. Joining
+    against the listing's own address also keeps this board-neutral: a relative
+    ``/firma/556-…`` lands on whichever host the listing came from.
+    """
+    href = _raw_str(raw.get("companyUrl"))
+    if href is None:
+        return None
+    absolute = urljoin(base_url, href.strip())
+    return absolute if urlsplit(absolute).scheme in ("http", "https") else None

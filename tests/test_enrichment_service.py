@@ -3,9 +3,14 @@
 import pytest
 
 from project_pilot.enrichment.fetch import FetchedPage
-from project_pilot.enrichment.schemas import SearchResult
+from project_pilot.enrichment.schemas import ContactDatum, SearchResult
 from project_pilot.enrichment.service import EnrichmentService
 from project_pilot.errors import EnrichmentError, SourceBlockedError
+
+
+def _values(data: list[ContactDatum]) -> list[str]:
+    return [datum.value for datum in data]
+
 
 _HOME = (
     '<html><body><nav><a href="/impressum">Impressum</a>'
@@ -66,10 +71,12 @@ async def test_enrich_finds_website_and_extracts_contacts() -> None:
     # the LinkedIn hit is skipped; the company origin is used as the homepage
     assert result.website == "https://www.muster-gmbh.de/"
     # person-matching addresses would rank first; here the role mailbox wins
-    assert result.emails[0] == "bewerbung@muster-gmbh.de"
-    assert "info@muster-gmbh.de" in result.emails
-    assert "+49301234567" in result.phones
-    assert result.persons == ["Max Mustermann"]
+    assert _values(result.emails)[0] == "bewerbung@muster-gmbh.de"
+    assert "info@muster-gmbh.de" in _values(result.emails)
+    assert "+49301234567" in _values(result.phones)
+    assert _values(result.persons) == ["Max Mustermann"]
+    # nothing here came off a board page, so every find is marked as own research
+    assert {datum.source for datum in result.emails} == {"web"}
     assert "companies" in result.links.linkedin_company
     assert result.sources  # the pages actually read
     # a ready-to-copy connection note is always produced
@@ -87,7 +94,7 @@ async def test_enrich_uses_known_url_and_skips_search() -> None:
 
     assert search.queries == []  # a known URL means no search call
     assert result.website == "https://www.muster-gmbh.de/"
-    assert "bewerbung@muster-gmbh.de" in result.emails
+    assert "bewerbung@muster-gmbh.de" in _values(result.emails)
 
 
 async def test_enrich_without_any_subject_raises() -> None:
@@ -138,3 +145,57 @@ async def test_enrich_honors_max_pages_budget() -> None:
     await service.enrich(company="Muster GmbH")
 
     assert fetcher.fetched == ["https://www.muster-gmbh.de/"]  # homepage only
+
+
+_BOARD_PAGE_URL = "https://www.freelancermap.de/firma/556-muster-gmbh"
+_BOARD_PAGE = (
+    "<html><body><h1>Muster GmbH</h1>"
+    '<a href="tel:+49301112233">030 1112233</a>'
+    '<a href="mailto:s.koch@muster-gmbh.de">Mail</a>'
+    '<a href="https://www.muster-gmbh.de/?utm_source=freelancermap">Website</a>'
+    '<a href="https://www.linkedin.com/company/muster">LinkedIn</a>'
+    "</body></html>"
+)
+
+
+async def test_the_board_company_page_is_read_first_and_marked_as_stated() -> None:
+    # What the agent put on their own company page is a stated contact; what the
+    # Impressum crawl turns up afterwards is our own find, and says so.
+    search = _FakeSearch([])
+    fetcher = _FakeFetcher({_BOARD_PAGE_URL: _BOARD_PAGE, **_pages()})
+    service = EnrichmentService(fetcher=fetcher, search=search)
+
+    result = await service.enrich(company="Muster GmbH", company_page=_BOARD_PAGE_URL)
+
+    assert fetcher.fetched[0] == _BOARD_PAGE_URL  # before anything else
+    assert result.company_page == _BOARD_PAGE_URL
+    stated = {datum.value for datum in result.emails if datum.source == "freelancermap"}
+    assert stated == {"s.koch@muster-gmbh.de"}
+    assert "info@muster-gmbh.de" in _values(result.emails)
+    assert result.emails[0].source == "freelancermap"  # the stated one leads
+    assert any(datum.source == "freelancermap" for datum in result.phones)
+
+
+async def test_the_company_pages_own_link_replaces_the_website_search() -> None:
+    search = _FakeSearch([SearchResult(url="https://falsch.example/", title="wrong company")])
+    fetcher = _FakeFetcher({_BOARD_PAGE_URL: _BOARD_PAGE, **_pages()})
+    service = EnrichmentService(fetcher=fetcher, search=search)
+
+    result = await service.enrich(company="Muster GmbH", company_page=_BOARD_PAGE_URL)
+
+    assert search.queries == []  # the page said where the company lives
+    assert result.website == "https://www.muster-gmbh.de/"
+
+
+async def test_an_unreachable_company_page_costs_only_that_source() -> None:
+    # A blocked or moved company page must not sink the lookup — the Impressum
+    # crawl still runs and everything it finds is marked as our own research.
+    search = _FakeSearch([SearchResult(url="https://www.muster-gmbh.de/", title="Home")])
+    service = EnrichmentService(fetcher=_FakeFetcher(_pages()), search=search)
+
+    result = await service.enrich(company="Muster GmbH", company_page=_BOARD_PAGE_URL)
+
+    assert "bewerbung@muster-gmbh.de" in _values(result.emails)
+    assert {datum.source for datum in result.emails} == {"web"}
+    # The URL is still reported: it is where a human would look next.
+    assert result.company_page == _BOARD_PAGE_URL
