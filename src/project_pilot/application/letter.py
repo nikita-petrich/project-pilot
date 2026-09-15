@@ -72,8 +72,51 @@ def end_at_confidentiality_notice(body: str) -> str:
     return body
 
 
+# "… ist in meinem Profil nicht aufgeführt", "mein Profil enthält keinen …", "not listed
+# in my profile": the model talking about its source document instead of to the reader.
+_PROFILE_RE = re.compile(r"\b(?:in meinem|meinem|mein|im) Profil\b|\bmy profile\b", re.IGNORECASE)
+_NEGATION_RE = re.compile(r"\b(?:nicht|kein\w*|not|no)\b", re.IGNORECASE)
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+(?=[A-ZÄÖÜ])")
+
+
+def _is_profile_gap(clause: str) -> bool:
+    return bool(_PROFILE_RE.search(clause) and _NEGATION_RE.search(clause))
+
+
+def _without_profile_gaps(sentence: str) -> str:
+    clauses = sentence.split("; ")
+    kept = [clause for clause in clauses if not _is_profile_gap(clause)]
+    if len(kept) == len(clauses):
+        return sentence
+    if not kept:
+        return ""
+    text = "; ".join(kept).strip()
+    if text[-1] not in ".!?":
+        text += "."
+    return text[0].upper() + text[1:]
+
+
+def drop_profile_gaps(body: str) -> str:
+    """Remove sentences, or clauses of them, that report what the profile lacks.
+
+    Seen on real drafts for listing 1131: "Deno und JSON Schema sind in meinem Profil
+    nicht als eingesetzte Technologien aufgeführt." The recipient never sees the
+    profile, and the prompt forbids naming gaps — the sentence is both a deficit and a
+    look behind the scenes. A clause after a semicolon that makes the positive point
+    ("…; durch meine TypeScript-Erfahrung arbeite ich mich schnell ein") is kept.
+    """
+    lines = []
+    for line in body.split("\n"):
+        sentences = [_without_profile_gaps(s) for s in _SENTENCE_END_RE.split(line)]
+        cleaned = " ".join(s for s in sentences if s)
+        if line.strip() and not cleaned:
+            continue
+        lines.append(line if cleaned == line.strip() else cleaned)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
+
+
 def tidy_body(body: str) -> str:
     """All corrections, in the order they apply to a finished draft."""
     return end_at_confidentiality_notice(
-        unwrap_confidentiality_notice(lowercase_after_salutation(body))
+        unwrap_confidentiality_notice(drop_profile_gaps(lowercase_after_salutation(body)))
     )

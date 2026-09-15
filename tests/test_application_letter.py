@@ -5,6 +5,7 @@ import re
 from project_pilot.application.generator import load_application_prompt
 from project_pilot.application.letter import (
     CONFIDENTIALITY_NOTICES,
+    drop_profile_gaps,
     lowercase_after_salutation,
     tidy_body,
     unwrap_confidentiality_notice,
@@ -86,3 +87,57 @@ def test_nothing_written_after_the_notice_reaches_the_email() -> None:
 def test_a_body_without_the_notice_is_left_whole() -> None:
     body = "Guten Tag,\n\nich bin da.\n\n-- \nViele Grüße"
     assert tidy_body(body) == body
+
+
+# Verbatim from real drafts 48 and 49 for listing 1131 (2026-09-14).
+_GAP_PARAGRAPH = (
+    "Deno und JSON Schema sind in meinem Profil nicht als eingesetzte Technologien "
+    "aufgeführt. Mein Schwerpunkt liegt auf vergleichbaren TypeScript-basierten "
+    "Frameworks, CLI-Tooling sowie MCP."
+)
+_GAP_CLAUSE = (
+    "HTTP/HTTPS und Webhooks gehören zu meinem Umfeld. Erfahrung mit Deno ist in meinem "
+    "Profil nicht aufgeführt; durch meine umfangreiche TypeScript-Entwicklung kann ich "
+    "mich schnell einarbeiten. Python setze ich mit FastAPI ein."
+)
+_GAP_RATE = (
+    "Mein Honorar beginnt bei 80 € pro Stunde bzw. 640 € pro Tag und hängt vom konkreten "
+    "Projektzuschnitt ab. Für die Arbeitnehmerüberlassung kläre ich das gewünschte "
+    "Jahresbruttogehalt gerne im Gespräch; mein Profil enthält hierfür keinen separaten "
+    "Jahresgehaltswert."
+)
+
+
+def test_a_sentence_about_what_the_profile_lacks_is_dropped() -> None:
+    assert drop_profile_gaps(_GAP_PARAGRAPH) == (
+        "Mein Schwerpunkt liegt auf vergleichbaren TypeScript-basierten Frameworks, "
+        "CLI-Tooling sowie MCP."
+    )
+
+
+def test_the_positive_clause_of_such_a_sentence_survives() -> None:
+    assert drop_profile_gaps(_GAP_CLAUSE) == (
+        "HTTP/HTTPS und Webhooks gehören zu meinem Umfeld. Durch meine umfangreiche "
+        "TypeScript-Entwicklung kann ich mich schnell einarbeiten. Python setze ich mit "
+        "FastAPI ein."
+    )
+    assert drop_profile_gaps(_GAP_RATE).endswith("Jahresbruttogehalt gerne im Gespräch.")
+
+
+def test_a_paragraph_that_was_only_a_gap_leaves_no_hole() -> None:
+    body = "Absatz eins.\n\nIn meinem Profil ist X nicht genannt.\n\nAbsatz zwei."
+    assert drop_profile_gaps(body) == "Absatz eins.\n\nAbsatz zwei."
+    assert drop_profile_gaps("One.\n\nKafka is not listed in my profile.\n\nTwo.") == (
+        "One.\n\nTwo."
+    )
+
+
+def test_the_cv_sentence_and_the_notice_are_left_alone() -> None:
+    cv = (
+        "Mein aktuelles Profil (CV) inklusive aller Skills, Referenzen von Kunden und "
+        "weiteren Informationen über mich habe ich Ihnen in Deutsch und Englisch "
+        "(jeweils als PDF) an diese E-Mail angehängt."
+    )
+    body = f"Guten Tag,\n\n{cv}\n\n{CONFIDENTIALITY_NOTICES[0]}"
+    assert drop_profile_gaps(body) == body
+    assert tidy_body(f"Guten Tag,\n\n{_GAP_PARAGRAPH}").startswith("Guten Tag,\n\nMein Schwerpunkt")

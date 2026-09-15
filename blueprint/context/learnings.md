@@ -84,6 +84,18 @@
 - **Umgesetzt:** `application/cv_drive.py` (`refresh` meldet, was geladen wurde),
   `application/service.py` (`_require_fresh_cvs`, `_ensure_cvs_cached`).
 
+### L11 · Das Anschreiben spricht nicht über seine Quelle
+
+- **Gesehen:** 14.09.2026, Entwürfe 48 und 49 für Listing 1131: „Deno und JSON Schema sind
+  in meinem Profil nicht als eingesetzte Technologien aufgeführt", „mein Profil enthält
+  hierfür keinen separaten Jahresgehaltswert". Dazu „davon maximal 30 % vor Ort", obwohl
+  das Inserat 20 % nennt.
+- **Regel:** Der Empfänger kennt das Profil nicht. Lücken werden nie als Lücke und nie mit
+  Verweis aufs Profil genannt; das Wort „Profil" steht nur im CV-Satz. Ein bezifferter
+  Vor-Ort-Anteil der Ausschreibung innerhalb des eigenen Rahmens wird übernommen.
+- **Umgesetzt:** `application.md` (Regel „Kein Blick hinter die Kulisse", Verfügbarkeit);
+  Sicherheitsnetz `application/letter.py` (`drop_profile_gaps`).
+
 ### L10 · Die Chat-Ausgabe hat ein festes Format
 
 - **Gesehen:** 14.09.2026, Listing 1131. Recherche-Links der Karte und Kontaktdaten kamen
