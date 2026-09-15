@@ -51,8 +51,9 @@ sideways.
   a fenced code block with `linkedin_search` as a link directly below.
 - Empty result: the table says `keine gefunden`; point at its research links for
   a manual look. Do not scrape further on your own or invent contacts.
-- Mention in one line that the lookup is stored (append-only), so repeated
-  runs are cheap to compare.
+- On its own (not inside an application flow), mention in one line that the lookup
+  is stored (append-only), so repeated runs are cheap to compare. Inside the flow,
+  say nothing beyond the table.
 
 ## 4. Hand off, don't act
 

@@ -97,9 +97,11 @@ in the listing text):
 
 ## 4. Output
 
-Show the draft's fields, same names as the pipeline's structured output. Subject,
-body and LinkedIn message go **each in its own fenced code block**, so the chat's
-copy button takes exactly that text and nothing else:
+Show the draft's fields in this order, each under a short heading in the draft's
+language (German: **Betreff**, **Anschreiben**, **LinkedIn-Nachricht** — never the raw
+field names). Subject, body and LinkedIn message go **each in its own fenced code
+block**, so the chat's copy button takes exactly that text and nothing else. The
+recipient line comes after the LinkedIn block:
 
 - **project_title** - one line, role plus defining focus.
 - **subject** - one line, no "Betreff:" prefix, in a code block.
